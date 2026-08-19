@@ -9,6 +9,7 @@ const employees = require('./employees');
 const timeclock = require('./timeclock');
 const servicecalls = require('./servicecalls');
 const notify = require('./notify');
+const jotform = require('./jotform');
 
 const app = express();
 app.use(cors());
@@ -74,13 +75,18 @@ app.get('/api/employees/pending', auth.requireSession('light'), async (req, res)
 });
 
 app.post('/api/employees/pending', async (req, res) => {
-  // Simulates what a Jotform webhook would do — see the plan doc's onboarding
-  // section. Wiring the real Jotform webhook is a follow-up once the actual
-  // form exists; this endpoint produces the same result so the rest of the
-  // flow (manager review -> owner activation) can be built and tested now.
+  // Manual fallback for adding someone to pending review without going
+  // through Jotform (e.g. testing, or a hire that comes in some other way).
+  // The real path is the webhook below, which Jotform calls on every New
+  // Hire Information submission.
   const person = await employees.createPendingEmployee(req.body);
   res.json({ ok: true, person });
 });
+
+// Jotform calls this on every submission of the "Ticket Sports Bar New Hire
+// Information" form. See server/jotform.js for what is (and very much is
+// not) read out of the submission.
+app.post('/api/webhooks/jotform-new-hire', jotform.parseBody, jotform.handleWebhook);
 
 app.post('/api/employees/:id/manager-review', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
