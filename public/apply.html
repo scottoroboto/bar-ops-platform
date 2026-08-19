@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Apply — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="center" style="margin: 30px 0;">
+    <div style="font-size:38px;">🍸</div>
+    <h1 style="margin:6px 0 0;">Join the team</h1>
+    <div class="muted">Takes about a minute — this is just the basics.</div>
+  </div>
+
+  <div id="msgBox"></div>
+
+  <div class="card" id="formCard">
+    <label for="name">Full name</label>
+    <input id="name" autocomplete="name" placeholder="Jane Doe">
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="email" placeholder="jane@example.com">
+    <label for="phone">Phone</label>
+    <input id="phone" type="tel" autocomplete="tel" placeholder="(555) 555-1234">
+    <label for="location">Which location?</label>
+    <select id="location"><option value="">Loading…</option></select>
+    <button class="primary" onclick="submitApplication()">Submit</button>
+  </div>
+
+  <div class="card" id="doneCard" style="display:none;">
+    <h2>Thanks, you're on the list</h2>
+    <p class="muted">A manager will review your info, then the owner will activate your account and send you a username and password.</p>
+    <p class="muted">One more thing — please also complete the hire pack (tax withholding &amp; direct deposit). That part is handled separately, on a secure encrypted form:</p>
+    <button class="primary" style="margin-top:0;" onclick="window.open(JOTFORM_HIRE_PACK_URL, '_blank')">Complete hire pack (opens Jotform)</button>
+    <button class="secondary" onclick="location.href='/index.html'">Back to sign-in</button>
+  </div>
+
+  <p class="muted center">Already have an account? <a href="/index.html">Sign in here</a>.</p>
+</div>
+<script src="/common.js"></script>
+<script>
+  function showMsg(text, kind) {
+    document.getElementById('msgBox').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+  }
+
+  async function loadLocations() {
+    const select = document.getElementById('location');
+    try {
+      const locations = await api('/api/locations');
+      select.innerHTML = '<option value="">Not sure / other</option>' +
+        locations.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+    } catch (e) {
+      select.innerHTML = '<option value="">Not sure / other</option>';
+    }
+  }
+
+  async function submitApplication() {
+    const name = document.getElementById('name').value.trim();
+    const email = document.getElementById('email').value.trim();
+    const phone = document.getElementById('phone').value.trim();
+    const requestedLocationId = document.getElementById('location').value || undefined;
+    if (!name) { showMsg('Please enter your name.', 'error'); return; }
+    try {
+      await api('/api/employees/pending', { method: 'POST', body: { name, email, phone, requestedLocationId } });
+      document.getElementById('formCard').style.display = 'none';
+      document.getElementById('doneCard').style.display = '';
+      showMsg('', '');
+    } catch (e) {
+      showMsg(e.message, 'error');
+    }
+  }
+
+  loadLocations();
+</script>
+</body>
+</html>
