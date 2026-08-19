@@ -15,7 +15,19 @@ const APP_INFO = {
       `<p class="msg info">Your account isn't fully active yet.</p>`;
   }
 
-  const access = getAppAccess();
+  // Fetch fresh rather than trusting the cached copy from login time — an
+  // owner/manager can toggle their OWN access from the Employees page,
+  // and without this the dashboard kept showing "not enabled" for
+  // anything turned on after that last login, until they signed out and
+  // back in again.
+  let access;
+  try {
+    const me = await api('/api/auth/me');
+    access = me.appAccess || [];
+    setAppAccess(access);
+  } catch (e) {
+    access = getAppAccess();
+  }
   const grid = document.getElementById('appGrid');
   const keys = Object.keys(APP_INFO);
   const enabledAny = access.some(a => a.enabled);
