@@ -1,6 +1,12 @@
 // Shared across every page: session storage, the fetch wrapper, and the
 // step-up flow. Loaded before each page's own script.
 
+// The separate Jotform "hire pack" form — sensitive tax/W-4/direct-deposit/
+// SSN/ID-upload info, kept encrypted in Jotform and never touched by this
+// app. Basic info (name/email/phone) lives here in the app instead; this
+// link is where people go to fill out or update the sensitive half.
+const JOTFORM_HIRE_PACK_URL = 'https://form.jotform.com/262307421577053';
+
 function getToken() { return localStorage.getItem('bp_token'); }
 function setToken(t) { if (t) localStorage.setItem('bp_token', t); else localStorage.removeItem('bp_token'); }
 function getPerson() { try { return JSON.parse(localStorage.getItem('bp_person') || 'null'); } catch (e) { return null; } }
