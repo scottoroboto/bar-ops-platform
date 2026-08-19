@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Employees — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<div class="wrap wide" id="app">
+  <div id="msgBox"></div>
+
+  <div class="card">
+    <h1>Pending review</h1>
+    <p class="muted">New sign-ups land here first (normally from your onboarding form). Nobody on this list can log in yet.</p>
+    <div id="pendingList"><p class="muted">Loading…</p></div>
+  </div>
+
+  <div class="card" id="ownerOnlyNotice" style="display:none;">
+    <p class="msg info">Activation and app-access toggles are owner-only. Once you've reviewed someone above, ask the owner to activate them.</p>
+  </div>
+
+  <div class="card" id="allEmployeesCard" style="display:none;">
+    <h1>All employees</h1>
+    <p class="muted">Toggle which apps each person can use — this can be changed any time, not just at onboarding.</p>
+    <div id="employeeList"><p class="muted">Loading…</p></div>
+  </div>
+
+  <div class="card">
+    <h2>Shared device</h2>
+    <p class="muted">Trust the iPad behind the bar once — after that, staff just sign in on it with their own username + PIN.</p>
+    <label for="deviceLabel">Device label</label>
+    <input id="deviceLabel" placeholder="e.g. Bar iPad — Downtown">
+    <label for="deviceLocation">Location</label>
+    <select id="deviceLocation"></select>
+    <button class="secondary" onclick="trustThisDevice()">Trust this device (this browser)</button>
+    <div id="deviceResult"></div>
+  </div>
+</div>
+
+<!-- Review modal -->
+<div class="card" id="reviewModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:10%; z-index:20;">
+  <h2>Review employee</h2>
+  <input type="hidden" id="reviewPersonId">
+  <label for="reviewName">Name</label>
+  <input id="reviewName" disabled>
+  <label for="reviewPosition">Position</label>
+  <input id="reviewPosition" placeholder="e.g. Bartender">
+  <label for="reviewLocation">Location</label>
+  <select id="reviewLocation"></select>
+  <label for="reviewPayRate">Pay rate ($/hr)</label>
+  <input id="reviewPayRate" type="number" step="0.01">
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeReviewModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitReview()">Save review</button>
+  </div>
+</div>
+
+<!-- Activate modal -->
+<div class="card" id="activateModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:8%; z-index:20;">
+  <h2>Activate employee</h2>
+  <p class="muted" id="activateName"></p>
+  <input type="hidden" id="activatePersonId">
+  <p class="muted">Choose what this person can access. You can change this any time later.</p>
+  <div class="toggle-row"><span class="label">Time Clock</span>
+    <label class="switch"><input type="checkbox" id="accessTimeClock"><span class="slider"></span></label></div>
+  <div class="toggle-row"><span class="label">Service Calls</span>
+    <label class="switch"><input type="checkbox" id="accessServiceCalls"><span class="slider"></span></label></div>
+  <div class="toggle-row"><span class="label">Scheduling</span>
+    <label class="switch"><input type="checkbox" id="accessScheduling"><span class="slider"></span></label></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeActivateModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitActivate()">Activate — go live</button>
+  </div>
+  <div id="activateResult"></div>
+</div>
+<div id="modalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10;" onclick="closeAllModals()"></div>
+
+<script src="/common.js"></script>
+<script src="/employees.js"></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Sign in — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="center" style="margin: 30px 0;">
+    <div style="font-size:38px;">🍸</div>
+    <h1 style="margin:6px 0 0;">Bar Ops</h1>
+    <div class="muted">Sign in to continue</div>
+  </div>
+
+  <div id="msgBox"></div>
+
+  <div class="tabs">
+    <button id="tabPin" class="active" onclick="showTab('pin')">Everyday sign-in</button>
+    <button id="tabFull" onclick="showTab('full')">Username &amp; password</button>
+  </div>
+
+  <!-- Everyday PIN sign-in -->
+  <div class="card" id="panelPin">
+    <h2>Sign in with your PIN</h2>
+    <p class="muted">For day-to-day use — including the shared iPad behind the bar.</p>
+    <label for="pinUsername">Username</label>
+    <input id="pinUsername" autocomplete="username" placeholder="e.g. jamie.test">
+    <label for="pinPin">PIN</label>
+    <input id="pinPin" type="password" inputmode="numeric" maxlength="8" placeholder="••••">
+    <button class="primary" onclick="doPinLogin()">Sign in</button>
+  </div>
+
+  <!-- Full username+password sign-in / first-time setup -->
+  <div class="card" id="panelFull" style="display:none;">
+    <h2>Full sign-in</h2>
+    <p class="muted">Use this the first time you ever log in, or whenever a sensitive action asks you to re-verify.</p>
+    <div id="passwordStep">
+      <label for="fullUsername">Username</label>
+      <input id="fullUsername" autocomplete="username" placeholder="e.g. jamie.test">
+      <label for="fullPassword">Password</label>
+      <input id="fullPassword" type="password" autocomplete="current-password">
+      <button class="primary" onclick="doPasswordLogin()">Continue</button>
+    </div>
+    <div id="codeStep" style="display:none;">
+      <p class="msg info" id="codeHint"></p>
+      <label for="codeInput">6-digit code</label>
+      <input id="codeInput" inputmode="numeric" maxlength="6" placeholder="000000">
+      <button class="primary" onclick="doVerifyCode()">Verify &amp; sign in</button>
+      <button class="secondary" onclick="resetFullForm()">Start over</button>
+    </div>
+  </div>
+
+  <p class="muted center">New here? Your manager or owner sets up your account — check your email for a temporary username and password.</p>
+</div>
+<script src="/common.js"></script>
+<script src="/login.js"></script>
+</body>
+</html>

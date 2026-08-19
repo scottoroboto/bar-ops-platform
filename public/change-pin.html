@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Change PIN — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<div class="wrap" id="app">
+  <div id="msgBox"></div>
+  <div class="card">
+    <h1>Change your PIN</h1>
+    <p class="muted">This needs a quick password re-check first, since it's a sensitive change.</p>
+    <label for="pin1">New PIN (4+ digits)</label>
+    <input id="pin1" type="password" inputmode="numeric" maxlength="8">
+    <label for="pin2">Confirm PIN</label>
+    <input id="pin2" type="password" inputmode="numeric" maxlength="8">
+    <button class="primary" onclick="submitPin()">Save PIN</button>
+    <button class="secondary" onclick="location.href='/dashboard.html'">Cancel</button>
+  </div>
+</div>
+<script src="/common.js"></script>
+<script>
+  function showMsg(text, kind) {
+    document.getElementById('msgBox').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+  }
+  async function submitPin() {
+    const p1 = document.getElementById('pin1').value.trim();
+    const p2 = document.getElementById('pin2').value.trim();
+    if (p1.length < 4) { showMsg('PIN needs to be at least 4 digits.', 'error'); return; }
+    if (p1 !== p2) { showMsg('PINs don\'t match.', 'error'); return; }
+    try {
+      await withStepUp(() => api('/api/auth/set-pin', { method: 'POST', body: { pin: p1 } }));
+      showMsg('PIN updated.', 'success');
+      setTimeout(() => location.href = '/dashboard.html', 900);
+    } catch (e) {
+      showMsg(e.message, 'error');
+    }
+  }
+  (function () {
+    const person = requireAuth();
+    if (!person) return;
+    renderTopbar('Change PIN');
+  })();
+</script>
+</body>
+</html>
