@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>My Profile — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<div class="wrap" id="app">
+  <div id="msgBox"></div>
+
+  <div class="card">
+    <h1>My info</h1>
+    <p class="muted">Keep this up to date any time — no need to wait for a review.</p>
+    <label for="name">Full name</label>
+    <input id="name">
+    <label for="email">Email</label>
+    <input id="email" type="email">
+    <label for="phone">Phone</label>
+    <input id="phone" type="tel">
+    <button class="primary" onclick="saveProfile()">Save changes</button>
+  </div>
+
+  <div class="card">
+    <h2>Tax &amp; direct deposit</h2>
+    <p class="muted">Your SSN, W-4, and banking info don't live in this app — they're kept separately on an encrypted Jotform. Use this if you need to update any of that.</p>
+    <button class="secondary" onclick="window.open(JOTFORM_HIRE_PACK_URL, '_blank')">Update tax / banking info (opens Jotform)</button>
+  </div>
+</div>
+<script src="/common.js"></script>
+<script>
+  function showMsg(text, kind) {
+    document.getElementById('msgBox').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+  }
+
+  async function saveProfile() {
+    const name = document.getElementById('name').value.trim();
+    const email = document.getElementById('email').value.trim();
+    const phone = document.getElementById('phone').value.trim();
+    if (!name) { showMsg('Name is required.', 'error'); return; }
+    try {
+      const result = await api('/api/me/profile', { method: 'POST', body: { name, email, phone } });
+      const person = getPerson();
+      if (person && result.person) {
+        person.name = result.person.name;
+        setPerson(person);
+        renderTopbar('My Profile');
+      }
+      showMsg('Saved.', 'success');
+    } catch (e) {
+      showMsg(e.message, 'error');
+    }
+  }
+
+  (async function init() {
+    const person = requireAuth();
+    if (!person) return;
+    renderTopbar('My Profile');
+    document.getElementById('name').value = person.name || '';
+    try {
+      const me = await api('/api/auth/me');
+      document.getElementById('name').value = me.person.name || '';
+      document.getElementById('email').value = me.person.email || '';
+      document.getElementById('phone').value = me.person.phone || '';
+    } catch (e) {
+      // fall back to whatever was cached locally
+    }
+  })();
+</script>
+</body>
+</html>
