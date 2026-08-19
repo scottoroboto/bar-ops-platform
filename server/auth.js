@@ -175,7 +175,7 @@ function requireSession(minTier) {
     const tokenHash = hashToken(token);
     const result = await withServiceClient(async (client) => {
       const { rows } = await client.query(
-        `SELECT s.*, p.id AS p_id, p.name, p.role, p.location_id, p.status
+        `SELECT s.*, p.id AS p_id, p.name, p.role, p.location_id, p.status, p.email, p.phone
          FROM auth_sessions s JOIN people p ON p.id = s.person_id
          WHERE s.token_hash = $1`,
         [tokenHash]
@@ -189,7 +189,7 @@ function requireSession(minTier) {
       return res.status(403).json({ error: 'STEP_UP_REQUIRED', message: 'This needs you to re-enter your password first.' });
     }
 
-    req.person = { id: result.p_id, name: result.name, role: result.role, location_id: result.location_id };
+    req.person = { id: result.p_id, name: result.name, role: result.role, location_id: result.location_id, email: result.email, phone: result.phone };
     req.withAuthedClient = (fn) => withAuthedClient(req.person, fn);
     next();
   };
