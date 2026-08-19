@@ -32,6 +32,23 @@ async function createPendingEmployee({ name, email, phone, requestedLocationId, 
   });
 }
 
+// Self-service — a person updating their own name/email/phone, any time,
+// active or still pending. Deliberately narrow: only these three columns,
+// and only ever scoped to the caller's own id (enforced by the route
+// handler passing req.person.id, never a client-supplied id). Anything
+// sensitive (tax/banking/SSN) never lives here — that stays in Jotform;
+// the app just points people at the hire-pack form to update it.
+async function updateOwnProfile({ personId, name, email, phone }) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query(
+      `UPDATE people SET name = $1, email = $2, phone = $3, updated_at = now()
+       WHERE id = $4 RETURNING id, name, email, phone, role, location_id, status`,
+      [name, email || null, phone || null, personId]
+    );
+    return rows[0] || null;
+  });
+}
+
 async function listPending() {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
@@ -145,4 +162,4 @@ async function listAllWithAccess() {
   });
 }
 
-module.exports = { createPendingEmployee, listPending, managerReview, activateEmployee, setAppAccess, listAllWithAccess, APP_KEYS };
+module.exports = { createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, setAppAccess, listAllWithAccess, APP_KEYS };
