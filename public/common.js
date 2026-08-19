@@ -51,22 +51,66 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// Builds a small in-page modal asking for the password, and resolves with
+// what was entered (or null on cancel). Deliberately NOT window.prompt()/
+// alert() — those are native browser dialogs that block the entire tab,
+// including clicks and navigation, until dismissed. If one of those opens
+// off-screen or gets missed, the whole page looks frozen with "nothing
+// works" — which is exactly what a real in-page modal avoids.
+function showStepUpModal(errorText) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.style.cssText = 'display:block; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:30;';
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.cssText = 'display:block; position:fixed; inset:0; margin:auto; max-width:360px; height:fit-content; top:20%; z-index:31;';
+    card.innerHTML = `
+      <h2>Re-enter your password</h2>
+      <p class="muted" style="margin-top:-8px;">This is a sensitive action — confirm it's really you before continuing.</p>
+      ${errorText ? `<div class="msg error">${escapeHtml(errorText)}</div>` : ''}
+      <input type="password" id="stepUpPassword" placeholder="Password" autocomplete="current-password" style="width:100%; margin-bottom:12px;">
+      <div class="stack-actions">
+        <button class="secondary" id="stepUpCancel">Cancel</button>
+        <button class="primary" id="stepUpContinue">Continue</button>
+      </div>`;
+
+    function cleanup(value) {
+      document.removeEventListener('keydown', onKeydown);
+      backdrop.remove();
+      card.remove();
+      resolve(value);
+    }
+    function onKeydown(e) {
+      if (e.key === 'Escape') cleanup(null);
+      if (e.key === 'Enter') cleanup(input.value || null);
+    }
+
+    document.body.appendChild(backdrop);
+    document.body.appendChild(card);
+    const input = card.querySelector('#stepUpPassword');
+    card.querySelector('#stepUpCancel').onclick = () => cleanup(null);
+    card.querySelector('#stepUpContinue').onclick = () => cleanup(input.value || null);
+    backdrop.onclick = () => cleanup(null);
+    document.addEventListener('keydown', onKeydown);
+    input.focus();
+  });
+}
+
 // Re-enters the password inline and mints a fresh short-lived FULL
 // session token. Used both proactively (opening an owner-only screen)
 // and reactively (a write call came back STEP_UP_REQUIRED).
-async function stepUp() {
+async function stepUp(errorText) {
   const person = getPerson();
   if (!person) { goLogin(); return false; }
-  const password = window.prompt('Re-enter your password to continue:');
+  const password = await showStepUpModal(errorText);
   if (!password) return false;
   try {
     const result = await api('/api/auth/step-up', { method: 'POST', body: { personId: person.id, password } });
     if (result.ok) { setToken(result.token); return true; }
-    alert(result.error || 'Incorrect password.');
-    return false;
+    return stepUp(result.error || 'Incorrect password.');
   } catch (e) {
-    alert(e.message);
-    return false;
+    return stepUp(e.message);
   }
 }
 
