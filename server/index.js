@@ -74,19 +74,33 @@ app.get('/api/employees/pending', auth.requireSession('light'), async (req, res)
   res.json(await employees.listPending());
 });
 
+// Public, unauthenticated — this is what /apply.html submits to. New hires
+// enter their basic info here, right in the app, then get sent to the
+// separate Jotform "hire pack" for the sensitive tax/banking half. The
+// Jotform webhook below is a secondary/optional intake path, not the
+// primary one.
 app.post('/api/employees/pending', async (req, res) => {
-  // Manual fallback for adding someone to pending review without going
-  // through Jotform (e.g. testing, or a hire that comes in some other way).
-  // The real path is the webhook below, which Jotform calls on every New
-  // Hire Information submission.
-  const person = await employees.createPendingEmployee(req.body);
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+  const person = await employees.createPendingEmployee({ ...req.body, name });
   res.json({ ok: true, person });
 });
 
 // Jotform calls this on every submission of the "Ticket Sports Bar New Hire
-// Information" form. See server/jotform.js for what is (and very much is
-// not) read out of the submission.
+// Information" form, if/when that gets wired up as a secondary intake path.
+// See server/jotform.js for what is (and very much is not) read out of the
+// submission.
 app.post('/api/webhooks/jotform-new-hire', jotform.parseBody, jotform.handleWebhook);
+
+// Self-service profile edit — any logged-in person, any time, for their own
+// row only (req.person.id, never a client-supplied id). Sensitive fields
+// (tax/banking/SSN) aren't here; those stay in Jotform's hire-pack form.
+app.post('/api/me/profile', auth.requireSession('light'), async (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+  const person = await employees.updateOwnProfile({ personId: req.person.id, name, email: req.body.email, phone: req.body.phone });
+  res.json({ ok: true, person });
+});
 
 app.post('/api/employees/:id/manager-review', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
