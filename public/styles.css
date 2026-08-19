@@ -31,20 +31,44 @@ body {
 .wrap.wide { max-width: 900px; }
 
 header.topbar {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--card-border);
+  z-index: 5;
+}
+
+header.topbar .topbar-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--card-border);
-  position: sticky;
-  top: 0;
-  background: var(--bg);
-  z-index: 5;
 }
 
 header.topbar .brand { font-weight: 700; font-size: 17px; }
 header.topbar .who { font-size: 13px; color: var(--muted); text-align: right; }
 header.topbar a.logout { color: var(--muted); font-size: 13px; text-decoration: none; }
+
+header.topbar .topnav {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px 10px;
+  overflow-x: auto;
+}
+header.topbar .topnav .tab {
+  flex: none;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+header.topbar .topnav .tab.active {
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+}
 
 .card {
   background: var(--card);
