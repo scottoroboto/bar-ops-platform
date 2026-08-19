@@ -163,9 +163,31 @@ function renderTopbar(activeLabel) {
   const el = document.getElementById('topbar');
   if (!el) return;
   el.innerHTML = `
-    <div class="brand">🍸 Bar Ops${activeLabel ? ' · ' + escapeHtml(activeLabel) : ''}</div>
-    <div class="who">
-      ${person ? escapeHtml(person.name) + ' <span class="muted">(' + escapeHtml(person.role) + ')</span><br>' : ''}
-      <a class="logout" href="#" onclick="logout(); return false;">Sign out</a>
-    </div>`;
+    <div class="topbar-row">
+      <div class="brand">🍸 Bar Ops${activeLabel ? ' · ' + escapeHtml(activeLabel) : ''}</div>
+      <div class="who">
+        ${person ? escapeHtml(person.name) + ' <span class="muted">(' + escapeHtml(person.role) + ')</span><br>' : ''}
+        <a class="logout" href="#" onclick="logout(); return false;">Sign out</a>
+      </div>
+    </div>
+    ${person ? renderTopnav(person, activeLabel) : ''}`;
+}
+
+// A persistent row of tabs so every page is one click from every other
+// page — previously some pages (like Employees) had no way back except
+// the browser's own back button. Time Clock/Service Calls are always
+// shown (each page itself explains if that app isn't turned on for you
+// yet); Employees is manager/owner only, matching the server-side gate.
+function renderTopnav(person, activeLabel) {
+  const tabs = [
+    { label: 'Home', href: '/dashboard.html' },
+    { label: 'Time Clock', href: '/timeclock.html' },
+    { label: 'Service Calls', href: '/servicecalls.html' },
+  ];
+  if (person.role === 'manager' || person.role === 'owner') {
+    tabs.push({ label: 'Employees', href: '/employees.html' });
+  }
+  return `<nav class="topnav">${tabs.map(t =>
+    `<a class="tab${t.label === activeLabel ? ' active' : ''}" href="${t.href}">${escapeHtml(t.label)}</a>`
+  ).join('')}</nav>`;
 }
