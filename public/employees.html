@@ -15,15 +15,27 @@
     <h1>Pending review</h1>
     <p class="muted">New sign-ups land here first (normally from your onboarding form). Nobody on this list can log in yet.</p>
     <div id="pendingList"><p class="muted">Loading…</p></div>
+    <hr style="border:none; border-top:1px solid rgba(255,255,255,0.12); margin:18px 0;">
+    <label for="inviteEmail">Invite someone to apply</label>
+    <input id="inviteName" placeholder="Name (optional)">
+    <input id="inviteEmail" type="email" placeholder="jane@example.com">
+    <button class="secondary" onclick="sendOnboardingInvite()">Send onboarding link</button>
+    <div id="inviteResult"></div>
   </div>
 
   <div class="card" id="ownerOnlyNotice" style="display:none;">
     <p class="msg info">Activation and app-access toggles are owner-only. Once you've reviewed someone above, ask the owner to activate them.</p>
   </div>
 
+  <div class="card" id="payRateRequestsCard" style="display:none;">
+    <h2>Pay rate requests</h2>
+    <p class="muted">Raise requests submitted by managers, waiting on your decision.</p>
+    <div id="payRateRequestsList"><p class="muted">Loading…</p></div>
+  </div>
+
   <div class="card" id="allEmployeesCard" style="display:none;">
     <h1>All employees</h1>
-    <p class="muted">Toggle which apps each person can use — this can be changed any time, not just at onboarding.</p>
+    <p class="muted" id="allEmployeesHint">Toggle which apps each person can use — this can be changed any time, not just at onboarding. Click a name to edit their position, location, or pay rate.</p>
     <div id="employeeList"><p class="muted">Loading…</p></div>
   </div>
 
@@ -96,6 +108,40 @@
   </div>
   <div id="activateResult"></div>
 </div>
+
+<!-- Employee detail / edit modal (owner only) -->
+<div class="card" id="employeeDetailModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:8%; z-index:20;">
+  <h2 id="detailName">Employee</h2>
+  <p class="muted" id="detailMeta"></p>
+  <input type="hidden" id="detailPersonId">
+  <label for="detailPosition">Position</label>
+  <select id="detailPosition"></select>
+  <label for="detailLocation">Location</label>
+  <select id="detailLocation"></select>
+  <label for="detailPayRate">Pay rate ($/hr)</label>
+  <input id="detailPayRate" type="number" step="0.01">
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeEmployeeDetail()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="saveEmployeeDetail()">Save changes</button>
+  </div>
+  <div id="detailResult"></div>
+</div>
+
+<!-- Request pay raise modal (manager) -->
+<div class="card" id="requestRaiseModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:380px; height:fit-content; top:12%; z-index:20;">
+  <h2>Request a raise</h2>
+  <p class="muted" id="raiseName"></p>
+  <input type="hidden" id="raisePersonId">
+  <p class="muted" id="raiseCurrentRate"></p>
+  <label for="raiseRequestedRate">New pay rate ($/hr)</label>
+  <input id="raiseRequestedRate" type="number" step="0.01">
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeRequestRaiseModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitRequestRaise()">Send to owner</button>
+  </div>
+  <div id="raiseResult"></div>
+</div>
+
 <div id="modalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10;" onclick="closeAllModals()"></div>
 
 <script src="/common.js"></script>
