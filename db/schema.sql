@@ -48,6 +48,39 @@ CREATE TABLE locations (
 );
 
 -- =====================================================================
+-- POSITIONS — job titles staff apply for / get assigned. Kept as a
+-- managed list (not a free-text field) so the "Position Applied for"
+-- dropdown on /apply.html and the "Position" dropdown in employee review
+-- both draw from the same source. is_management positions are excluded
+-- from the public apply.html dropdown (nobody self-applies to be a
+-- manager) but still available during manager review.
+--
+-- Soft-delete only (active flag) — a position can be referenced by
+-- historical people.position text values, so hard-deleting a row here
+-- would orphan nothing (position is stored as plain text on people, not
+-- a foreign key) but would still be surprising for reporting. "Archive"
+-- just hides it from future dropdowns.
+-- =====================================================================
+CREATE TABLE positions (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name           text NOT NULL UNIQUE,
+  is_management  boolean NOT NULL DEFAULT false,
+  active         boolean NOT NULL DEFAULT true,
+  created_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- Starter set — edit/add/archive from Employees → Positions (manager or owner).
+INSERT INTO positions (name, is_management) VALUES
+  ('Bartender', false),
+  ('Server', false),
+  ('Barback', false),
+  ('Cook', false),
+  ('Door / Security', false),
+  ('Maintenance', false),
+  ('Assistant Manager', true),
+  ('Manager', true);
+
+-- =====================================================================
 -- PEOPLE — the shared core every app hangs off of
 -- =====================================================================
 CREATE TABLE people (
