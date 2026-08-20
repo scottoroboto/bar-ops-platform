@@ -21,12 +21,16 @@ function randomPin() {
 // non-sensitive fields ever land here; nothing encrypted in Jotform is
 // copied over, only a reference to the submission.
 // ---------------------------------------------------------------------
-async function createPendingEmployee({ name, email, phone, requestedLocationId, jotformSubmissionId }) {
+// position here is the applicant's own pick from /apply.html's "Position
+// Applied for" dropdown — same treatment as requestedLocationId: it's just
+// a starting point. The manager still reviews (and can change) it during
+// manager-review below, same as they always could.
+async function createPendingEmployee({ name, email, phone, position, requestedLocationId, jotformSubmissionId }) {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO people (name, email, phone, location_id, role, status, jotform_submission_id)
-       VALUES ($1,$2,$3,$4,'staff','pending_review',$5) RETURNING *`,
-      [name, email || null, phone || null, requestedLocationId || null, jotformSubmissionId || null]
+      `INSERT INTO people (name, email, phone, position, location_id, role, status, jotform_submission_id)
+       VALUES ($1,$2,$3,$4,$5,'staff','pending_review',$6) RETURNING *`,
+      [name, email || null, phone || null, position || null, requestedLocationId || null, jotformSubmissionId || null]
     );
     return rows[0];
   });
