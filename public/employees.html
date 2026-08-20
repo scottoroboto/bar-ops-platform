@@ -27,6 +27,27 @@
     <div id="employeeList"><p class="muted">Loading…</p></div>
   </div>
 
+  <div class="card" id="positionsCard" style="display:none;">
+    <h2>Positions</h2>
+    <p class="muted">Options offered on the apply page and during employee review. Archiving a position just removes it from future dropdowns — it doesn't touch anyone's existing records.</p>
+    <div id="positionsList"><p class="muted">Loading…</p></div>
+    <label for="newPositionName">Add a position</label>
+    <input id="newPositionName" placeholder="e.g. Bartender">
+    <label class="toggle-row" style="gap:8px;"><span class="label">Management position (hidden from the public apply page)</span>
+      <span class="switch"><input type="checkbox" id="newPositionManagement"><span class="slider"></span></span>
+    </label>
+    <button class="secondary" onclick="addPosition()">Add position</button>
+  </div>
+
+  <div class="card" id="locationsCard" style="display:none;">
+    <h2>Locations</h2>
+    <p class="muted">Only the owner can add, rename, or archive locations.</p>
+    <div id="locationsList"><p class="muted">Loading…</p></div>
+    <label for="newLocationName">Add a location</label>
+    <input id="newLocationName" placeholder="e.g. Ticket 4">
+    <button class="secondary" onclick="addLocation()">Add location</button>
+  </div>
+
   <div class="card">
     <h2>Shared device</h2>
     <p class="muted">Trust the iPad behind the bar once — after that, staff just sign in on it with their own username + PIN.</p>
@@ -46,7 +67,7 @@
   <label for="reviewName">Name</label>
   <input id="reviewName" disabled>
   <label for="reviewPosition">Position</label>
-  <input id="reviewPosition" placeholder="e.g. Bartender">
+  <select id="reviewPosition"></select>
   <label for="reviewLocation">Location</label>
   <select id="reviewLocation"></select>
   <label for="reviewPayRate">Pay rate ($/hr)</label>
