@@ -170,7 +170,7 @@ function renderTopbar(activeLabel) {
   if (!el) return;
   el.innerHTML = `
     <div class="topbar-row">
-      <div class="brand">🍸 Bar Ops${activeLabel ? ' · ' + escapeHtml(activeLabel) : ''}</div>
+      <div class="brand"><img src="/logo.png" alt="Ticket Sports Bar" class="brand-logo">${activeLabel ? '<span class="brand-sep">· ' + escapeHtml(activeLabel) + '</span>' : ''}</div>
       <div class="who">
         ${person ? escapeHtml(person.name) + ' <span class="muted">(' + escapeHtml(person.role) + ')</span><br>' : ''}
         <a class="logout" href="#" onclick="logout(); return false;">Sign out</a>
