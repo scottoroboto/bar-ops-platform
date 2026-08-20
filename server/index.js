@@ -275,9 +275,28 @@ app.post('/api/employees/:id/manager-review', auth.requireSession('full'), async
   res.json(result);
 });
 
+// Discard/reject a still-pending applicant — never touches anyone already
+// activated (see discardPending's own WHERE clause).
+app.post('/api/employees/:id/discard', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const result = await employees.discardPending({ personId: req.params.id });
+  res.json(result);
+});
+
+// Emails a link to /apply.html to someone who hasn't applied yet.
+app.post('/api/employees/invite', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const toEmail = (req.body.email || '').trim();
+  if (!toEmail) return res.status(400).json({ ok: false, error: 'Email is required.' });
+  const result = await employees.sendOnboardingInvite({ toEmail, toName: (req.body.name || '').trim() || null, sentBy: req.person.id });
+  res.json(result);
+});
+
+// A manager sees only their own location's roster; the owner sees everyone.
 app.get('/api/employees', auth.requireSession('light'), async (req, res) => {
-  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-  res.json(await employees.listAllWithAccess());
+  if (req.person.role === 'owner') return res.json(await employees.listAllWithAccess());
+  if (req.person.role === 'manager') return res.json(await employees.listAllWithAccess(req.person.location_id));
+  return res.status(403).json({ error: 'Managers/owners only.' });
 });
 
 app.post('/api/employees/:id/activate', auth.requireSession('full'), async (req, res) => {
@@ -289,6 +308,37 @@ app.post('/api/employees/:id/activate', auth.requireSession('full'), async (req,
 app.post('/api/employees/:id/app-access', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change app access.' });
   const result = await employees.setAppAccess({ personId: req.params.id, appKey: req.body.appKey, enabled: req.body.enabled, updatedBy: req.person.id });
+  res.json(result);
+});
+
+// Owner-only full edit — position/location/pay rate, any time, any employee.
+app.post('/api/employees/:id/update', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can edit an employee directly.' });
+  const { position, locationId, payRate } = req.body;
+  const result = await employees.ownerUpdateEmployee({ personId: req.params.id, position, locationId, payRate: payRate === '' || payRate == null ? null : Number(payRate) });
+  res.json(result);
+});
+
+// A manager can't set pay directly — this files a request the owner decides.
+app.post('/api/employees/:id/request-raise', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const requestedRate = Number(req.body.requestedRate);
+  if (!requestedRate || requestedRate <= 0) return res.status(400).json({ ok: false, error: 'Enter a valid pay rate.' });
+  const result = await employees.requestPayRaise({ personId: req.params.id, requestedRate, requestedBy: req.person.id });
+  res.json(result);
+});
+
+// A manager sees only pending requests for their own location; the owner
+// sees every pending request, across locations.
+app.get('/api/pay-rate-requests', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const locationFilter = req.person.role === 'manager' ? req.person.location_id : undefined;
+  res.json(await employees.listPayRateRequests({ status: req.query.status || 'pending', locationFilter }));
+});
+
+app.post('/api/pay-rate-requests/:id/decide', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can decide pay rate requests.' });
+  const result = await employees.decidePayRateRequest({ requestId: req.params.id, approve: !!req.body.approve, decidedBy: req.person.id, note: req.body.note });
   res.json(result);
 });
 
