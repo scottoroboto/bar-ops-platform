@@ -45,7 +45,9 @@ header.topbar .topbar-row {
   padding: 14px 16px;
 }
 
-header.topbar .brand { font-weight: 700; font-size: 17px; }
+header.topbar .brand { font-weight: 700; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+header.topbar .brand-logo { height: 32px; width: auto; display: block; }
+header.topbar .brand-sep { color: var(--muted); font-weight: 600; font-size: 14px; }
 header.topbar .who { font-size: 13px; color: var(--muted); text-align: right; }
 header.topbar a.logout { color: var(--muted); font-size: 13px; text-decoration: none; }
 
