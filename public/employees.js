@@ -27,43 +27,101 @@ function fillPositionSelect(sel, currentValue) {
   sel.value = currentValue || '';
 }
 
+let PENDING_LIST = [];
+let discardConfirmId = null;
+
 async function loadPending() {
-  const list = await api('/api/employees/pending');
+  PENDING_LIST = await api('/api/employees/pending');
+  renderPendingList();
+}
+
+function renderPendingList() {
   const el = document.getElementById('pendingList');
-  if (!list.length) { el.innerHTML = '<p class="muted">Nothing pending right now.</p>'; return; }
-  el.innerHTML = list.map(p => `
+  if (!PENDING_LIST.length) { el.innerHTML = '<p class="muted">Nothing pending right now.</p>'; return; }
+  el.innerHTML = PENDING_LIST.map(p => `
     <div class="list-row">
       <div>
         <div class="name">${escapeHtml(p.name)}</div>
         <div class="sub">${escapeHtml(p.email || p.phone || 'no contact on file')} · ${p.position ? escapeHtml(p.position) + ' · ' : ''}${p.location_id ? escapeHtml(locationName(p.location_id)) : 'no location yet'}</div>
       </div>
       <div class="stack-actions" style="margin-top:0;">
-        <button class="small ghost" onclick="openReviewModal('${p.id}', '${escapeHtml(p.name)}', '${p.position || ''}', '${p.location_id || ''}', '${p.pay_rate || ''}')">Review</button>
-        ${ME.role === 'owner' ? `<button class="small primary" style="margin-top:0;" onclick="openActivateModal('${p.id}', '${escapeHtml(p.name)}')">Activate</button>` : ''}
+        ${p.id === discardConfirmId ? `
+          <span class="muted" style="align-self:center;">Discard this applicant?</span>
+          <button class="small ghost" onclick="cancelDiscardPending()">Cancel</button>
+          <button class="small danger" style="margin-top:0;" onclick="confirmDiscardPending('${p.id}')">Yes, discard</button>
+        ` : `
+          <button class="small ghost" onclick="startDiscardPending('${p.id}')">Discard</button>
+          <button class="small ghost" onclick="openReviewModal('${p.id}', '${escapeHtml(p.name)}', '${p.position || ''}', '${p.location_id || ''}', '${p.pay_rate || ''}')">Review</button>
+          ${ME.role === 'owner' ? `<button class="small primary" style="margin-top:0;" onclick="openActivateModal('${p.id}', '${escapeHtml(p.name)}')">Activate</button>` : ''}
+        `}
       </div>
     </div>
   `).join('');
 }
 
+function startDiscardPending(id) { discardConfirmId = id; renderPendingList(); }
+function cancelDiscardPending() { discardConfirmId = null; renderPendingList(); }
+
+async function confirmDiscardPending(id) {
+  try {
+    await withStepUp(() => api(`/api/employees/${id}/discard`, { method: 'POST' }));
+    discardConfirmId = null;
+    showMsg('Applicant discarded.', 'success');
+    await loadPending();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
+async function sendOnboardingInvite() {
+  const name = document.getElementById('inviteName').value.trim();
+  const email = document.getElementById('inviteEmail').value.trim();
+  const resultEl = document.getElementById('inviteResult');
+  if (!email) { resultEl.innerHTML = '<p class="msg error">Enter an email address.</p>'; return; }
+  try {
+    const result = await withStepUp(() => api('/api/employees/invite', { method: 'POST', body: { name, email } }));
+    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error || 'Could not send invite.')}</p>`; return; }
+    resultEl.innerHTML = `<p class="msg success">Onboarding link sent to ${escapeHtml(email)}.</p>`;
+    document.getElementById('inviteName').value = '';
+    document.getElementById('inviteEmail').value = '';
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// Owner sees every location and can click through to a full edit. Manager
+// sees only their own location (server-enforced, not just hidden client-
+// side) and can request a raise instead of editing pay directly.
+let ALL_EMPLOYEES = [];
+
 async function loadAllEmployees() {
-  if (ME.role !== 'owner') return;
+  if (ME.role !== 'owner' && ME.role !== 'manager') return;
   document.getElementById('allEmployeesCard').style.display = '';
-  const list = await api('/api/employees');
+  document.getElementById('allEmployeesHint').textContent = ME.role === 'owner'
+    ? 'Click a name to edit their position, location, or pay rate. Toggle which apps each person can use — this can be changed any time, not just at onboarding.'
+    : "Your location's roster. Request a pay raise and the owner will review it.";
+  ALL_EMPLOYEES = await api('/api/employees');
+  renderAllEmployees();
+}
+
+function renderAllEmployees() {
   const el = document.getElementById('employeeList');
-  if (!list.length) { el.innerHTML = '<p class="muted">No active employees yet.</p>'; return; }
-  el.innerHTML = list.map(p => `
+  if (!ALL_EMPLOYEES.length) { el.innerHTML = '<p class="muted">No active employees yet.</p>'; return; }
+  el.innerHTML = ALL_EMPLOYEES.map(p => `
     <div class="list-row" style="flex-direction:column; align-items:stretch;">
       <div style="display:flex; justify-content:space-between;">
-        <div>
+        <div${ME.role === 'owner' ? ` class="clickable" onclick="openEmployeeDetail('${p.id}')" style="cursor:pointer;"` : ''}>
           <div class="name">${escapeHtml(p.name)} <span class="badge ${p.status === 'active' ? 'on' : 'off'}">${escapeHtml(p.status)}</span></div>
           <div class="sub">${escapeHtml(p.role)} · ${escapeHtml(p.position || '—')} · ${escapeHtml(locationName(p.location_id))}${p.pay_rate ? ' · $' + p.pay_rate + '/hr' : ''}</div>
         </div>
+        ${ME.role === 'manager' ? `<button class="small ghost" style="margin-top:0;" onclick="openRequestRaiseModal('${p.id}')">Request raise</button>` : ''}
       </div>
+      ${ME.role === 'owner' ? `
       <div style="margin-top:8px; display:flex; gap:18px; flex-wrap:wrap;">
         ${appToggleHtml(p, 'time_clock', 'Time Clock')}
         ${appToggleHtml(p, 'service_calls', 'Service Calls')}
         ${appToggleHtml(p, 'scheduling', 'Scheduling')}
-      </div>
+      </div>` : ''}
     </div>
   `).join('');
 }
@@ -159,7 +217,112 @@ async function submitActivate() {
   }
 }
 
-function closeAllModals() { closeReviewModal(); closeActivateModal(); }
+// ---- Employee detail / edit modal (owner only) ----
+function openEmployeeDetail(id) {
+  const p = ALL_EMPLOYEES.find(p => p.id === id);
+  if (!p) return;
+  document.getElementById('detailPersonId').value = p.id;
+  document.getElementById('detailName').textContent = p.name;
+  document.getElementById('detailMeta').textContent = `${p.role} · ${p.status}${p.username ? ' · @' + p.username : ''}`;
+  fillPositionSelect(document.getElementById('detailPosition'), p.position || '');
+  fillLocationSelect(document.getElementById('detailLocation'));
+  if (p.location_id) document.getElementById('detailLocation').value = p.location_id;
+  document.getElementById('detailPayRate').value = p.pay_rate || '';
+  document.getElementById('detailResult').innerHTML = '';
+  document.getElementById('employeeDetailModal').style.display = '';
+  document.getElementById('modalBackdrop').style.display = '';
+}
+function closeEmployeeDetail() {
+  document.getElementById('employeeDetailModal').style.display = 'none';
+  document.getElementById('modalBackdrop').style.display = 'none';
+}
+async function saveEmployeeDetail() {
+  const id = document.getElementById('detailPersonId').value;
+  const position = document.getElementById('detailPosition').value.trim();
+  const locationId = document.getElementById('detailLocation').value;
+  const payRate = document.getElementById('detailPayRate').value;
+  const resultEl = document.getElementById('detailResult');
+  try {
+    const result = await withStepUp(() => api(`/api/employees/${id}/update`, {
+      method: 'POST', body: { position, locationId, payRate: payRate ? Number(payRate) : null },
+    }));
+    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
+    closeEmployeeDetail();
+    showMsg('Employee updated.', 'success');
+    await loadAllEmployees();
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// ---- Request pay raise modal (manager) ----
+function openRequestRaiseModal(id) {
+  const p = ALL_EMPLOYEES.find(p => p.id === id);
+  if (!p) return;
+  document.getElementById('raisePersonId').value = p.id;
+  document.getElementById('raiseName').textContent = p.name;
+  document.getElementById('raiseCurrentRate').textContent = `Current rate: ${p.pay_rate ? '$' + p.pay_rate + '/hr' : 'not set'}`;
+  document.getElementById('raiseRequestedRate').value = '';
+  document.getElementById('raiseResult').innerHTML = '';
+  document.getElementById('requestRaiseModal').style.display = '';
+  document.getElementById('modalBackdrop').style.display = '';
+}
+function closeRequestRaiseModal() {
+  document.getElementById('requestRaiseModal').style.display = 'none';
+  document.getElementById('modalBackdrop').style.display = 'none';
+}
+async function submitRequestRaise() {
+  const id = document.getElementById('raisePersonId').value;
+  const requestedRate = Number(document.getElementById('raiseRequestedRate').value);
+  const resultEl = document.getElementById('raiseResult');
+  if (!requestedRate || requestedRate <= 0) { resultEl.innerHTML = '<p class="msg error">Enter a valid pay rate.</p>'; return; }
+  try {
+    const result = await withStepUp(() => api(`/api/employees/${id}/request-raise`, { method: 'POST', body: { requestedRate } }));
+    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
+    closeRequestRaiseModal();
+    showMsg('Sent to the owner for approval.', 'success');
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// ---- Pay rate requests (owner decides; manager just files them above) ----
+async function loadPayRateRequests() {
+  if (ME.role !== 'owner') return;
+  document.getElementById('payRateRequestsCard').style.display = '';
+  try {
+    const list = await api('/api/pay-rate-requests');
+    const el = document.getElementById('payRateRequestsList');
+    if (!list.length) { el.innerHTML = '<p class="muted">No pending requests.</p>'; return; }
+    el.innerHTML = list.map(r => `
+      <div class="list-row">
+        <div>
+          <div class="name">${escapeHtml(r.person_name)}</div>
+          <div class="sub">$${r.current_rate ?? '—'}/hr → $${r.requested_rate}/hr · requested by ${escapeHtml(r.requested_by_name || 'a manager')}</div>
+        </div>
+        <div class="stack-actions" style="margin-top:0;">
+          <button class="small ghost" onclick="decidePayRateRequest('${r.id}', false)">Deny</button>
+          <button class="small primary" style="margin-top:0;" onclick="decidePayRateRequest('${r.id}', true)">Approve</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    document.getElementById('payRateRequestsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function decidePayRateRequest(id, approve) {
+  try {
+    await withStepUp(() => api(`/api/pay-rate-requests/${id}/decide`, { method: 'POST', body: { approve } }));
+    showMsg(approve ? 'Raise approved.' : 'Request denied.', 'success');
+    await loadPayRateRequests();
+    await loadAllEmployees();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
+function closeAllModals() { closeReviewModal(); closeActivateModal(); closeEmployeeDetail(); closeRequestRaiseModal(); }
 
 // ---- Positions admin (manager + owner can add; delete is really "archive") ----
 let POSITIONS_ADMIN = [];
@@ -394,4 +557,6 @@ async function trustThisDevice() {
   // try/catch and shows its card regardless, so if this table hasn't been
   // migrated in yet, the rest of the page above still works normally.
   await loadPositionsAdmin();
+  // Same resilience for pay rate requests — its own try/catch, owner-only.
+  await loadPayRateRequests();
 })();
