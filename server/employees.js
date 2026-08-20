@@ -153,11 +153,21 @@ async function setAppAccess({ personId, appKey, enabled, updatedBy }) {
   });
 }
 
-async function listAllWithAccess() {
+// locationFilter is set for a manager (their own location only, enforced by
+// the route handler passing req.person.location_id, never a client-supplied
+// value); left undefined for the owner, who sees every location.
+async function listAllWithAccess(locationFilter) {
   return withServiceClient(async (client) => {
+    const params = [];
+    let where = "status != 'pending_review'";
+    if (locationFilter) {
+      params.push(locationFilter);
+      where += ` AND location_id = $${params.length}`;
+    }
     const { rows: people } = await client.query(
       `SELECT id, name, role, location_id, username, email, phone, status, position, pay_rate, activated_at
-       FROM people WHERE status != 'pending_review' ORDER BY name`
+       FROM people WHERE ${where} ORDER BY name`,
+      params
     );
     const { rows: access } = await client.query('SELECT * FROM employee_apps');
     const byPerson = {};
@@ -166,4 +176,130 @@ async function listAllWithAccess() {
   });
 }
 
-module.exports = { createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, setAppAccess, listAllWithAccess, APP_KEYS };
+// Discard/reject a still-pending applicant. Deliberately scoped to
+// status = 'pending_review' only — this can never touch someone who's
+// already been activated, so there's no way to accidentally delete a real
+// employee's record through this path. Hard-deleted rather than soft
+// (status='inactive') because a rejected applicant was never actually an
+// employee; 'inactive' is reserved for people who really did work here.
+async function discardPending({ personId }) {
+  return withServiceClient(async (client) => {
+    const { rowCount } = await client.query(
+      `DELETE FROM people WHERE id = $1 AND status = 'pending_review'`,
+      [personId]
+    );
+    if (!rowCount) return { ok: false, error: 'Not found, or already activated.' };
+    return { ok: true };
+  });
+}
+
+// Emails a prospective hire a link to /apply.html. Not tied to any existing
+// people row (they haven't applied yet), so notifications_log gets a
+// synthetic relatedId just to satisfy its NOT NULL constraint — this is an
+// invite, not an update to a real record.
+async function sendOnboardingInvite({ toEmail, toName, sentBy }) {
+  if (!toEmail) return { ok: false, error: 'Email is required.' };
+  return withServiceClient(async (client) => {
+    const link = `${(process.env.APP_BASE_URL || 'https://bar-ops-platform-52n1.onrender.com').replace(/\/$/, '')}/apply.html`;
+    const greeting = toName ? `Hi ${toName},` : 'Hi,';
+    const text = `${greeting}\n\nYou've been invited to apply to join the team at Ticket Sports Bar. It only takes about a minute:\n\n${link}\n\nSee you soon!`;
+    const result = await notify.sendEmail(client, 'onboarding_invite', crypto.randomUUID(), toEmail, 'Join the team at Ticket Sports Bar', text);
+    return result;
+  });
+}
+
+// Owner-only full edit — unlike managerReview (which only works while
+// status = 'pending_review'), this works on any employee at any time, since
+// only the owner can call it.
+async function ownerUpdateEmployee({ personId, position, locationId, payRate }) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query(
+      `UPDATE people SET position = $1, location_id = $2, pay_rate = $3, updated_at = now()
+       WHERE id = $4 RETURNING id, name, role, location_id, position, pay_rate, status`,
+      [position || null, locationId || null, payRate ?? null, personId]
+    );
+    if (!rows[0]) return { ok: false, error: 'Not found.' };
+    return { ok: true, person: rows[0] };
+  });
+}
+
+// A manager can't change pay directly — they submit a request, the owner
+// decides. pay_rate_requests has RLS FORCE-enabled with zero policies (same
+// situation as devices/locations/positions before them), so every touch of
+// this table has to go through the service client.
+async function requestPayRaise({ personId, requestedRate, requestedBy }) {
+  return withServiceClient(async (client) => {
+    const { rows: personRows } = await client.query('SELECT name, pay_rate FROM people WHERE id = $1', [personId]);
+    const person = personRows[0];
+    if (!person) return { ok: false, error: 'Employee not found.' };
+    const { rows } = await client.query(
+      `INSERT INTO pay_rate_requests (person_id, current_rate, requested_rate, requested_by)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [personId, person.pay_rate, requestedRate, requestedBy]
+    );
+    const { rows: ownerRows } = await client.query(`SELECT email FROM people WHERE role = 'owner' AND email IS NOT NULL`);
+    const text = `A manager has requested a pay rate change for ${person.name}: $${person.pay_rate ?? '—'}/hr → $${requestedRate}/hr.\n\nReview it in Employees → Pay rate requests.`;
+    for (const o of ownerRows) {
+      await notify.sendEmail(client, 'pay_rate_requests', rows[0].id, o.email, `Pay rate request for ${person.name}`, text);
+    }
+    return { ok: true, request: rows[0] };
+  });
+}
+
+// locationFilter scopes a manager to requests for people at their own
+// location; left undefined for the owner, who sees every request.
+async function listPayRateRequests({ status = 'pending', locationFilter } = {}) {
+  return withServiceClient(async (client) => {
+    const params = [status];
+    let where = 'r.status = $1';
+    if (locationFilter) {
+      params.push(locationFilter);
+      where += ` AND p.location_id = $${params.length}`;
+    }
+    const { rows } = await client.query(
+      `SELECT r.id, r.person_id, r.current_rate, r.requested_rate, r.requested_by, r.requested_at, r.status, r.decided_at, r.note,
+              p.name AS person_name, p.location_id, req.name AS requested_by_name
+       FROM pay_rate_requests r
+       JOIN people p ON p.id = r.person_id
+       LEFT JOIN people req ON req.id = r.requested_by
+       WHERE ${where}
+       ORDER BY r.requested_at ASC`,
+      params
+    );
+    return rows;
+  });
+}
+
+// Owner-only. Approving copies requested_rate onto the person's actual
+// pay_rate in the same transaction as the decision, so the two can never
+// drift apart.
+async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
+  return withServiceClient(async (client) => {
+    const { rows: reqRows } = await client.query(`SELECT * FROM pay_rate_requests WHERE id = $1 AND status = 'pending'`, [requestId]);
+    const request = reqRows[0];
+    if (!request) return { ok: false, error: 'Not found, or already decided.' };
+    await client.query(
+      `UPDATE pay_rate_requests SET status = $1, decided_by = $2, decided_at = now(), note = $3 WHERE id = $4`,
+      [approve ? 'approved' : 'denied', decidedBy, note || null, requestId]
+    );
+    if (approve) {
+      await client.query('UPDATE people SET pay_rate = $1, updated_at = now() WHERE id = $2', [request.requested_rate, request.person_id]);
+    }
+    const { rows: managerRows } = await client.query('SELECT name, email FROM people WHERE id = $1', [request.requested_by]);
+    const { rows: personRows } = await client.query('SELECT name FROM people WHERE id = $1', [request.person_id]);
+    const manager = managerRows[0];
+    if (manager && manager.email) {
+      const text = approve
+        ? `Your pay rate request for ${personRows[0]?.name || 'the employee'} was approved: now $${request.requested_rate}/hr.`
+        : `Your pay rate request for ${personRows[0]?.name || 'the employee'} was denied.${note ? ` Note: ${note}` : ''}`;
+      await notify.sendEmail(client, 'pay_rate_requests', requestId, manager.email, `Pay rate request ${approve ? 'approved' : 'denied'}`, text);
+    }
+    return { ok: true };
+  });
+}
+
+module.exports = {
+  createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, setAppAccess,
+  listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee,
+  requestPayRaise, listPayRateRequests, decidePayRateRequest, APP_KEYS,
+};
