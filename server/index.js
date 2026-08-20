@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
-const { pool } = require('./db');
+const { pool, withServiceClient } = require('./db');
 const auth = require('./auth');
 const employees = require('./employees');
 const timeclock = require('./timeclock');
@@ -25,6 +25,169 @@ app.get('/api/status', (req, res) => {
 app.get('/api/locations', async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM locations WHERE active = true ORDER BY name');
   res.json(rows);
+});
+
+// Admin view — includes archived locations too, so the owner can restore
+// one. Everyday reads (apply.html, review dropdowns, etc.) use the public
+// active-only route above instead.
+app.get('/api/locations/admin', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+  const { rows } = await pool.query('SELECT * FROM locations ORDER BY active DESC, name');
+  res.json(rows);
+});
+
+// Locations are owner-only to add/rename/archive — per Scotto: the owner
+// is the one who decides what counts as a real location. Managers manage
+// positions instead (below).
+// Writes below go through withServiceClient (bypasses RLS via the
+// barplatform_service role) rather than the plain pool. locations/positions
+// only have an open SELECT policy for barplatform_app — reads work fine
+// through the ordinary pool, but RLS is FORCE-enabled with no INSERT/
+// UPDATE/DELETE policy, so a write on the plain app connection is silently
+// rejected (or matches zero rows). Authorization is still enforced right
+// here in the handler, same as everywhere else service-client writes are used.
+app.post('/api/locations', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can add a location.' });
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+  try {
+    const location = await withServiceClient(async (client) => {
+      const { rows } = await client.query('INSERT INTO locations (name) VALUES ($1) RETURNING *', [name]);
+      return rows[0];
+    });
+    res.json({ ok: true, location });
+  } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ ok: false, error: 'A location with that name already exists.' });
+    throw e;
+  }
+});
+
+app.post('/api/locations/:id/update', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can rename a location.' });
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+  try {
+    const location = await withServiceClient(async (client) => {
+      const { rows } = await client.query('UPDATE locations SET name = $1 WHERE id = $2 RETURNING *', [name, req.params.id]);
+      return rows[0];
+    });
+    if (!location) return res.status(404).json({ ok: false, error: 'Not found.' });
+    res.json({ ok: true, location });
+  } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ ok: false, error: 'A location with that name already exists.' });
+    throw e;
+  }
+});
+
+// Archive/restore rather than delete — a location can be referenced by
+// years of time-clock and service-call history; hard-deleting it would
+// either cascade-destroy that history or fail on the foreign key. Archived
+// locations just drop out of the active dropdowns everywhere else.
+app.post('/api/locations/:id/archive', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can archive a location.' });
+  const location = await withServiceClient(async (client) => {
+    const { rows } = await client.query('UPDATE locations SET active = false WHERE id = $1 RETURNING *', [req.params.id]);
+    return rows[0];
+  });
+  if (!location) return res.status(404).json({ ok: false, error: 'Not found.' });
+  res.json({ ok: true, location });
+});
+
+app.post('/api/locations/:id/restore', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can restore a location.' });
+  const location = await withServiceClient(async (client) => {
+    const { rows } = await client.query('UPDATE locations SET active = true WHERE id = $1 RETURNING *', [req.params.id]);
+    return rows[0];
+  });
+  if (!location) return res.status(404).json({ ok: false, error: 'Not found.' });
+  res.json({ ok: true, location });
+});
+
+// ---------------- Positions ----------------
+// Public, active-only — used by /apply.html's "Position Applied for"
+// dropdown (?excludeManagement=true, nobody self-applies to be a manager)
+// and by the Review employee dropdown (no filter, managers can review
+// someone straight into a management position).
+app.get('/api/positions', async (req, res) => {
+  const excludeManagement = req.query.excludeManagement === 'true';
+  const { rows } = await pool.query(
+    `SELECT * FROM positions WHERE active = true ${excludeManagement ? 'AND is_management = false' : ''} ORDER BY name`
+  );
+  res.json(rows);
+});
+
+// Admin view — includes archived positions too, so a manager/owner can
+// restore one.
+app.get('/api/positions/admin', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const { rows } = await pool.query('SELECT * FROM positions ORDER BY active DESC, name');
+  res.json(rows);
+});
+
+// Positions are manager+owner — per Scotto, managers should be able to
+// add positions themselves (this'll likely move into the Scheduling app
+// once that exists; for now it lives here in Employees admin).
+app.post('/api/positions', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+  try {
+    const position = await withServiceClient(async (client) => {
+      const { rows } = await client.query(
+        'INSERT INTO positions (name, is_management) VALUES ($1,$2) RETURNING *',
+        [name, !!req.body.isManagement]
+      );
+      return rows[0];
+    });
+    res.json({ ok: true, position });
+  } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ ok: false, error: 'A position with that name already exists.' });
+    throw e;
+  }
+});
+
+app.post('/api/positions/:id/update', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+  try {
+    const position = await withServiceClient(async (client) => {
+      const { rows } = await client.query(
+        'UPDATE positions SET name = $1, is_management = $2 WHERE id = $3 RETURNING *',
+        [name, !!req.body.isManagement, req.params.id]
+      );
+      return rows[0];
+    });
+    if (!position) return res.status(404).json({ ok: false, error: 'Not found.' });
+    res.json({ ok: true, position });
+  } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ ok: false, error: 'A position with that name already exists.' });
+    throw e;
+  }
+});
+
+// Archive/restore rather than delete — position is stored as plain text
+// on people.position (not a foreign key), so archiving never orphans a
+// historical employee record; it just drops the position out of future
+// dropdowns.
+app.post('/api/positions/:id/archive', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const position = await withServiceClient(async (client) => {
+    const { rows } = await client.query('UPDATE positions SET active = false WHERE id = $1 RETURNING *', [req.params.id]);
+    return rows[0];
+  });
+  if (!position) return res.status(404).json({ ok: false, error: 'Not found.' });
+  res.json({ ok: true, position });
+});
+
+app.post('/api/positions/:id/restore', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const position = await withServiceClient(async (client) => {
+    const { rows } = await client.query('UPDATE positions SET active = true WHERE id = $1 RETURNING *', [req.params.id]);
+    return rows[0];
+  });
+  if (!position) return res.status(404).json({ ok: false, error: 'Not found.' });
+  res.json({ ok: true, position });
 });
 
 // ---------------- Auth ----------------
@@ -61,10 +224,13 @@ app.post('/api/devices', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   const { locationId, label } = req.body;
   const token = crypto.randomBytes(24).toString('base64url');
-  await pool.query(
+  // devices has RLS FORCE-enabled with no policy at all for barplatform_app,
+  // so this insert has to go through the service role — same reasoning as
+  // the locations/positions writes above.
+  await withServiceClient((client) => client.query(
     'INSERT INTO devices (location_id, label, device_token, trusted_by) VALUES ($1,$2,$3,$4)',
     [locationId, label, token, req.person.id]
-  );
+  ));
   res.json({ ok: true, deviceToken: token });
 });
 
@@ -82,7 +248,8 @@ app.get('/api/employees/pending', auth.requireSession('light'), async (req, res)
 app.post('/api/employees/pending', async (req, res) => {
   const name = (req.body.name || '').trim();
   if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
-  const person = await employees.createPendingEmployee({ ...req.body, name });
+  const position = (req.body.position || '').trim() || null;
+  const person = await employees.createPendingEmployee({ ...req.body, name, position });
   res.json({ ok: true, person });
 });
 
@@ -211,15 +378,18 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Bar platform listening on http://localhost:${PORT}`));
 
 // Daily safety net, same idea as the Apps Script midnight trigger.
+// Runs with no logged-in person, so it has to use the service client —
+// a plain pool.connect() here (barplatform_app, no session vars set)
+// silently matches zero rows under time_entries' RLS policies, which
+// are scoped to current_person_id()/current_role_name(). That made this
+// job a silent no-op: it looked fine (no errors, no crash), it just never
+// actually closed out any stale shifts.
 setInterval(async () => {
   const now = new Date();
   if (now.getHours() === 0 && now.getMinutes() < 5) {
-    const client = await pool.connect();
-    try {
+    await withServiceClient(async (client) => {
       const n = await timeclock.autoClockOutStale(client);
       if (n > 0) console.log(`Auto clocked out ${n} stale shift(s).`);
-    } finally {
-      client.release();
-    }
+    });
   }
 }, 4 * 60 * 1000);
