@@ -23,6 +23,8 @@
     <input id="email" type="email" autocomplete="email" placeholder="jane@example.com">
     <label for="phone">Phone</label>
     <input id="phone" type="tel" autocomplete="tel" placeholder="(555) 555-1234">
+    <label for="position">Position applied for</label>
+    <select id="position"><option value="">Loading…</option></select>
     <label for="location">Which location?</label>
     <select id="location"><option value="">Loading…</option></select>
     <button class="primary" onclick="submitApplication()">Submit</button>
@@ -55,14 +57,28 @@
     }
   }
 
+  // Management positions are left off this list on purpose — those get
+  // filled by promotion/hire through Employees, not a public application.
+  async function loadPositions() {
+    const select = document.getElementById('position');
+    try {
+      const positions = await api('/api/positions?excludeManagement=true');
+      select.innerHTML = '<option value="">Not sure / other</option>' +
+        positions.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
+    } catch (e) {
+      select.innerHTML = '<option value="">Not sure / other</option>';
+    }
+  }
+
   async function submitApplication() {
     const name = document.getElementById('name').value.trim();
     const email = document.getElementById('email').value.trim();
     const phone = document.getElementById('phone').value.trim();
+    const position = document.getElementById('position').value || undefined;
     const requestedLocationId = document.getElementById('location').value || undefined;
     if (!name) { showMsg('Please enter your name.', 'error'); return; }
     try {
-      await api('/api/employees/pending', { method: 'POST', body: { name, email, phone, requestedLocationId } });
+      await api('/api/employees/pending', { method: 'POST', body: { name, email, phone, position, requestedLocationId } });
       document.getElementById('formCard').style.display = 'none';
       document.getElementById('doneCard').style.display = '';
       showMsg('', '');
@@ -72,6 +88,7 @@
   }
 
   loadLocations();
+  loadPositions();
 </script>
 </body>
 </html>
