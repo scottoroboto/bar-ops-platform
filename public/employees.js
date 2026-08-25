@@ -322,6 +322,70 @@ async function decidePayRateRequest(id, approve) {
   }
 }
 
+// ---- Reset requests (owner decides; employee files from the login page) ----
+// requestType labels + a client-side reveal cache: once approved, the new
+// temp password/PIN is shown exactly once (the server never returns it
+// again), so we keep decided rows on screen with their reveal attached
+// instead of re-fetching (a re-fetch would just drop them — they're no
+// longer 'pending').
+const RESET_TYPE_LABEL = { password: 'password', pin: 'PIN', both: 'password & PIN' };
+let RESET_REQUESTS = [];
+
+async function loadResetRequests() {
+  if (ME.role !== 'owner') return;
+  document.getElementById('resetRequestsCard').style.display = '';
+  try {
+    const list = await api('/api/reset-requests');
+    RESET_REQUESTS = list.map(r => ({ ...r, _reveal: null }));
+    renderResetRequestsList();
+  } catch (e) {
+    document.getElementById('resetRequestsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderResetRequestsList() {
+  const el = document.getElementById('resetRequestsList');
+  if (!RESET_REQUESTS.length) { el.innerHTML = '<p class="muted">No pending requests.</p>'; return; }
+  el.innerHTML = RESET_REQUESTS.map(r => `
+    <div class="list-row" style="flex-direction:column; align-items:stretch;">
+      <div style="display:flex; justify-content:space-between;">
+        <div>
+          <div class="name">${escapeHtml(r.person_name)} <span class="badge off">@${escapeHtml(r.username || '—')}</span></div>
+          <div class="sub">Forgot: ${escapeHtml(RESET_TYPE_LABEL[r.request_type] || r.request_type)}${r.note ? ` · "${escapeHtml(r.note)}"` : ''} · requested ${fmtDateTime(r.requested_at)}</div>
+        </div>
+        ${r.status === 'pending' ? `
+        <div class="stack-actions" style="margin-top:0;">
+          <button class="small ghost" onclick="decideResetRequest('${r.id}', false)">Deny</button>
+          <button class="small primary" style="margin-top:0;" onclick="decideResetRequest('${r.id}', true)">Approve &amp; generate</button>
+        </div>` : `<span class="badge ${r.status === 'approved' ? 'on' : 'off'}">${escapeHtml(r.status)}</span>`}
+      </div>
+      ${r._reveal ? `
+      <div class="credential-box">
+        <b>Username:</b> ${escapeHtml(r._reveal.username)}<br>
+        ${r._reveal.tempPassword ? `<b>New temp password:</b> ${escapeHtml(r._reveal.tempPassword)}<br>` : ''}
+        ${r._reveal.pin ? `<b>New PIN:</b> ${escapeHtml(r._reveal.pin)}<br>` : ''}
+        <span class="muted">Shown once — hand this to ${escapeHtml(r._reveal.username)} directly. Their other sessions were signed out.</span>
+      </div>` : ''}
+    </div>
+  `).join('');
+}
+
+async function decideResetRequest(id, approve) {
+  try {
+    const result = await withStepUp(() => api(`/api/reset-requests/${id}/decide`, { method: 'POST', body: { approve } }));
+    if (!result.ok) { showMsg(result.error || 'Could not decide that request.', 'error'); return; }
+    const row = RESET_REQUESTS.find(r => r.id === id);
+    if (row) {
+      row.status = approve ? 'approved' : 'denied';
+      if (approve) row._reveal = { username: result.person.username, tempPassword: result.tempPassword, pin: result.pin };
+    }
+    renderResetRequestsList();
+    showMsg(approve ? 'New credentials generated below.' : 'Request denied.', 'success');
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
 function closeAllModals() { closeReviewModal(); closeActivateModal(); closeEmployeeDetail(); closeRequestRaiseModal(); }
 
 // ---- Positions admin (manager + owner can add; delete is really "archive") ----
@@ -559,4 +623,8 @@ async function trustThisDevice() {
   await loadPositionsAdmin();
   // Same resilience for pay rate requests — its own try/catch, owner-only.
   await loadPayRateRequests();
+  // Same again for reset requests — its own try/catch, owner-only, and a
+  // brand new table (patch_009), so this stays resilient if that migration
+  // hasn't landed yet either.
+  await loadResetRequests();
 })();
