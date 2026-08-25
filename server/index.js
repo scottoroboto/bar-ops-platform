@@ -10,6 +10,7 @@ const timeclock = require('./timeclock');
 const servicecalls = require('./servicecalls');
 const notify = require('./notify');
 const jotform = require('./jotform');
+const resetRequests = require('./resetRequests');
 
 const app = express();
 app.use(cors());
@@ -217,6 +218,29 @@ app.get('/api/auth/me', auth.requireSession('light'), async (req, res) => {
     return rows;
   });
   res.json({ person: req.person, appAccess: access });
+});
+
+// Public, unauthenticated — the whole point is this works for someone who
+// can't log in. Owner-mediated fallback: files a request, the owner
+// reviews and approves it from Employees admin, no email/SMS required.
+// See server/resetRequests.js and db/patch_009 for the full reasoning.
+app.post('/api/auth/request-reset', async (req, res) => {
+  const result = await resetRequests.requestReset(req.body);
+  res.json(result);
+});
+
+// Owner-only — same trust boundary as activation/credential issuance.
+app.get('/api/reset-requests', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+  res.json(await resetRequests.listResetRequests({ status: req.query.status || 'pending' }));
+});
+
+// Full session required — approving mints a brand-new password/PIN, same
+// sensitivity tier as employee activation.
+app.post('/api/reset-requests/:id/decide', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+  const result = await resetRequests.decideReset({ requestId: req.params.id, approve: !!req.body.approve, decidedBy: req.person.id, note: req.body.note });
+  res.json(result);
 });
 
 // ---------------- Devices (shared bar iPads) ----------------
