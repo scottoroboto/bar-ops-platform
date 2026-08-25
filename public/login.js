@@ -91,6 +91,28 @@ async function doVerifyCode() {
   }
 }
 
+function toggleForgotPanel() {
+  const panel = document.getElementById('panelForgot');
+  const opening = panel.style.display === 'none';
+  panel.style.display = opening ? '' : 'none';
+  if (opening) document.getElementById('forgotUsername').focus();
+}
+
+async function submitForgotRequest() {
+  const username = document.getElementById('forgotUsername').value.trim();
+  const requestType = document.getElementById('forgotType').value;
+  const note = document.getElementById('forgotNote').value.trim();
+  const resultEl = document.getElementById('forgotResult');
+  if (!username) { resultEl.innerHTML = '<p class="msg error">Enter your username.</p>'; return; }
+  try {
+    const result = await api('/api/auth/request-reset', { method: 'POST', body: { username, requestType, note } });
+    resultEl.innerHTML = `<p class="msg success">${escapeHtml(result.message)}</p>`;
+    document.getElementById('forgotForm').style.display = 'none';
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
 (function init() {
   const params = new URLSearchParams(window.location.search);
   const msg = params.get('msg');
