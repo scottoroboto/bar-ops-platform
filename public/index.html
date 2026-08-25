@@ -51,6 +51,29 @@
     </div>
   </div>
 
+  <p class="muted center"><a href="#" onclick="toggleForgotPanel(); return false;">Forgot your password or PIN?</a></p>
+
+  <!-- Forgot password/PIN — owner-mediated fallback, no email/SMS required.
+       See server/resetRequests.js for why this doesn't send a code. -->
+  <div class="card" id="panelForgot" style="display:none;">
+    <h2>Forgot your password or PIN?</h2>
+    <p class="muted">This isn't automatic — it sends a request straight to your owner, who'll set you up with a new one directly.</p>
+    <div id="forgotResult"></div>
+    <div id="forgotForm">
+      <label for="forgotUsername">Username</label>
+      <input id="forgotUsername" autocomplete="username" placeholder="e.g. jamie.test">
+      <label for="forgotType">What did you forget?</label>
+      <select id="forgotType">
+        <option value="both">Both my password and PIN</option>
+        <option value="password">Just my password</option>
+        <option value="pin">Just my PIN</option>
+      </select>
+      <label for="forgotNote">Anything your owner should know? (optional)</label>
+      <input id="forgotNote" maxlength="500" placeholder="e.g. lost my phone">
+      <button class="primary" onclick="submitForgotRequest()">Send request to owner</button>
+    </div>
+  </div>
+
   <p class="muted center">Applying for a job? <a href="/apply.html">Start here</a>.</p>
   <p class="muted center">Already hired? Your manager or owner sets up your account — check your email for a temporary username and password.</p>
 </div>
