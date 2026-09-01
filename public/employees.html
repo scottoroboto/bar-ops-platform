@@ -31,6 +31,11 @@
     <h2>Pay rate requests</h2>
     <p class="muted">Raise requests submitted by managers, waiting on your decision.</p>
     <div id="payRateRequestsList"><p class="muted">Loading…</p></div>
+    <hr style="border:none; border-top:1px solid rgba(255,255,255,0.12); margin:18px 0;">
+    <label for="payRateMemoInput">Memo for managers (shown when they request a raise)</label>
+    <textarea id="payRateMemoInput" rows="2" placeholder="e.g. Don't discuss a raise with an employee until it's been decided."></textarea>
+    <button class="secondary" onclick="savePayRateMemo()">Save memo</button>
+    <span id="payRateMemoResult"></span>
   </div>
 
   <div class="card" id="resetRequestsCard" style="display:none;">
@@ -118,10 +123,11 @@
 </div>
 
 <!-- Employee detail / edit modal (owner only) -->
-<div class="card" id="employeeDetailModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:8%; z-index:20;">
+<div class="card" id="employeeDetailModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:8%; z-index:20; max-height:84vh; overflow-y:auto;">
   <h2 id="detailName">Employee</h2>
   <p class="muted" id="detailMeta"></p>
   <input type="hidden" id="detailPersonId">
+  <div id="detailContact" class="muted" style="margin-bottom:14px; line-height:1.6;"></div>
   <label for="detailPosition">Position</label>
   <select id="detailPosition"></select>
   <label for="detailLocation">Location</label>
@@ -141,6 +147,7 @@
   <p class="muted" id="raiseName"></p>
   <input type="hidden" id="raisePersonId">
   <p class="muted" id="raiseCurrentRate"></p>
+  <p class="msg info" id="raiseMemo" style="display:none;"></p>
   <label for="raiseRequestedRate">New pay rate ($/hr)</label>
   <input id="raiseRequestedRate" type="number" step="0.01">
   <div class="stack-actions">
