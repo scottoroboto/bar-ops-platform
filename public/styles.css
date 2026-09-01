@@ -226,6 +226,7 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .status-row .label { font-size: 12px; font-weight: 600; }
 .sys-checked { font-size: 11px; color: var(--muted); margin-top: 8px; }
 .sys-hist { padding: 0 12px 12px; }
+.sys-equip { font-size: 11px; color: var(--muted); margin: 4px 0 10px; }
 
 .roadmap-card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 18px; }
 .roadmap-card .title { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
