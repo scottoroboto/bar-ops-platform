@@ -281,7 +281,12 @@ async function submitNotifyChannel() {
     return;
   }
   try {
-    LOCATIONS = await api('/api/locations');
+    // Ticket 3 is being sold and is deliberately out of scope for
+    // monitoring (see db/patch_010_monitoring.sql) — filtered here so it
+    // never shows up in the Status/Alerts location filters or the
+    // Add/Manage "Location" picker, even though it's still an active
+    // location for the rest of Bar Ops (time clock, service calls, etc.).
+    LOCATIONS = (await api('/api/locations')).filter(l => l.name !== 'Ticket 3');
     renderTabs();
   } catch (e) {
     showMsg(e.message, 'error');
