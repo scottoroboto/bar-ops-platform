@@ -15,6 +15,7 @@
   <div id="panelOpen"></div>
   <div id="panelNew" style="display:none;"></div>
   <div id="panelReports" style="display:none;"></div>
+  <div id="panelManage" style="display:none;"></div>
 </div>
 
 <!-- Close-call modal -->
@@ -29,7 +30,30 @@
     <button class="primary" style="margin-top:0;" onclick="submitClose()">Mark closed</button>
   </div>
 </div>
-<div id="modalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10;" onclick="closeCloseModal()"></div>
+
+<!-- Call detail modal — click any call, open/pending/closed -->
+<div class="card" id="detailModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:480px; max-height:82vh; overflow-y:auto; height:fit-content; top:8%; z-index:20;">
+  <h2 style="margin-bottom:2px;">Call details</h2>
+  <div id="detailBody"><p class="muted">Loading…</p></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeDetailModal()">Close</button>
+  </div>
+</div>
+
+<!-- Destination member picker modal (Manage tab) -->
+<div class="card" id="membersModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; max-height:82vh; overflow-y:auto; height:fit-content; top:8%; z-index:20;">
+  <h2 id="membersTitle">Members</h2>
+  <input type="hidden" id="membersDestId">
+  <p class="muted">Who should be notified for this destination?</p>
+  <div id="membersList"></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeMembersModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitMembers()">Save</button>
+  </div>
+  <div id="membersResult"></div>
+</div>
+
+<div id="modalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10;" onclick="closeAllModals()"></div>
 
 <script src="/common.js"></script>
 <script src="/servicecalls.js"></script>
