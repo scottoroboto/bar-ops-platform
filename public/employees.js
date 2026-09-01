@@ -221,12 +221,23 @@ async function submitActivate() {
 }
 
 // ---- Employee detail / edit modal (owner only) ----
+// Contact info here is the same email/phone the "all employees" list
+// already fetches for every person (server/employees.js's
+// listAllWithAccess) — this just surfaces it, rather than pulling
+// anything new or more sensitive. Nothing genuinely secure (password/PIN
+// hashes, SSN, banking) is ever sent to the client at all; that stays in
+// Jotform (see JOTFORM_HIRE_PACK_URL) or hashed server-side only.
 function openEmployeeDetail(id) {
   const p = ALL_EMPLOYEES.find(p => p.id === id);
   if (!p) return;
   document.getElementById('detailPersonId').value = p.id;
   document.getElementById('detailName').textContent = p.name;
   document.getElementById('detailMeta').textContent = `${p.role} · ${p.status}${p.username ? ' · @' + p.username : ''}`;
+  document.getElementById('detailContact').innerHTML = `
+    <div>Email: ${p.email ? escapeHtml(p.email) : '<span class="muted">not on file</span>'}</div>
+    <div>Phone: ${p.phone ? escapeHtml(p.phone) : '<span class="muted">not on file</span>'}</div>
+    <div>Hired: ${p.activated_at ? fmtDateTime(p.activated_at) : '<span class="muted">—</span>'}</div>
+  `;
   fillPositionSelect(document.getElementById('detailPosition'), p.position || '');
   fillLocationSelect(document.getElementById('detailLocation'));
   if (p.location_id) document.getElementById('detailLocation').value = p.location_id;
@@ -269,6 +280,11 @@ function openRequestRaiseModal(id) {
   document.getElementById('raiseResult').innerHTML = '';
   document.getElementById('requestRaiseModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
+  const memoEl = document.getElementById('raiseMemo');
+  memoEl.style.display = 'none';
+  api('/api/owner-notes/pay_rate_requests').then(note => {
+    if (note.body) { memoEl.textContent = note.body; memoEl.style.display = ''; }
+  }).catch(() => {});
 }
 function closeRequestRaiseModal() {
   document.getElementById('requestRaiseModal').style.display = 'none';
@@ -293,6 +309,7 @@ async function submitRequestRaise() {
 async function loadPayRateRequests() {
   if (ME.role !== 'owner') return;
   document.getElementById('payRateRequestsCard').style.display = '';
+  loadPayRateMemo();
   try {
     const list = await api('/api/pay-rate-requests');
     const el = document.getElementById('payRateRequestsList');
@@ -301,7 +318,8 @@ async function loadPayRateRequests() {
       <div class="list-row">
         <div>
           <div class="name">${escapeHtml(r.person_name)}</div>
-          <div class="sub">$${r.current_rate ?? '—'}/hr → $${r.requested_rate}/hr · requested by ${escapeHtml(r.requested_by_name || 'a manager')}</div>
+          <div class="sub">Requested: $${r.requested_rate}/hr &nbsp;·&nbsp; Current: $${r.current_rate ?? '—'}/hr</div>
+          <div class="sub">${r.last_raise_at ? 'Last raise: ' + fmtDateTime(r.last_raise_at) : 'Hire date: ' + (r.hire_date ? fmtDateTime(r.hire_date) : '—')} &nbsp;·&nbsp; requested by ${escapeHtml(r.requested_by_name || 'a manager')}</div>
         </div>
         <div class="stack-actions" style="margin-top:0;">
           <button class="small ghost" onclick="decidePayRateRequest('${r.id}', false)">Deny</button>
@@ -311,6 +329,27 @@ async function loadPayRateRequests() {
     `).join('');
   } catch (e) {
     document.getElementById('payRateRequestsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// ---- Owner's memo for managers, shown right where they request a raise ----
+async function loadPayRateMemo() {
+  try {
+    const note = await api('/api/owner-notes/pay_rate_requests');
+    document.getElementById('payRateMemoInput').value = note.body || '';
+  } catch (e) {
+    // Non-critical — leave the box blank rather than blocking the page on it.
+  }
+}
+async function savePayRateMemo() {
+  const body = document.getElementById('payRateMemoInput').value;
+  const resultEl = document.getElementById('payRateMemoResult');
+  try {
+    await withStepUp(() => api('/api/owner-notes/pay_rate_requests', { method: 'POST', body: { body } }));
+    resultEl.innerHTML = '<span class="msg success">Saved.</span>';
+    setTimeout(() => { resultEl.innerHTML = ''; }, 2000);
+  } catch (e) {
+    resultEl.innerHTML = `<span class="msg error">${escapeHtml(e.message)}</span>`;
   }
 }
 
