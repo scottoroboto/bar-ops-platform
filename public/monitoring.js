@@ -1,6 +1,8 @@
 let ME = null;
 let IS_MANAGER = false;
 let LOCATIONS = [];
+let STATUS_SYSTEMS = []; // last-loaded systems from loadStatus(), keyed off by toggleHistory() for the equipment-details line
+let ROUTING_PEOPLE = []; // last-loaded /api/employees, for the Alert Routing "who" picker
 
 const CATEGORY_LABEL = {
   network: 'Network', hvac: 'HVAC', refrigeration: 'Refrigeration', freezer: 'Freezer',
@@ -67,17 +69,20 @@ function setTab(which) {
   document.getElementById('panelStatus').style.display = which === 'status' ? '' : 'none';
   document.getElementById('panelAlerts').style.display = which === 'alerts' ? '' : 'none';
   document.getElementById('panelAdd').style.display = which === 'add' ? '' : 'none';
+  document.getElementById('panelRouting').style.display = which === 'routing' ? '' : 'none';
   document.getElementById('panelNotify').style.display = which === 'notify' ? '' : 'none';
   Array.from(document.querySelectorAll('#tabs button')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
   if (which === 'status') loadStatus();
   if (which === 'alerts') loadAlerts();
   if (which === 'add') renderAdd();
+  if (which === 'routing') renderRouting();
   if (which === 'notify') renderNotify();
 }
 
 function renderTabs() {
   const tabs = [{ key: 'status', label: 'Status' }, { key: 'alerts', label: 'Alerts' }];
   if (IS_MANAGER) tabs.push({ key: 'add', label: 'Add / Manage' });
+  if (IS_MANAGER) tabs.push({ key: 'routing', label: 'Alert Routing' });
   tabs.push({ key: 'notify', label: 'Notify Me' });
   document.getElementById('tabs').innerHTML = tabs.map(t =>
     `<button data-tab="${t.key}" onclick="setTab('${t.key}')">${t.label}</button>`).join('');
@@ -104,6 +109,7 @@ async function loadStatus() {
     const counts = { online: 0, warning: 0, offline: 0, unknown: 0 };
     for (const s of systems) counts[STATUS_META[s.last_status] ? s.last_status : 'unknown']++;
 
+    STATUS_SYSTEMS = systems;
     const byLocation = {};
     for (const s of systems) (byLocation[s.location_name] = byLocation[s.location_name] || []).push(s);
 
@@ -177,21 +183,36 @@ function roadmapCardHtml() {
   </div>`;
 }
 
+function equipmentDetailsHtml(s) {
+  if (!s) return '';
+  const rows = [
+    ['Location', s.location_name],
+    ['Make', s.make],
+    ['Model', s.model],
+    ['Serial', s.serial_number],
+  ].filter(([, v]) => v);
+  if (!rows.length) return '';
+  return `<div class="sys-equip">${rows.map(([label, v]) => `<span><b>${label}:</b> ${escapeHtml(v)}</span>`).join(' · ')}</div>`;
+}
+
 async function toggleHistory(systemId) {
   const el = document.getElementById(`hist-${systemId}`);
   const isOpen = el.style.display !== 'none';
   el.style.display = isOpen ? 'none' : '';
   if (isOpen || el.dataset.loaded) return;
   el.innerHTML = '<p class="muted">Loading history…</p>';
+  const equip = equipmentDetailsHtml(STATUS_SYSTEMS.find(s => s.id === systemId));
   try {
     const rows = await api(`/api/monitoring/systems/${systemId}/history?hours=24`);
     el.dataset.loaded = '1';
-    if (!rows.length) { el.innerHTML = '<p class="muted">No status checks in the last 24h yet.</p>'; return; }
-    el.innerHTML = `<table><thead><tr><th>Checked</th><th>Status</th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td>${fmtDateTime(r.checked_at)}</td><td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td></tr>`).join('')}
-    </tbody></table>`;
+    const table = rows.length
+      ? `<table><thead><tr><th>Checked</th><th>Status</th></tr></thead><tbody>
+          ${rows.map(r => `<tr><td>${fmtDateTime(r.checked_at)}</td><td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td></tr>`).join('')}
+        </tbody></table>`
+      : '<p class="muted">No status checks in the last 24h yet.</p>';
+    el.innerHTML = equip + table;
   } catch (e) {
-    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+    el.innerHTML = equip + `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
 }
 
@@ -248,6 +269,12 @@ function renderAdd() {
       <input id="asName" placeholder="e.g. Zone 2 Switch">
       <label for="asExternalRef">External ID <span class="muted">(optional — the UniFi device ID, for network kinds)</span></label>
       <input id="asExternalRef" placeholder="Leave blank until you have it">
+      <label for="asMake">Make <span class="muted">(optional)</span></label>
+      <input id="asMake" placeholder="e.g. Ubiquiti">
+      <label for="asModel">Model <span class="muted">(optional)</span></label>
+      <input id="asModel" placeholder="e.g. USW-Pro-48-PoE">
+      <label for="asSerial">Serial <span class="muted">(optional)</span></label>
+      <input id="asSerial" placeholder="Nameplate serial number">
       <button class="primary" onclick="submitAddSystem()">Add system</button>
     </div>
     <div class="card">
@@ -262,15 +289,75 @@ async function loadManageList() {
   const el = document.getElementById('manageList');
   try {
     const systems = await api('/api/monitoring/systems');
-    el.innerHTML = systems.length ? systems.map(s => `<div class="list-row">
-        <div>
-          <div class="name">${escapeHtml(s.name)}</div>
-          <div class="sub">${escapeHtml(s.location_name)} · ${CATEGORY_LABEL[s.category] || s.category} · ${escapeHtml(s.kind)}${s.external_ref ? ' · ' + escapeHtml(s.external_ref) : ' · no external ID yet'}</div>
+    el.innerHTML = systems.length ? systems.map(s => `<div class="list-row" style="flex-direction:column; align-items:stretch;">
+        <div style="display:flex; justify-content:space-between;">
+          <div>
+            <div class="name">${escapeHtml(s.name)}</div>
+            <div class="sub">${escapeHtml(s.location_name)} · ${CATEGORY_LABEL[s.category] || s.category} · ${escapeHtml(s.kind)}${s.external_ref ? ' · ' + escapeHtml(s.external_ref) : ' · no external ID yet'}</div>
+            ${equipmentDetailsHtml(s)}
+          </div>
+          <div style="display:flex; gap:8px; align-items:start;">
+            <button class="small ghost" onclick="editSystemRow('${s.id}')">Edit</button>
+            <button class="small ghost" onclick="archiveSystem('${s.id}')">Remove</button>
+          </div>
         </div>
-        <button class="small ghost" onclick="archiveSystem('${s.id}')">Remove</button>
+        <div id="edit-${s.id}" style="display:none;"></div>
       </div>`).join('') : '<p class="muted">Nothing registered yet — add one above.</p>';
+    el.dataset.systemsJson = JSON.stringify(systems);
   } catch (e) {
     el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function editSystemRow(id) {
+  const el = document.getElementById(`edit-${id}`);
+  const isOpen = el.style.display !== 'none';
+  el.style.display = isOpen ? 'none' : '';
+  if (isOpen) return;
+  const systems = JSON.parse(document.getElementById('manageList').dataset.systemsJson || '[]');
+  const s = systems.find(x => x.id === id);
+  if (!s) return;
+  el.innerHTML = `<div style="margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.12);">
+    <label>Location</label>
+    <select id="es-location-${id}"></select>
+    <label>Category</label>
+    <select id="es-category-${id}">${Object.keys(CATEGORY_LABEL).map(k => `<option value="${k}" ${k === s.category ? 'selected' : ''}>${CATEGORY_LABEL[k]}</option>`).join('')}</select>
+    <label>Kind</label>
+    <input id="es-kind-${id}" value="${escapeHtml(s.kind)}">
+    <label>Name</label>
+    <input id="es-name-${id}" value="${escapeHtml(s.name)}">
+    <label>Make</label>
+    <input id="es-make-${id}" value="${escapeHtml(s.make || '')}">
+    <label>Model</label>
+    <input id="es-model-${id}" value="${escapeHtml(s.model || '')}">
+    <label>Serial</label>
+    <input id="es-serial-${id}" value="${escapeHtml(s.serial_number || '')}">
+    <div class="stack-actions">
+      <button class="ghost" onclick="editSystemRow('${id}')">Cancel</button>
+      <button class="primary" style="margin-top:0;" onclick="submitEditSystem('${id}')">Save</button>
+    </div>
+  </div>`;
+  fillLocationSelect(document.getElementById(`es-location-${id}`), s.location_id);
+}
+
+async function submitEditSystem(id) {
+  const locationId = document.getElementById(`es-location-${id}`).value;
+  const category = document.getElementById(`es-category-${id}`).value;
+  const kind = document.getElementById(`es-kind-${id}`).value.trim();
+  const name = document.getElementById(`es-name-${id}`).value.trim();
+  const make = document.getElementById(`es-make-${id}`).value.trim();
+  const model = document.getElementById(`es-model-${id}`).value.trim();
+  const serialNumber = document.getElementById(`es-serial-${id}`).value.trim();
+  if (!kind || !name) { showMsg('Kind and name are both required.', 'error'); return; }
+  try {
+    const result = await withStepUp(() => api(`/api/monitoring/systems/${id}/update`, {
+      method: 'POST', body: { locationId, category, kind, name, make: make || null, model: model || null, serialNumber: serialNumber || null },
+    }));
+    if (!result.ok) { showMsg(result.error, 'error'); return; }
+    showMsg('Saved.', 'success');
+    loadManageList();
+  } catch (e) {
+    showMsg(e.message, 'error');
   }
 }
 
@@ -280,16 +367,22 @@ async function submitAddSystem() {
   const kind = document.getElementById('asKind').value.trim();
   const name = document.getElementById('asName').value.trim();
   const externalRef = document.getElementById('asExternalRef').value.trim();
+  const make = document.getElementById('asMake').value.trim();
+  const model = document.getElementById('asModel').value.trim();
+  const serialNumber = document.getElementById('asSerial').value.trim();
   if (!kind || !name) { showMsg('Kind and name are both required.', 'error'); return; }
   try {
     const result = await withStepUp(() => api('/api/monitoring/systems', {
-      method: 'POST', body: { locationId, category, kind, name, externalRef: externalRef || null, config: {} },
+      method: 'POST', body: { locationId, category, kind, name, externalRef: externalRef || null, config: {}, make: make || null, model: model || null, serialNumber: serialNumber || null },
     }));
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     showMsg('Added.', 'success');
     document.getElementById('asKind').value = '';
     document.getElementById('asName').value = '';
     document.getElementById('asExternalRef').value = '';
+    document.getElementById('asMake').value = '';
+    document.getElementById('asModel').value = '';
+    document.getElementById('asSerial').value = '';
     loadManageList();
   } catch (e) {
     showMsg(e.message, 'error');
@@ -302,6 +395,92 @@ async function archiveSystem(id) {
     const result = await withStepUp(() => api(`/api/monitoring/systems/${id}/archive`, { method: 'POST' }));
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     loadManageList();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
+// ---------------- Alert Routing (manager/owner) ----------------
+// "Notify this person about this category at this location" — independent
+// of that person's own Monitoring dashboard access (server/monitoring.js's
+// recipientsFor() unions this with the self-service opt-in + owner set).
+// A manager only ever sees/creates routes for their own location; the
+// server enforces that too (see /api/monitoring/alert-routes in
+// server/index.js) — the location picker here is hidden for a manager
+// rather than just disabled, so there's nothing misleading to click.
+async function renderRouting() {
+  const el = document.getElementById('panelRouting');
+  el.innerHTML = `
+    <div class="card">
+      <h2>Route alerts to someone</h2>
+      <p class="muted">Assign a person to be notified about a category of alerts — even if they don't have Monitoring dashboard access themselves. Leave category blank for "every category".</p>
+      <label for="arPerson">Who</label>
+      <select id="arPerson"></select>
+      ${ME.role === 'owner' ? `<label for="arLocation">Location</label><select id="arLocation"><option value="">All locations</option></select>` : ''}
+      <label for="arCategory">Category</label>
+      <select id="arCategory"><option value="">All categories</option>${Object.keys(CATEGORY_LABEL).map(k => `<option value="${k}">${CATEGORY_LABEL[k]}</option>`).join('')}</select>
+      <button class="primary" onclick="submitAddRoute()">Add routing</button>
+    </div>
+    <div class="card">
+      <h2>Current routing</h2>
+      <div id="routingList"><p class="muted">Loading…</p></div>
+    </div>`;
+  try {
+    ROUTING_PEOPLE = (await api('/api/employees')).filter(p => p.status === 'active');
+    const sel = document.getElementById('arPerson');
+    sel.innerHTML = ROUTING_PEOPLE.map(p => `<option value="${p.id}">${escapeHtml(p.name)}${p.position ? ' — ' + escapeHtml(p.position) : ''}</option>`).join('');
+    if (ME.role === 'owner') {
+      // Deliberately not fillLocationSelect() — that replaces the whole
+      // <select> contents, which would wipe out the "All locations" option
+      // already in the markup above.
+      const locSel = document.getElementById('arLocation');
+      locSel.innerHTML += LOCATIONS.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+    }
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+  loadRoutingList();
+}
+
+async function loadRoutingList() {
+  const el = document.getElementById('routingList');
+  try {
+    const routes = await api('/api/monitoring/alert-routes');
+    el.innerHTML = routes.length ? routes.map(r => `<div class="list-row">
+        <div>
+          <div class="name">${escapeHtml(r.person_name)}</div>
+          <div class="sub">${r.location_name ? escapeHtml(r.location_name) : 'All locations'} · ${r.category ? (CATEGORY_LABEL[r.category] || r.category) : 'All categories'}</div>
+        </div>
+        <button class="small ghost" onclick="removeRoute('${r.id}')">Remove</button>
+      </div>`).join('') : '<p class="muted">No routing set up — everyone with Monitoring access gets every alert for their location, plus you.</p>';
+  } catch (e) {
+    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function submitAddRoute() {
+  const personId = document.getElementById('arPerson').value;
+  if (!personId) { showMsg('Choose who to notify.', 'error'); return; }
+  const locationEl = document.getElementById('arLocation');
+  const locationId = locationEl ? locationEl.value : undefined; // omitted entirely for a manager — server forces their own location
+  const category = document.getElementById('arCategory').value;
+  try {
+    const result = await withStepUp(() => api('/api/monitoring/alert-routes', {
+      method: 'POST', body: { personId, locationId: locationId || null, category: category || null },
+    }));
+    if (!result.ok) { showMsg(result.error, 'error'); return; }
+    showMsg('Added.', 'success');
+    loadRoutingList();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
+async function removeRoute(id) {
+  try {
+    const result = await withStepUp(() => api(`/api/monitoring/alert-routes/${id}/remove`, { method: 'POST' }));
+    if (!result.ok) { showMsg(result.error, 'error'); return; }
+    loadRoutingList();
   } catch (e) {
     showMsg(e.message, 'error');
   }
