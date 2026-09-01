@@ -121,6 +121,7 @@ function renderAllEmployees() {
         ${appToggleHtml(p, 'time_clock', 'Time Clock')}
         ${appToggleHtml(p, 'service_calls', 'Service Calls')}
         ${appToggleHtml(p, 'scheduling', 'Scheduling')}
+        ${appToggleHtml(p, 'monitoring', 'Systems Monitoring')}
       </div>` : ''}
     </div>
   `).join('');
@@ -182,6 +183,7 @@ function openActivateModal(id, name) {
   document.getElementById('accessTimeClock').checked = true;
   document.getElementById('accessServiceCalls').checked = false;
   document.getElementById('accessScheduling').checked = false;
+  document.getElementById('accessMonitoring').checked = false;
   document.getElementById('activateResult').innerHTML = '';
   document.getElementById('activateModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
@@ -196,6 +198,7 @@ async function submitActivate() {
     time_clock: document.getElementById('accessTimeClock').checked,
     service_calls: document.getElementById('accessServiceCalls').checked,
     scheduling: document.getElementById('accessScheduling').checked,
+    monitoring: document.getElementById('accessMonitoring').checked,
   };
   try {
     const result = await withStepUp(() => api(`/api/employees/${id}/activate`, { method: 'POST', body: { appAccess } }));
