@@ -243,3 +243,26 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 @media (max-width: 420px) {
   .sys-grid { grid-template-columns: 1fr; }
 }
+
+/* ---- Service Calls — pending/closed divider, notes, destination pickers ---- */
+.sc-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 20px 0 12px; color: var(--muted); font-size: 12px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.sc-divider:first-child { margin-top: 0; }
+.sc-divider span { flex: 1; height: 1px; background: var(--card-border); }
+
+.sc-closed { opacity: 0.55; }
+
+.sc-note { padding: 10px 0; border-bottom: 1px solid var(--card-border); font-size: 14px; }
+.sc-note:last-child { border-bottom: none; }
+.sc-note-meta { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+
+.sc-checkbox-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 12px; margin-top: 4px; }
+.sc-checkbox { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); margin: 0; }
+.sc-checkbox input { width: auto; padding: 0; }
+
+@media (max-width: 480px) {
+  .sc-checkbox-grid { grid-template-columns: 1fr; }
+}
