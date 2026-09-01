@@ -257,6 +257,14 @@ async function requestPayRaise({ personId, requestedRate, requestedBy }) {
 
 // locationFilter scopes a manager to requests for people at their own
 // location; left undefined for the owner, who sees every request.
+//
+// last_raise_at is the decided_at of the most recent OTHER approved
+// request for this person (any status, any time — a still-pending request
+// can't have an earlier decided_at than a real approval, so there's no
+// need to also compare against requested_at). hire_date falls back to
+// created_at for the rare person with no activated_at on record. The
+// owner's decide view uses both to answer "when did this person last get
+// a raise, or if never, when were they hired" without a click-through.
 async function listPayRateRequests({ status = 'pending', locationFilter } = {}) {
   return withServiceClient(async (client) => {
     const params = [status];
@@ -267,7 +275,10 @@ async function listPayRateRequests({ status = 'pending', locationFilter } = {}) 
     }
     const { rows } = await client.query(
       `SELECT r.id, r.person_id, r.current_rate, r.requested_rate, r.requested_by, r.requested_at, r.status, r.decided_at, r.note,
-              p.name AS person_name, p.location_id, req.name AS requested_by_name
+              p.name AS person_name, p.location_id, COALESCE(p.activated_at, p.created_at) AS hire_date,
+              req.name AS requested_by_name,
+              (SELECT MAX(pr2.decided_at) FROM pay_rate_requests pr2
+               WHERE pr2.person_id = r.person_id AND pr2.status = 'approved' AND pr2.id != r.id) AS last_raise_at
        FROM pay_rate_requests r
        JOIN people p ON p.id = r.person_id
        LEFT JOIN people req ON req.id = r.requested_by
@@ -276,6 +287,28 @@ async function listPayRateRequests({ status = 'pending', locationFilter } = {}) 
       params
     );
     return rows;
+  });
+}
+
+// A small owner-editable memo box — currently used to remind managers not
+// to discuss a raise with an employee before it's decided, shown to them
+// right where they file the request. Generic key/body so it can be reused
+// for other standing notes later without another migration.
+async function getOwnerNote(noteKey) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query('SELECT body, updated_at FROM owner_notes WHERE note_key = $1', [noteKey]);
+    return rows[0] || { body: '', updated_at: null };
+  });
+}
+
+async function setOwnerNote(noteKey, body, updatedBy) {
+  return withServiceClient(async (client) => {
+    await client.query(
+      `INSERT INTO owner_notes (note_key, body, updated_by, updated_at) VALUES ($1,$2,$3,now())
+       ON CONFLICT (note_key) DO UPDATE SET body = $2, updated_by = $3, updated_at = now()`,
+      [noteKey, body || '', updatedBy]
+    );
+    return { ok: true };
   });
 }
 
@@ -310,5 +343,5 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 module.exports = {
   createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, setAppAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee,
-  requestPayRaise, listPayRateRequests, decidePayRateRequest, APP_KEYS,
+  requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote, APP_KEYS,
 };
