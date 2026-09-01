@@ -5,6 +5,59 @@ const PAY_PERIOD_START = new Date(process.env.PAY_PERIOD_START || '2026-08-01T00
 const PAY_PERIOD_DAYS = 14;
 const STALE_SHIFT_HOURS = 12;
 
+// The bar's own timezone. Manual punch edits (editPunch, below) arrive from
+// the client as plain "YYYY-MM-DD HH:mm" wall-clock strings with no
+// timezone attached (see public/timeclock.js's editPunch prompt, which
+// reads/writes this same timezone via APP_TIMEZONE in common.js — keep the
+// two in sync). The DB session timezone here is UTC, so previously handing
+// a naive string straight to Postgres made it get interpreted as UTC
+// instead of Central, silently shifting every manually-edited punch by the
+// zone's offset (the "clocked in at 9am, edited to 7:00am, shows 2:00am"
+// bug). clockAction's own writes use SQL now(), which is always an
+// unambiguous absolute instant and was never affected by this.
+const BUSINESS_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
+
+// Offset (in minutes, UTC minus zone) that `timeZone` is at approximately
+// `date`. Found by asking Intl how `date` reads as wall-clock time in that
+// zone, then comparing against the same numbers read as UTC — a standard
+// dependency-free technique for one-off zone conversions.
+function tzOffsetMinutes(timeZone, date) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const parts = {};
+  for (const p of dtf.formatToParts(date)) { if (p.type !== 'literal') parts[p.type] = p.value; }
+  const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  return Math.round((asUtc - date.getTime()) / 60000);
+}
+
+// Converts a naive "YYYY-MM-DD HH:mm[:ss]" wall-clock string that is meant
+// to represent a moment in `timeZone` into the correct absolute UTC Date.
+function zonedTimeToUtc(naiveStr, timeZone) {
+  const m = String(naiveStr).trim().match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  const guessUtcMs = Date.UTC(+y, +mo - 1, +d, +h, +mi, +(s || 0));
+  const offsetMin = tzOffsetMinutes(timeZone, new Date(guessUtcMs));
+  return new Date(guessUtcMs - offsetMin * 60000);
+}
+
+// Accepts either an absolute timestamp (already carries a "Z" or +hh:mm
+// offset) or a naive bar-time wall-clock string, and always returns a
+// correct UTC Date (or null for empty input, or invalid input we can't
+// parse at all).
+function toUtcInstant(value) {
+  if (!value) return null;
+  const str = String(value).trim();
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(str)) {
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return zonedTimeToUtc(str, BUSINESS_TZ);
+}
+
 function periodWindowFor(date) {
   const msPerPeriod = PAY_PERIOD_DAYS * 86400000;
   const elapsed = date.getTime() - PAY_PERIOD_START.getTime();
@@ -144,9 +197,15 @@ async function editPunch(client, { id, clockIn, clockOut, memo, reason, editedBy
   const { rows: oldRows } = await client.query('SELECT * FROM time_entries WHERE id = $1', [id]);
   const old = oldRows[0];
   if (!old) return { ok: false, error: 'Punch not found.' };
+
+  const newClockIn = toUtcInstant(clockIn);
+  if (!newClockIn) return { ok: false, error: 'Could not understand that clock-in time — use "YYYY-MM-DD HH:mm".' };
+  if (clockOut && !toUtcInstant(clockOut)) return { ok: false, error: 'Could not understand that clock-out time — use "YYYY-MM-DD HH:mm".' };
+  const newClockOut = toUtcInstant(clockOut);
+
   const { rows } = await client.query(
     `UPDATE time_entries SET clock_in = $1, clock_out = $2, memo = $3 WHERE id = $4 RETURNING *`,
-    [clockIn, clockOut || null, memo || null, id]
+    [newClockIn, newClockOut, memo || null, id]
   );
   await client.query(
     `INSERT INTO punch_edits (time_entry_id, edited_by, old_values, new_values, reason) VALUES ($1,$2,$3,$4,$5)`,
