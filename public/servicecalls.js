@@ -347,14 +347,35 @@ async function loadManageEquipment() {
   const el = document.getElementById('equipList');
   try {
     const rows = await api('/api/servicecalls/equipment-types/admin');
-    el.innerHTML = rows.length ? rows.map(e => `<div class="list-row">
+    // Move arrows only make sense within the active group — archived ones
+    // are excluded from the move-target list server-side, so track first/
+    // last position among active rows only.
+    const active = rows.filter(e => e.active);
+    el.innerHTML = rows.length ? rows.map(e => {
+      const activeIdx = active.indexOf(e);
+      return `<div class="list-row">
       <div><div class="name">${escapeHtml(e.name)}</div>${!e.active ? '<div class="sub">Archived</div>' : ''}</div>
-      ${e.active
-        ? `<button class="small ghost" onclick="archiveEquipment('${e.id}')">Archive</button>`
-        : `<button class="small secondary" onclick="restoreEquipment('${e.id}')">Restore</button>`}
-    </div>`).join('') : '<p class="muted">No equipment types yet.</p>';
+      <div style="display:flex; gap:8px; align-items:center;">
+        ${e.active ? `
+        <button class="small ghost" ${activeIdx === 0 ? 'disabled' : ''} onclick="moveEquipment('${e.id}','up')" title="Move up">▲</button>
+        <button class="small ghost" ${activeIdx === active.length - 1 ? 'disabled' : ''} onclick="moveEquipment('${e.id}','down')" title="Move down">▼</button>
+        <button class="small ghost" onclick="archiveEquipment('${e.id}')">Archive</button>` : `
+        <button class="small secondary" onclick="restoreEquipment('${e.id}')">Restore</button>`}
+      </div>
+    </div>`;
+    }).join('') : '<p class="muted">No equipment types yet.</p>';
   } catch (e) {
     el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function moveEquipment(id, direction) {
+  try {
+    const result = await api(`/api/servicecalls/equipment-types/${id}/move`, { method: 'POST', body: { direction } });
+    if (!result.ok) { showMsg(result.error, 'error'); return; }
+    loadManageEquipment();
+  } catch (e) {
+    showMsg(e.message, 'error');
   }
 }
 
