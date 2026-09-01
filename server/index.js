@@ -414,6 +414,117 @@ const { rows } = await pool.query('SELECT * FROM equipment_types WHERE active = 
 res.json(rows);
 });
 
+// Admin view — includes archived equipment types too, so a manager/owner
+// can restore one. Mirrors /api/positions/admin.
+app.get('/api/servicecalls/equipment-types/admin', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const { rows } = await pool.query('SELECT * FROM equipment_types ORDER BY active DESC, name');
+res.json(rows);
+});
+
+// Equipment types are manager+owner to add/archive/restore, same as
+// Positions — authorization enforced here, not RLS (equipment_types has
+// none, same open-reference-data posture as locations/positions).
+app.post('/api/servicecalls/equipment-types', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const name = (req.body.name || '').trim();
+if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+try {
+const equipment = await withServiceClient(async (client) => {
+const { rows } = await client.query('INSERT INTO equipment_types (name) VALUES ($1) RETURNING *', [name]);
+return rows[0];
+});
+res.json({ ok: true, equipment });
+} catch (e) {
+if (e.code === '23505') return res.status(400).json({ ok: false, error: 'An equipment type with that name already exists.' });
+throw e;
+}
+});
+
+// Archive/restore rather than delete — an equipment type can be
+// referenced by years of service-call history; archived types just drop
+// out of the active dropdown everywhere else (see patch_012).
+app.post('/api/servicecalls/equipment-types/:id/archive', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const equipment = await withServiceClient(async (client) => {
+const { rows } = await client.query('UPDATE equipment_types SET active = false WHERE id = $1 RETURNING *', [req.params.id]);
+return rows[0];
+});
+if (!equipment) return res.status(404).json({ ok: false, error: 'Not found.' });
+res.json({ ok: true, equipment });
+});
+
+app.post('/api/servicecalls/equipment-types/:id/restore', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const equipment = await withServiceClient(async (client) => {
+const { rows } = await client.query('UPDATE equipment_types SET active = true WHERE id = $1 RETURNING *', [req.params.id]);
+return rows[0];
+});
+if (!equipment) return res.status(404).json({ ok: false, error: 'Not found.' });
+res.json({ ok: true, equipment });
+});
+
+// Send-to destinations — replaces the old fixed maintenance/manager/both
+// enum with a manager/owner-curated list, each backed by specific people
+// rather than a platform-wide role (see patch_012 for the full reasoning
+// — same person-based-routing idea as Systems Monitoring's alert routes).
+// Public active-only list: anyone reporting a call picks from this.
+app.get('/api/servicecalls/destinations', auth.requireSession('light'), async (req, res) => {
+const { rows } = await pool.query('SELECT * FROM service_call_destinations WHERE active = true ORDER BY name');
+res.json(rows);
+});
+
+// Admin view — every destination (active or archived) with its full
+// member roster, for the Manage tab.
+app.get('/api/servicecalls/destinations/admin', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+res.json(await servicecalls.listDestinationsWithMembers());
+});
+
+app.post('/api/servicecalls/destinations', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const name = (req.body.name || '').trim();
+if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+try {
+const destination = await withServiceClient(async (client) => {
+const { rows } = await client.query('INSERT INTO service_call_destinations (name) VALUES ($1) RETURNING *', [name]);
+return rows[0];
+});
+res.json({ ok: true, destination });
+} catch (e) {
+if (e.code === '23505') return res.status(400).json({ ok: false, error: 'A destination with that name already exists.' });
+throw e;
+}
+});
+
+app.post('/api/servicecalls/destinations/:id/archive', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const destination = await withServiceClient(async (client) => {
+const { rows } = await client.query('UPDATE service_call_destinations SET active = false WHERE id = $1 RETURNING *', [req.params.id]);
+return rows[0];
+});
+if (!destination) return res.status(404).json({ ok: false, error: 'Not found.' });
+res.json({ ok: true, destination });
+});
+
+app.post('/api/servicecalls/destinations/:id/restore', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const destination = await withServiceClient(async (client) => {
+const { rows } = await client.query('UPDATE service_call_destinations SET active = true WHERE id = $1 RETURNING *', [req.params.id]);
+return rows[0];
+});
+if (!destination) return res.status(404).json({ ok: false, error: 'Not found.' });
+res.json({ ok: true, destination });
+});
+
+// Replaces a destination's whole member set at once (simpler than
+// incremental add/remove — matches the checkbox-grid + Save UI).
+app.post('/api/servicecalls/destinations/:id/members', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const result = await servicecalls.setDestinationMembers({ destinationId: req.params.id, personIds: req.body.personIds });
+res.json(result);
+});
+
 app.get('/api/servicecalls', auth.requireSession('light'), async (req, res) => {
 const isManagerOrOwner = req.person.role === 'manager' || req.person.role === 'owner';
 const result = await req.withAuthedClient(async (client) => {
@@ -442,6 +553,24 @@ res.setHeader('Content-Disposition', 'attachment; filename="service_calls.csv"')
 res.send(servicecalls.toCsv(rows));
 });
 
+// Single-call detail, including its notes — backs the "click any call,
+// open/pending/closed" detail modal. Registered after every fixed-segment
+// GET route above so :id doesn't shadow equipment-types/destinations/
+// report.csv. Same access gate as the list route.
+app.get('/api/servicecalls/:id', auth.requireSession('light'), async (req, res) => {
+const isManagerOrOwner = req.person.role === 'manager' || req.person.role === 'owner';
+const result = await req.withAuthedClient(async (client) => {
+if (!isManagerOrOwner) {
+const hasAccess = await servicecalls.requireServiceCallsAccess(client, req.person.id);
+if (!hasAccess) return { error: 'Service Calls isn’t turned on for your account yet — ask your manager.' };
+}
+return servicecalls.getCall(client, req.params.id);
+});
+if (result && result.error) return res.status(403).json(result);
+if (!result) return res.status(404).json({ error: 'Not found.' });
+res.json(result);
+});
+
 app.post('/api/servicecalls', auth.requireSession('light'), async (req, res) => {
 const result = await req.withAuthedClient((client) => servicecalls.createCall(client, req.person, req.body));
 res.json(result);
@@ -455,6 +584,21 @@ const hasAccess = await servicecalls.requireServiceCallsAccess(client, req.perso
 if (!hasAccess) return { ok: false, error: 'Service Calls isn’t turned on for your account yet — ask your manager.' };
 }
 return servicecalls.closeCall(client, { id: req.params.id, closedBy: req.person.id, remedy: req.body.remedy });
+});
+res.json(result);
+});
+
+// Add a note to any call — open or closed ("all logged": every note is
+// timestamped and attributed, never edited or removed). Same access gate
+// as close.
+app.post('/api/servicecalls/:id/notes', auth.requireSession('light'), async (req, res) => {
+const isManagerOrOwner = req.person.role === 'manager' || req.person.role === 'owner';
+const result = await req.withAuthedClient(async (client) => {
+if (!isManagerOrOwner) {
+const hasAccess = await servicecalls.requireServiceCallsAccess(client, req.person.id);
+if (!hasAccess) return { ok: false, error: 'Service Calls isn’t turned on for your account yet — ask your manager.' };
+}
+return servicecalls.addNote(client, { callId: req.params.id, personId: req.person.id, note: req.body.note });
 });
 res.json(result);
 });
