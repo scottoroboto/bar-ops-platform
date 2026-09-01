@@ -69,21 +69,21 @@ function setTab(which) {
   document.getElementById('panelStatus').style.display = which === 'status' ? '' : 'none';
   document.getElementById('panelAlerts').style.display = which === 'alerts' ? '' : 'none';
   document.getElementById('panelAdd').style.display = which === 'add' ? '' : 'none';
-  document.getElementById('panelRouting').style.display = which === 'routing' ? '' : 'none';
-  document.getElementById('panelNotify').style.display = which === 'notify' ? '' : 'none';
+  document.getElementById('panelNotifications').style.display = which === 'notifications' ? '' : 'none';
   Array.from(document.querySelectorAll('#tabs button')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
   if (which === 'status') loadStatus();
   if (which === 'alerts') loadAlerts();
   if (which === 'add') renderAdd();
-  if (which === 'routing') renderRouting();
-  if (which === 'notify') renderNotify();
+  if (which === 'notifications') renderNotifications();
 }
 
 function renderTabs() {
   const tabs = [{ key: 'status', label: 'Status' }, { key: 'alerts', label: 'Alerts' }];
   if (IS_MANAGER) tabs.push({ key: 'add', label: 'Add / Manage' });
-  if (IS_MANAGER) tabs.push({ key: 'routing', label: 'Alert Routing' });
-  tabs.push({ key: 'notify', label: 'Notify Me' });
+  // Alert Routing and the old self-service "Notify Me" tab are one tab now
+  // — Scotto was using Alert Routing for himself and didn't want a second,
+  // separate button just for his own channel preference.
+  tabs.push({ key: 'notifications', label: 'Alert Notifications' });
   document.getElementById('tabs').innerHTML = tabs.map(t =>
     `<button data-tab="${t.key}" onclick="setTab('${t.key}')">${t.label}</button>`).join('');
   setTab('status');
@@ -289,23 +289,49 @@ async function loadManageList() {
   const el = document.getElementById('manageList');
   try {
     const systems = await api('/api/monitoring/systems');
-    el.innerHTML = systems.length ? systems.map(s => `<div class="list-row" style="flex-direction:column; align-items:stretch;">
-        <div style="display:flex; justify-content:space-between;">
-          <div>
-            <div class="name">${escapeHtml(s.name)}</div>
-            <div class="sub">${escapeHtml(s.location_name)} · ${CATEGORY_LABEL[s.category] || s.category} · ${escapeHtml(s.kind)}${s.external_ref ? ' · ' + escapeHtml(s.external_ref) : ' · no external ID yet'}</div>
-            ${equipmentDetailsHtml(s)}
-          </div>
-          <div style="display:flex; gap:8px; align-items:start;">
-            <button class="small ghost" onclick="editSystemRow('${s.id}')">Edit</button>
-            <button class="small ghost" onclick="archiveSystem('${s.id}')">Remove</button>
-          </div>
-        </div>
-        <div id="edit-${s.id}" style="display:none;"></div>
-      </div>`).join('') : '<p class="muted">Nothing registered yet — add one above.</p>';
     el.dataset.systemsJson = JSON.stringify(systems);
+    if (!systems.length) { el.innerHTML = '<p class="muted">Nothing registered yet — add one above.</p>'; return; }
+    // Grouped by location (server already returns them in that order) so
+    // the up/down arrows move a system within its own location's list,
+    // matching how they're grouped on the Status tab.
+    const byLocation = {};
+    for (const s of systems) (byLocation[s.location_name] = byLocation[s.location_name] || []).push(s);
+    el.innerHTML = Object.keys(byLocation).map((loc) => {
+      const rows = byLocation[loc];
+      return `<div class="sc-divider"><span>${escapeHtml(loc)}</span></div>` +
+        rows.map((s, i) => manageSystemRowHtml(s, i === 0, i === rows.length - 1)).join('');
+    }).join('');
   } catch (e) {
     el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function manageSystemRowHtml(s, isFirst, isLast) {
+  return `<div class="list-row" style="flex-direction:column; align-items:stretch;">
+      <div style="display:flex; justify-content:space-between;">
+        <div>
+          <div class="name">${escapeHtml(s.name)}</div>
+          <div class="sub">${CATEGORY_LABEL[s.category] || s.category} · ${escapeHtml(s.kind)}${s.external_ref ? ' · ' + escapeHtml(s.external_ref) : ' · no external ID yet'}</div>
+          ${equipmentDetailsHtml(s)}
+        </div>
+        <div style="display:flex; gap:8px; align-items:start;">
+          <button class="small ghost" ${isFirst ? 'disabled' : ''} onclick="moveSystem('${s.id}','up')" title="Move up">▲</button>
+          <button class="small ghost" ${isLast ? 'disabled' : ''} onclick="moveSystem('${s.id}','down')" title="Move down">▼</button>
+          <button class="small ghost" onclick="editSystemRow('${s.id}')">Edit</button>
+          <button class="small ghost" onclick="archiveSystem('${s.id}')">Remove</button>
+        </div>
+      </div>
+      <div id="edit-${s.id}" style="display:none;"></div>
+    </div>`;
+}
+
+async function moveSystem(id, direction) {
+  try {
+    const result = await withStepUp(() => api(`/api/monitoring/systems/${id}/move`, { method: 'POST', body: { direction } }));
+    if (!result.ok) { showMsg(result.error, 'error'); return; }
+    loadManageList();
+  } catch (e) {
+    showMsg(e.message, 'error');
   }
 }
 
@@ -400,7 +426,7 @@ async function archiveSystem(id) {
   }
 }
 
-// ---------------- Alert Routing (manager/owner) ----------------
+// ---------------- Alert Notifications (routing admin + everyone's own channel) ----------------
 // "Notify this person about this category at this location" — independent
 // of that person's own Monitoring dashboard access (server/monitoring.js's
 // recipientsFor() unions this with the self-service opt-in + owner set).
@@ -408,9 +434,16 @@ async function archiveSystem(id) {
 // server enforces that too (see /api/monitoring/alert-routes in
 // server/index.js) — the location picker here is hidden for a manager
 // rather than just disabled, so there's nothing misleading to click.
-async function renderRouting() {
-  const el = document.getElementById('panelRouting');
+//
+// The routing admin section (manager/owner only) and everyone's own "how
+// should we reach you" channel preference (previously a separate "Notify
+// Me" tab) live in one "Alert Notifications" tab now — same idea, one
+// place to set it, whether you're routing alerts to other people or just
+// setting your own.
+async function renderNotifications() {
+  const el = document.getElementById('panelNotifications');
   el.innerHTML = `
+    ${IS_MANAGER ? `
     <div class="card">
       <h2>Route alerts to someone</h2>
       <p class="muted">Assign a person to be notified about a category of alerts — even if they don't have Monitoring dashboard access themselves. Leave category blank for "every category".</p>
@@ -424,22 +457,38 @@ async function renderRouting() {
     <div class="card">
       <h2>Current routing</h2>
       <div id="routingList"><p class="muted">Loading…</p></div>
+    </div>` : ''}
+    <div class="card">
+      <h2>How should we reach you?</h2>
+      <p class="muted">Your own alert notifications.</p>
+      <label for="notifyChannel">Channel</label>
+      <select id="notifyChannel">
+        <option value="email">Email</option>
+        <option value="sms">Text (SMS)</option>
+        <option value="both">Both</option>
+      </select>
+      <p class="muted" id="smsNote" style="display:none;">Heads up — SMS isn't fully wired up yet on our end, so text alerts won't actually arrive until that's turned on. Email will still work.</p>
+      <button class="primary" onclick="submitNotifyChannel()">Save</button>
     </div>`;
-  try {
-    ROUTING_PEOPLE = (await api('/api/employees')).filter(p => p.status === 'active');
-    const sel = document.getElementById('arPerson');
-    sel.innerHTML = ROUTING_PEOPLE.map(p => `<option value="${p.id}">${escapeHtml(p.name)}${p.position ? ' — ' + escapeHtml(p.position) : ''}</option>`).join('');
-    if (ME.role === 'owner') {
-      // Deliberately not fillLocationSelect() — that replaces the whole
-      // <select> contents, which would wipe out the "All locations" option
-      // already in the markup above.
-      const locSel = document.getElementById('arLocation');
-      locSel.innerHTML += LOCATIONS.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+  if (IS_MANAGER) {
+    try {
+      ROUTING_PEOPLE = (await api('/api/employees')).filter(p => p.status === 'active');
+      const sel = document.getElementById('arPerson');
+      sel.innerHTML = ROUTING_PEOPLE.map(p => `<option value="${p.id}">${escapeHtml(p.name)}${p.position ? ' — ' + escapeHtml(p.position) : ''}</option>`).join('');
+      if (ME.role === 'owner') {
+        // Deliberately not fillLocationSelect() — that replaces the whole
+        // <select> contents, which would wipe out the "All locations" option
+        // already in the markup above.
+        const locSel = document.getElementById('arLocation');
+        locSel.innerHTML += LOCATIONS.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+      }
+    } catch (e) {
+      showMsg(e.message, 'error');
     }
-  } catch (e) {
-    showMsg(e.message, 'error');
+    loadRoutingList();
   }
-  loadRoutingList();
+  document.getElementById('notifyChannel').addEventListener('change', updateSmsNote);
+  loadNotifySettings();
 }
 
 async function loadRoutingList() {
@@ -486,25 +535,7 @@ async function removeRoute(id) {
   }
 }
 
-// ---------------- Notify Me (self-service) ----------------
-function renderNotify() {
-  const el = document.getElementById('panelNotify');
-  el.innerHTML = `<div class="card">
-    <h2>How should we reach you?</h2>
-    <p class="muted">Applies to Systems Monitoring alerts only — Time Clock reminders are separate.</p>
-    <label for="notifyChannel">Channel</label>
-    <select id="notifyChannel">
-      <option value="email">Email</option>
-      <option value="sms">Text (SMS)</option>
-      <option value="both">Both</option>
-    </select>
-    <p class="muted" id="smsNote" style="display:none;">Heads up — SMS isn't fully wired up yet on our end, so text alerts won't actually arrive until that's turned on. Email will still work.</p>
-    <button class="primary" onclick="submitNotifyChannel()">Save</button>
-  </div>`;
-  document.getElementById('notifyChannel').addEventListener('change', updateSmsNote);
-  loadNotifySettings();
-}
-
+// ---------------- Notification channel helpers (used by renderNotifications) ----------------
 function updateSmsNote() {
   const v = document.getElementById('notifyChannel').value;
   document.getElementById('smsNote').style.display = (v === 'sms' || v === 'both') ? '' : 'none';
