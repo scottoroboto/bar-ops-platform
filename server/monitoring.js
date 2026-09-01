@@ -79,7 +79,7 @@ async function listSystems(client, { locationId } = {}) {
   return rows;
 }
 
-async function addSystem({ locationId, category, kind, name, externalRef, config, addedBy }) {
+async function addSystem({ locationId, category, kind, name, externalRef, config, make, model, serialNumber, addedBy }) {
   if (!locationId || !category || !kind || !name) {
     return { ok: false, error: 'Location, category, kind, and name are all required.' };
   }
@@ -94,10 +94,36 @@ async function addSystem({ locationId, category, kind, name, externalRef, config
       return { ok: false, error: 'Ticket 3 is out of scope for Systems Monitoring.' };
     }
     const { rows } = await svc.query(
-      `INSERT INTO monitored_systems (location_id, category, kind, name, external_ref, config, added_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [locationId, category, kind, name, externalRef || null, JSON.stringify(config || {}), addedBy]
+      `INSERT INTO monitored_systems (location_id, category, kind, name, external_ref, config, make, model, serial_number, added_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [locationId, category, kind, name, externalRef || null, JSON.stringify(config || {}), make || null, model || null, serialNumber || null, addedBy]
     );
+    return { ok: true, system: rows[0] };
+  });
+}
+
+// Equipment details can change after registration (a nameplate gets read,
+// a unit gets swapped, it moves location) — mirrors employees.js's
+// ownerUpdateEmployee shape: full replace of the editable fields, manager/
+// owner only (enforced in the route handler), any time, not just at
+// add-time. external_ref is deliberately excluded — that's the poll-
+// matching key (the UniFi device id), not something to hand-edit here.
+async function updateSystem({ id, locationId, category, kind, name, make, model, serialNumber }) {
+  if (!locationId || !category || !kind || !name) {
+    return { ok: false, error: 'Location, category, kind, and name are all required.' };
+  }
+  return withServiceClient(async (svc) => {
+    const { rows: locRows } = await svc.query('SELECT name FROM locations WHERE id = $1', [locationId]);
+    if (locRows[0] && locRows[0].name === 'Ticket 3') {
+      return { ok: false, error: 'Ticket 3 is out of scope for Systems Monitoring.' };
+    }
+    const { rows } = await svc.query(
+      `UPDATE monitored_systems
+       SET location_id = $1, category = $2, kind = $3, name = $4, make = $5, model = $6, serial_number = $7
+       WHERE id = $8 RETURNING *`,
+      [locationId, category, kind, name, make || null, model || null, serialNumber || null, id]
+    );
+    if (!rows[0]) return { ok: false, error: 'Not found.' };
     return { ok: true, system: rows[0] };
   });
 }
@@ -183,16 +209,36 @@ async function systemWithLocation(svc, systemId) {
   return rows[0];
 }
 
-// Notified: the owner (every location) plus anyone else with monitoring
-// access at that specific location — deliberately the same set of people
-// who could see this alert in the dashboard under RLS (monitored_systems_select).
+// Notified: the owner (every location, unconditionally) + anyone with
+// Monitoring access enabled at that specific location (dashboard viewers)
+// + anyone assigned via monitoring_alert_routes for this system's
+// location/category (routed recipients — e.g. "the kitchen manager gets
+// refrigeration alerts at Ticket 1" — regardless of whether that person
+// has Monitoring dashboard access at all; routing is about who's
+// responsible for the equipment, not who can browse the dashboard).
+//
+// Bug fixed 2026-09-01: this used to INNER JOIN employee_apps for every
+// recipient including the owner, but 'monitoring' was never in
+// employees.js's APP_KEYS, so no one — not even the owner — ever had an
+// enabled row there. Every alert's recipient list was silently empty.
 async function recipientsFor(svc, system) {
   const { rows } = await svc.query(
     `SELECT p.*, mns.notify_channel FROM people p
-     JOIN employee_apps ea ON ea.person_id = p.id AND ea.app_key = 'monitoring' AND ea.enabled = true
      LEFT JOIN monitoring_notify_settings mns ON mns.person_id = p.id
-     WHERE p.status = 'active' AND (p.role = 'owner' OR p.location_id = $1)`,
-    [system.location_id]
+     WHERE p.status = 'active' AND (
+       p.role = 'owner'
+       OR EXISTS (
+         SELECT 1 FROM employee_apps ea
+         WHERE ea.person_id = p.id AND ea.app_key = 'monitoring' AND ea.enabled = true AND p.location_id = $1
+       )
+       OR EXISTS (
+         SELECT 1 FROM monitoring_alert_routes r
+         WHERE r.person_id = p.id
+           AND (r.location_id IS NULL OR r.location_id = $1)
+           AND (r.category IS NULL OR r.category = $2)
+       )
+     )`,
+    [system.location_id, system.category]
   );
   return rows;
 }
@@ -242,6 +288,56 @@ async function setNotifyChannel(personId, channel) {
 }
 
 // ---------------------------------------------------------------------
+// Alert routing admin — who gets notified for a location/category,
+// independent of Monitoring dashboard access. locationFilter scopes a
+// manager to routes touching their own location (their own assignments
+// plus any all-location ones, so they can see what applies to them);
+// left undefined for the owner, who sees and can create every route.
+// ---------------------------------------------------------------------
+async function listAlertRoutes({ locationFilter } = {}) {
+  return withServiceClient(async (svc) => {
+    const params = [];
+    let where = '';
+    if (locationFilter) {
+      params.push(locationFilter);
+      where = `WHERE r.location_id = $1 OR r.location_id IS NULL`;
+    }
+    const { rows } = await svc.query(
+      `SELECT r.*, p.name AS person_name, l.name AS location_name
+       FROM monitoring_alert_routes r
+       JOIN people p ON p.id = r.person_id
+       LEFT JOIN locations l ON l.id = r.location_id
+       ${where}
+       ORDER BY p.name`,
+      params
+    );
+    return rows;
+  });
+}
+
+async function addAlertRoute({ personId, locationId, category, addedBy }) {
+  if (!personId) return { ok: false, error: 'Choose who to notify.' };
+  return withServiceClient(async (svc) => {
+    const { rows: personRows } = await svc.query(`SELECT id FROM people WHERE id = $1 AND status = 'active'`, [personId]);
+    if (!personRows[0]) return { ok: false, error: 'Choose an active employee.' };
+    const { rows } = await svc.query(
+      `INSERT INTO monitoring_alert_routes (person_id, location_id, category, added_by)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [personId, locationId || null, category || null, addedBy]
+    );
+    return { ok: true, route: rows[0] };
+  });
+}
+
+async function removeAlertRoute(routeId) {
+  return withServiceClient(async (svc) => {
+    const { rowCount } = await svc.query('DELETE FROM monitoring_alert_routes WHERE id = $1', [routeId]);
+    if (!rowCount) return { ok: false, error: 'Not found.' };
+    return { ok: true };
+  });
+}
+
+// ---------------------------------------------------------------------
 // UniFi Site Manager poll — no-ops entirely if UNIFI_API_KEY isn't set
 // (same "not configured" shape as notify.js), so this is safe to deploy
 // and schedule before any key exists. Matches poll results back to
@@ -286,8 +382,9 @@ async function pollUnifiSystems() {
 }
 
 module.exports = {
-  requireMonitoringAccess, listSystems, addSystem, archiveSystem,
+  requireMonitoringAccess, listSystems, addSystem, updateSystem, archiveSystem,
   listStatusHistory, listAlerts, recordStatus,
   getNotifySettings, setNotifyChannel,
+  listAlertRoutes, addAlertRoute, removeAlertRoute,
   pollUnifiSystems, unifiConfigured,
 };
