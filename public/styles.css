@@ -10,8 +10,6 @@
   --success: #3fbf7f;
   --warn: #e0a83e;
   --radius: 12px;
-  --tile-blue: #4f8dfd;
-  --tile-blue-monitoring: #2f5fa8;
 }
 
 * { box-sizing: border-box; }
@@ -147,14 +145,12 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
 .tile-icon-wrap { position: relative; display: inline-flex; margin-bottom: 10px; }
 .tile-icon-chip {
   display: flex;
-  align-items: center;
-  justify-content: center;
   width: 56px;
   height: 56px;
   border-radius: 16px;
-  color: #fff;
+  overflow: hidden;
 }
-.tile-icon-chip svg { width: 28px; height: 28px; display: block; }
+.tile-icon-chip img { width: 56px; height: 56px; display: block; }
 .tile-label { font-size: 14px; font-weight: 600; }
 .tile-note { margin-top: 4px; font-size: 12px; }
 .tile-badge {
