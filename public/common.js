@@ -170,7 +170,7 @@ function renderTopbar(activeLabel) {
   if (!el) return;
   el.innerHTML = `
     <div class="topbar-row">
-      <div class="brand"><img src="/logo.png" alt="Ticket Sports Bar" class="brand-logo">${activeLabel ? '<span class="brand-sep">· ' + escapeHtml(activeLabel) + '</span>' : ''}</div>
+      <div class="brand"><img src="/logo.png" alt="Ticket Sports Bar" class="brand-logo"></div>
       <div class="who">
         ${person ? escapeHtml(person.name) + ' <span class="muted">(' + escapeHtml(person.role) + ')</span><br>' : ''}
         <a class="logout" href="#" onclick="logout(); return false;">Sign out</a>
@@ -182,9 +182,13 @@ function renderTopbar(activeLabel) {
 // Every non-home page gets one simple way back to the hub — the Apps Home
 // page itself is where all app switching happens now (icon grid), so
 // there's no need for a duplicate row of per-app tabs on every page (that
-// used to shadow the Admin card's own links). Apps Home doesn't show this
-// link to itself.
+// used to shadow the Admin card's own links). The page identifier used to
+// sit next to the logo (e.g. "· Employees"); it now lives here instead, as
+// a small "Apps Home > Employees" breadcrumb — "Apps Home" links back on
+// every page except Apps Home itself, where it's just the current crumb.
 function renderTopnav(activeLabel) {
-  if (activeLabel === 'Apps Home') return '';
-  return `<nav class="topnav"><a class="tab" href="/dashboard.html">← Apps Home</a></nav>`;
+  if (!activeLabel || activeLabel === 'Apps Home') {
+    return `<nav class="topnav"><span class="crumb-current">Apps Home</span></nav>`;
+  }
+  return `<nav class="topnav"><a class="crumb-link" href="/dashboard.html">Apps Home</a><span class="crumb-sep">›</span><span class="crumb-current">${escapeHtml(activeLabel)}</span></nav>`;
 }
