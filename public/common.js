@@ -7,6 +7,27 @@
 // link is where people go to fill out or update the sensitive half.
 const JOTFORM_HIRE_PACK_URL = 'https://form.jotform.com/262307421577053';
 
+// The bar's own timezone — fixed, not the viewer's device timezone. Used
+// only for the Time Clock's manual edit prompts (see timeclock.js), so a
+// manager typing/reading a punch time always means the same real-world
+// moment no matter what timezone their own phone/laptop happens to be set
+// to. Matches server/timeclock.js's BUSINESS_TZ — keep the two in sync.
+const APP_TIMEZONE = 'America/Chicago';
+
+// Formats an ISO timestamp as a "YYYY-MM-DD HH:mm" wall-clock string in
+// APP_TIMEZONE, for pre-filling the Time Clock edit prompts.
+function toBarTimeInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: APP_TIMEZONE, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+  const parts = {};
+  dtf.formatToParts(d).forEach(p => { if (p.type !== 'literal') parts[p.type] = p.value; });
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+}
+
 function getToken() { return localStorage.getItem('bp_token'); }
 function setToken(t) { if (t) localStorage.setItem('bp_token', t); else localStorage.removeItem('bp_token'); }
 function getPerson() { try { return JSON.parse(localStorage.getItem('bp_person') || 'null'); } catch (e) { return null; } }
