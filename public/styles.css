@@ -10,6 +10,8 @@
   --success: #3fbf7f;
   --warn: #e0a83e;
   --radius: 12px;
+  --tile-blue: #4f8dfd;
+  --tile-blue-monitoring: #2f5fa8;
 }
 
 * { box-sizing: border-box; }
@@ -126,19 +128,51 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
 .msg.success { background: rgba(63,191,127,0.15); color: #6be3a4; border: 1px solid rgba(63,191,127,0.4); }
 .msg.info { background: rgba(79,141,253,0.15); color: #8fb6ff; border: 1px solid rgba(79,141,253,0.4); }
 
+.page-title { font-size: 22px; margin: 4px 0 16px; }
+
 .app-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 8px; }
 .app-tile {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   background: var(--card);
   border: 1px solid var(--card-border);
   border-radius: var(--radius);
-  padding: 20px 14px;
+  padding: 22px 14px 18px;
   text-align: center;
   text-decoration: none;
   color: var(--text);
 }
-.app-tile .icon { font-size: 26px; display: block; margin-bottom: 8px; }
 .app-tile.disabled { opacity: 0.4; }
+.tile-icon-wrap { position: relative; display: inline-flex; margin-bottom: 10px; }
+.tile-icon-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  color: #fff;
+}
+.tile-icon-chip svg { width: 28px; height: 28px; display: block; }
+.tile-label { font-size: 14px; font-weight: 600; }
+.tile-note { margin-top: 4px; font-size: 12px; }
+.tile-badge {
+  position: absolute;
+  top: -7px;
+  right: -12px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--card);
+}
 
 .list-row {
   display: flex;
