@@ -377,6 +377,19 @@ const result = await employees.decidePayRateRequest({ requestId: req.params.id, 
 res.json(result);
 });
 
+// A small owner-editable memo box (see server/employees.js). Managers can
+// read it — that's the point, it's shown to them right where they file a
+// pay-raise request — but only the owner can change it.
+app.get('/api/owner-notes/:key', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+res.json(await employees.getOwnerNote(req.params.key));
+});
+app.post('/api/owner-notes/:key', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can edit this note.' });
+const result = await employees.setOwnerNote(req.params.key, req.body.body, req.person.id);
+res.json(result);
+});
+
 // ---------------- Time Clock ----------------
 app.get('/api/timeclock/status', auth.requireSession('light'), async (req, res) => {
 const result = await req.withAuthedClient((client) => timeclock.getStatus(client, req.person.id));
