@@ -8,6 +8,7 @@ const auth = require('./auth');
 const employees = require('./employees');
 const timeclock = require('./timeclock');
 const servicecalls = require('./servicecalls');
+const monitoring = require('./monitoring');
 const notify = require('./notify');
 const jotform = require('./jotform');
 const resetRequests = require('./resetRequests');
@@ -458,6 +459,77 @@ return servicecalls.closeCall(client, { id: req.params.id, closedBy: req.person.
 res.json(result);
 });
 
+// ---------------- Systems Monitoring ----------------
+// Visibility mirrors service_calls: manager/owner bypass the employee_apps
+// gate entirely (this is an ops tool, not something staff self-enable
+// into); everyone else needs 'monitoring' turned on for their account.
+// Row-level scoping (owner sees every location, others only their own)
+// is enforced by monitored_systems' RLS policy, not here.
+app.get('/api/monitoring/systems', auth.requireSession('light'), async (req, res) => {
+  const isManagerOrOwner = req.person.role === 'manager' || req.person.role === 'owner';
+  const result = await req.withAuthedClient(async (client) => {
+    if (!isManagerOrOwner) {
+      const hasAccess = await monitoring.requireMonitoringAccess(client, req.person.id);
+      if (!hasAccess) return { error: 'Systems Monitoring isn’t turned on for your account yet — ask your manager.' };
+    }
+    return monitoring.listSystems(client, {});
+  });
+  if (result && result.error) return res.status(403).json(result);
+  res.json(result);
+});
+
+app.get('/api/monitoring/systems/:id/history', auth.requireSession('light'), async (req, res) => {
+  const isManagerOrOwner = req.person.role === 'manager' || req.person.role === 'owner';
+  const result = await req.withAuthedClient(async (client) => {
+    if (!isManagerOrOwner) {
+      const hasAccess = await monitoring.requireMonitoringAccess(client, req.person.id);
+      if (!hasAccess) return { error: 'Systems Monitoring isn’t turned on for your account yet — ask your manager.' };
+    }
+    return monitoring.listStatusHistory(client, req.params.id, { hours: req.query.hours ? Number(req.query.hours) : 24 });
+  });
+  if (result && result.error) return res.status(403).json(result);
+  res.json(result);
+});
+
+app.get('/api/monitoring/alerts', auth.requireSession('light'), async (req, res) => {
+  const isManagerOrOwner = req.person.role === 'manager' || req.person.role === 'owner';
+  const result = await req.withAuthedClient(async (client) => {
+    if (!isManagerOrOwner) {
+      const hasAccess = await monitoring.requireMonitoringAccess(client, req.person.id);
+      if (!hasAccess) return { error: 'Systems Monitoring isn’t turned on for your account yet — ask your manager.' };
+    }
+    return monitoring.listAlerts(client, { openOnly: req.query.openOnly === 'true' });
+  });
+  if (result && result.error) return res.status(403).json(result);
+  res.json(result);
+});
+
+// Owner/manager only — monitored_systems has no INSERT/UPDATE policy for
+// barplatform_app (same reasoning as locations/positions), so these go
+// through the service client with the role check enforced right here.
+app.post('/api/monitoring/systems', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const { locationId, category, kind, name, externalRef, config } = req.body;
+  const result = await monitoring.addSystem({ locationId, category, kind, name, externalRef, config, addedBy: req.person.id });
+  res.json(result);
+});
+
+app.post('/api/monitoring/systems/:id/archive', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const result = await monitoring.archiveSystem(req.params.id);
+  res.json(result);
+});
+
+// Self-service notification channel preference (email/sms/both) — same
+// trust boundary as /api/me/profile.
+app.get('/api/monitoring/notify-settings', auth.requireSession('light'), async (req, res) => {
+  res.json(await monitoring.getNotifySettings(req.person.id));
+});
+app.post('/api/monitoring/notify-settings', auth.requireSession('light'), async (req, res) => {
+  const result = await monitoring.setNotifyChannel(req.person.id, req.body.channel);
+  res.json(result);
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Bar platform listening on http://localhost:${PORT}`));
 
@@ -477,3 +549,11 @@ if (n > 0) console.log(`Auto clocked out ${n} stale shift(s).`);
 });
 }
 }, 4 * 60 * 1000);
+
+// Systems Monitoring — poll every 60s. A no-op until UNIFI_API_KEY is set
+// and at least one 'unifi_*' system is registered (see
+// monitoring.pollUnifiSystems), so this is safe to run from deploy day
+// even with an empty registry.
+setInterval(() => {
+monitoring.pollUnifiSystems().catch((err) => console.error('[monitoring] poll cycle error', err));
+}, 60 * 1000);
