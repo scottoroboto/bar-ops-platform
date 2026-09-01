@@ -2,6 +2,9 @@ let ME = null;
 let IS_MANAGER = false;
 let LOCATIONS = [];
 let EQUIPMENT = [];
+let DESTINATIONS = [];       // active send-to destinations, for the New Call checkboxes
+let ADMIN_DESTINATIONS = []; // full destinations (incl. archived) + members, for the Manage tab
+let MANAGE_PEOPLE = [];      // active employees, for the destination member picker
 
 function showMsg(text, kind) {
   document.getElementById('msgBox').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
@@ -28,19 +31,23 @@ function setTab(which) {
   document.getElementById('panelOpen').style.display = which === 'open' ? '' : 'none';
   document.getElementById('panelNew').style.display = which === 'new' ? '' : 'none';
   document.getElementById('panelReports').style.display = which === 'reports' ? '' : 'none';
+  document.getElementById('panelManage').style.display = which === 'manage' ? '' : 'none';
   Array.from(document.querySelectorAll('#tabs button')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
   if (which === 'open') loadOpen();
   if (which === 'new') renderNewForm();
   if (which === 'reports') renderReports();
+  if (which === 'manage') renderManage();
 }
 
 function renderTabs() {
   const tabs = [{ key: 'open', label: 'Calls' }, { key: 'new', label: 'New Call' }];
-  if (IS_MANAGER) tabs.push({ key: 'reports', label: 'Reports' });
+  if (IS_MANAGER) tabs.push({ key: 'reports', label: 'Reports' }, { key: 'manage', label: 'Manage' });
   document.getElementById('tabs').innerHTML = tabs.map(t =>
     `<button data-tab="${t.key}" onclick="setTab('${t.key}')">${t.label}</button>`).join('');
   setTab('open');
 }
+
+function closeAllModals() { closeCloseModal(); closeDetailModal(); closeMembersModal(); }
 
 // ---------------- Calls list ----------------
 async function loadOpen() {
@@ -49,25 +56,40 @@ async function loadOpen() {
   try {
     const calls = await api('/api/servicecalls');
     if (!calls.length) { el.innerHTML = '<div class="card"><p class="muted">No service calls yet.</p></div>'; return; }
-    el.innerHTML = calls.map(callCardHtml).join('');
+    // Server already sorts open-first (oldest first) then closed (most
+    // recently closed first) — splitting here just groups that same order
+    // under the two section headers rather than re-sorting anything.
+    const pending = calls.filter(c => c.status === 'open');
+    const closed = calls.filter(c => c.status === 'closed');
+    let html = '';
+    if (pending.length) html += sectionDividerHtml('Pending Calls') + pending.map(callCardHtml).join('');
+    if (closed.length) html += sectionDividerHtml('Closed Calls') + closed.map(callCardHtml).join('');
+    el.innerHTML = html;
   } catch (e) {
     el.innerHTML = `<div class="card"><p class="msg error">${escapeHtml(e.message)}</p></div>`;
   }
 }
 
+function sectionDividerHtml(label) {
+  return `<div class="sc-divider"><span></span><b>${escapeHtml(label)}</b><span></span></div>`;
+}
+
 function callCardHtml(c) {
   const equipment = c.equipment_name || c.equipment_other || 'Unspecified equipment';
   const open = c.status === 'open';
-  return `<div class="card">
+  const sentTo = (c.destination_names && c.destination_names.length) ? c.destination_names.join(', ') : '—';
+  const noteHint = c.notes_count ? `${c.notes_count} note${c.notes_count === 1 ? '' : 's'}` : 'Add a note';
+  return `<div class="card ${open ? '' : 'sc-closed'}" onclick="openCallDetail('${c.id}')" style="cursor:pointer;">
     <div style="display:flex; justify-content:space-between; align-items:flex-start;">
       <div>
         <div class="name">${escapeHtml(equipment)} <span class="badge ${open ? 'stale' : 'off'}">${open ? 'open · ' + fmtDuration(c.minutes_open) : 'closed'}</span></div>
-        <div class="sub">${escapeHtml(c.location_name)} · reported by ${escapeHtml(c.created_by_name)} · ${fmtDateTime(c.created_at)} · to ${escapeHtml(c.assigned_to_role)}</div>
+        <div class="sub">${escapeHtml(c.location_name)} · reported by ${escapeHtml(c.created_by_name)} · ${fmtDateTime(c.created_at)} · to ${escapeHtml(sentTo)}</div>
       </div>
-      ${open ? `<button class="small primary" style="margin-top:0;" onclick="openCloseModal('${c.id}', ${JSON.stringify(equipment).replace(/"/g, '&quot;')})">Close</button>` : ''}
+      ${open ? `<button class="small primary" style="margin-top:0;" onclick="event.stopPropagation(); openCloseModal('${c.id}', ${JSON.stringify(equipment).replace(/"/g, '&quot;')})">Close</button>` : ''}
     </div>
     <p style="margin:10px 0 0;">${escapeHtml(c.description)}</p>
     ${!open ? `<p class="muted" style="margin-top:8px;">Closed by ${escapeHtml(c.closed_by_name || '—')} ${fmtDateTime(c.closed_at)} — ${escapeHtml(c.remedy || '')}</p>` : ''}
+    <p class="muted" style="margin-top:8px;">${escapeHtml(noteHint)} →</p>
   </div>`;
 }
 
@@ -97,6 +119,69 @@ async function submitClose() {
   }
 }
 
+// ---------------- Call detail + notes ("click any call, all logged") ----------------
+function notesListHtml(notes) {
+  if (!notes || !notes.length) return '<p class="muted">No notes yet.</p>';
+  return notes.map(n => `<div class="sc-note">
+    <div class="sc-note-meta">${escapeHtml(n.author_name || '—')} · ${fmtDateTime(n.created_at)}</div>
+    <div>${escapeHtml(n.note)}</div>
+  </div>`).join('');
+}
+
+async function openCallDetail(id) {
+  document.getElementById('detailModal').style.display = '';
+  document.getElementById('modalBackdrop').style.display = '';
+  const body = document.getElementById('detailBody');
+  body.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const c = await api('/api/servicecalls/' + id);
+    body.innerHTML = detailBodyHtml(c);
+  } catch (e) {
+    body.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+function closeDetailModal() {
+  document.getElementById('detailModal').style.display = 'none';
+  document.getElementById('modalBackdrop').style.display = 'none';
+}
+
+function detailBodyHtml(c) {
+  const equipment = c.equipment_name || c.equipment_other || 'Unspecified equipment';
+  const open = c.status === 'open';
+  const sentTo = (c.destination_names && c.destination_names.length) ? c.destination_names.join(', ') : '—';
+  return `
+    <div class="name">${escapeHtml(equipment)} <span class="badge ${open ? 'stale' : 'off'}">${open ? 'open · ' + fmtDuration(c.minutes_open) : 'closed'}</span></div>
+    <p class="sub" style="margin:4px 0 12px;">${escapeHtml(c.location_name)} · reported by ${escapeHtml(c.created_by_name)} · ${fmtDateTime(c.created_at)} · to ${escapeHtml(sentTo)}</p>
+    <p>${escapeHtml(c.description)}</p>
+    ${!open ? `<p class="muted" style="margin-top:8px;">Closed by ${escapeHtml(c.closed_by_name || '—')} ${fmtDateTime(c.closed_at)} — ${escapeHtml(c.remedy || '')}</p>` : ''}
+    <hr style="border:none; border-top:1px solid var(--card-border); margin:16px 0;">
+    <h2 style="font-size:14px; margin:0 0 8px;">Notes</h2>
+    <div id="detailNotesList">${notesListHtml(c.notes)}</div>
+    <input type="hidden" id="detailCallId" value="${c.id}">
+    <label for="detailNewNote">Add a note</label>
+    <textarea id="detailNewNote" rows="2" placeholder="e.g. Called the vendor, part is on order"></textarea>
+    <button class="secondary" onclick="submitNote()">Add note</button>
+    <div id="detailNoteResult"></div>
+    ${open ? `<button class="primary" onclick="closeDetailModal(); openCloseModal('${c.id}', ${JSON.stringify(equipment).replace(/"/g, '&quot;')})">Close this call</button>` : ''}
+  `;
+}
+
+async function submitNote() {
+  const id = document.getElementById('detailCallId').value;
+  const note = document.getElementById('detailNewNote').value.trim();
+  const resultEl = document.getElementById('detailNoteResult');
+  if (!note) { resultEl.innerHTML = '<p class="msg error">Write a note first.</p>'; return; }
+  try {
+    const result = await api(`/api/servicecalls/${id}/notes`, { method: 'POST', body: { note } });
+    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
+    document.getElementById('detailNewNote').value = '';
+    resultEl.innerHTML = '';
+    document.getElementById('detailNotesList').innerHTML = notesListHtml(result.notes);
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
 // ---------------- New call ----------------
 function renderNewForm() {
   const el = document.getElementById('panelNew');
@@ -111,17 +196,17 @@ function renderNewForm() {
       <input id="ncOther" placeholder="e.g. Back door lock">
     </div>
     <label for="ncDescription">What's going on?</label>
-    <textarea id="ncDescription" rows="3" placeholder="Be specific — this is what maintenance/your manager will see"></textarea>
+    <textarea id="ncDescription" rows="3" placeholder="Be specific — this is what the people below will see"></textarea>
     <label>Send this to</label>
-    <select id="ncAssigned">
-      <option value="maintenance">Maintenance</option>
-      <option value="manager">Manager</option>
-      <option value="both">Both</option>
-    </select>
+    <div id="ncDestinations" class="sc-checkbox-grid"></div>
     <button class="primary" onclick="submitNewCall()">Submit</button>
   </div>`;
   fillLocationSelect(document.getElementById('ncLocation'), ME.location_id);
   fillEquipmentSelect(document.getElementById('ncEquipment'));
+  const destEl = document.getElementById('ncDestinations');
+  destEl.innerHTML = DESTINATIONS.length
+    ? DESTINATIONS.map(d => `<label class="sc-checkbox"><input type="checkbox" value="${d.id}"> ${escapeHtml(d.name)}</label>`).join('')
+    : '<p class="muted">No destinations set up yet — ask a manager to add one under Manage.</p>';
 }
 
 async function submitNewCall() {
@@ -130,10 +215,11 @@ async function submitNewCall() {
   const equipmentTypeId = equipmentSel === '__other' ? null : equipmentSel;
   const equipmentOther = equipmentSel === '__other' ? document.getElementById('ncOther').value.trim() : null;
   const description = document.getElementById('ncDescription').value.trim();
-  const assignedToRole = document.getElementById('ncAssigned').value;
+  const destinationIds = Array.from(document.querySelectorAll('#ncDestinations input:checked')).map(i => i.value);
   if (!description) { showMsg('Describe the issue first.', 'error'); return; }
+  if (!destinationIds.length) { showMsg('Pick at least one destination to send this to.', 'error'); return; }
   try {
-    const result = await api('/api/servicecalls', { method: 'POST', body: { locationId, equipmentTypeId, equipmentOther, description, assignedToRole } });
+    const result = await api('/api/servicecalls', { method: 'POST', body: { locationId, equipmentTypeId, equipmentOther, description, destinationIds } });
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     showMsg('Reported — thanks.', 'success');
     setTab('open');
@@ -188,7 +274,7 @@ async function runReport() {
       <p class="muted" style="margin-top:14px;">${rows.length} calls · ${open.length} open · ${closed.length} closed
       ${closed.length ? ' · avg time to close: ' + fmtDuration(avgMin) : ''}</p>`;
     document.getElementById('reportTable').innerHTML = rows.length ? `<table><thead><tr>
-        <th>Location</th><th>Equipment</th><th>Reported by</th><th>Opened</th><th>Status</th><th>Closed by</th><th>Time</th><th>Remedy</th>
+        <th>Location</th><th>Equipment</th><th>Reported by</th><th>Opened</th><th>Status</th><th>Sent to</th><th>Closed by</th><th>Time</th><th>Remedy</th>
       </tr></thead><tbody>
         ${rows.map(r => `<tr>
           <td>${escapeHtml(r.location_name)}</td>
@@ -196,6 +282,7 @@ async function runReport() {
           <td>${escapeHtml(r.created_by_name)}</td>
           <td>${fmtDateTime(r.created_at)}</td>
           <td><span class="badge ${r.status === 'open' ? 'stale' : 'off'}">${r.status}</span></td>
+          <td>${escapeHtml((r.destination_names || []).join(', ') || '—')}</td>
           <td>${escapeHtml(r.closed_by_name || '—')}</td>
           <td>${fmtDuration(r.minutes_open)}</td>
           <td>${escapeHtml(r.remedy || '—')}</td>
@@ -223,6 +310,162 @@ async function downloadCsv() {
   }
 }
 
+// ---------------- Manage (manager/owner): equipment types + destinations ----------------
+async function renderManage() {
+  const el = document.getElementById('panelManage');
+  el.innerHTML = '<div class="card"><p class="muted">Loading…</p></div>';
+  try {
+    MANAGE_PEOPLE = (await api('/api/employees')).filter(p => p.status === 'active');
+  } catch (e) {
+    MANAGE_PEOPLE = [];
+  }
+  el.innerHTML = `
+    <div class="card">
+      <h2>Equipment types</h2>
+      <p class="muted">Shown in the Equipment dropdown when reporting a new call. Archiving hides one from that dropdown — it doesn't touch past calls that already used it.</p>
+      <div id="equipList"><p class="muted">Loading…</p></div>
+      <label for="newEquipName">Add an equipment type</label>
+      <input id="newEquipName" placeholder="e.g. Neon Sign">
+      <button class="secondary" onclick="submitAddEquipment()">Add</button>
+      <div id="equipResult"></div>
+    </div>
+    <div class="card">
+      <h2>Send-to destinations</h2>
+      <p class="muted">Who gets notified when a call comes in. Add a destination, then set who's on it — being on a destination notifies someone whether or not they have Service Calls access themselves.</p>
+      <div id="destList"><p class="muted">Loading…</p></div>
+      <label for="newDestName">Add a destination</label>
+      <input id="newDestName" placeholder="e.g. Kitchen Manager">
+      <button class="secondary" onclick="submitAddDestination()">Add</button>
+      <div id="destResult"></div>
+    </div>
+  `;
+  loadManageEquipment();
+  loadManageDestinations();
+}
+
+async function loadManageEquipment() {
+  const el = document.getElementById('equipList');
+  try {
+    const rows = await api('/api/servicecalls/equipment-types/admin');
+    el.innerHTML = rows.length ? rows.map(e => `<div class="list-row">
+      <div><div class="name">${escapeHtml(e.name)}</div>${!e.active ? '<div class="sub">Archived</div>' : ''}</div>
+      ${e.active
+        ? `<button class="small ghost" onclick="archiveEquipment('${e.id}')">Archive</button>`
+        : `<button class="small secondary" onclick="restoreEquipment('${e.id}')">Restore</button>`}
+    </div>`).join('') : '<p class="muted">No equipment types yet.</p>';
+  } catch (e) {
+    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function submitAddEquipment() {
+  const nameEl = document.getElementById('newEquipName');
+  const name = nameEl.value.trim();
+  const resultEl = document.getElementById('equipResult');
+  if (!name) return;
+  try {
+    const result = await api('/api/servicecalls/equipment-types', { method: 'POST', body: { name } });
+    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
+    nameEl.value = '';
+    resultEl.innerHTML = '';
+    loadManageEquipment();
+    EQUIPMENT = await api('/api/servicecalls/equipment-types');
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+async function archiveEquipment(id) {
+  await api(`/api/servicecalls/equipment-types/${id}/archive`, { method: 'POST' });
+  loadManageEquipment();
+  EQUIPMENT = await api('/api/servicecalls/equipment-types');
+}
+async function restoreEquipment(id) {
+  await api(`/api/servicecalls/equipment-types/${id}/restore`, { method: 'POST' });
+  loadManageEquipment();
+  EQUIPMENT = await api('/api/servicecalls/equipment-types');
+}
+
+async function loadManageDestinations() {
+  const el = document.getElementById('destList');
+  try {
+    const rows = await api('/api/servicecalls/destinations/admin');
+    ADMIN_DESTINATIONS = rows;
+    el.innerHTML = rows.length ? rows.map(d => `<div class="list-row" style="align-items:flex-start;">
+      <div>
+        <div class="name">${escapeHtml(d.name)} ${!d.active ? '<span class="badge off">Archived</span>' : ''}</div>
+        <div class="sub">${d.members.length ? escapeHtml(d.members.map(m => m.name).join(', ')) : 'Nobody yet'}</div>
+      </div>
+      <div class="stack-actions" style="margin-top:0;">
+        <button class="small ghost" onclick="openMembersModal('${d.id}')">Members</button>
+        ${d.active
+          ? `<button class="small ghost" onclick="archiveDestination('${d.id}')">Archive</button>`
+          : `<button class="small secondary" onclick="restoreDestination('${d.id}')">Restore</button>`}
+      </div>
+    </div>`).join('') : '<p class="muted">No destinations yet.</p>';
+  } catch (e) {
+    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function submitAddDestination() {
+  const nameEl = document.getElementById('newDestName');
+  const name = nameEl.value.trim();
+  const resultEl = document.getElementById('destResult');
+  if (!name) return;
+  try {
+    const result = await api('/api/servicecalls/destinations', { method: 'POST', body: { name } });
+    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
+    nameEl.value = '';
+    resultEl.innerHTML = '';
+    loadManageDestinations();
+    DESTINATIONS = await api('/api/servicecalls/destinations');
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+async function archiveDestination(id) {
+  await api(`/api/servicecalls/destinations/${id}/archive`, { method: 'POST' });
+  loadManageDestinations();
+  DESTINATIONS = await api('/api/servicecalls/destinations');
+}
+async function restoreDestination(id) {
+  await api(`/api/servicecalls/destinations/${id}/restore`, { method: 'POST' });
+  loadManageDestinations();
+  DESTINATIONS = await api('/api/servicecalls/destinations');
+}
+
+function openMembersModal(destId) {
+  const dest = ADMIN_DESTINATIONS.find(d => d.id === destId);
+  if (!dest) return;
+  document.getElementById('membersDestId').value = destId;
+  document.getElementById('membersTitle').textContent = 'Members — ' + dest.name;
+  const currentIds = new Set(dest.members.map(m => m.id));
+  const list = document.getElementById('membersList');
+  list.innerHTML = MANAGE_PEOPLE.length
+    ? MANAGE_PEOPLE.map(p => `<label class="sc-checkbox"><input type="checkbox" value="${p.id}" ${currentIds.has(p.id) ? 'checked' : ''}> ${escapeHtml(p.name)}${p.role ? ' — ' + escapeHtml(p.role) : ''}</label>`).join('')
+    : '<p class="muted">No active employees to add yet.</p>';
+  document.getElementById('membersResult').innerHTML = '';
+  document.getElementById('membersModal').style.display = '';
+  document.getElementById('modalBackdrop').style.display = '';
+}
+function closeMembersModal() {
+  document.getElementById('membersModal').style.display = 'none';
+  document.getElementById('modalBackdrop').style.display = 'none';
+}
+async function submitMembers() {
+  const destId = document.getElementById('membersDestId').value;
+  const personIds = Array.from(document.querySelectorAll('#membersList input:checked')).map(i => i.value);
+  const resultEl = document.getElementById('membersResult');
+  try {
+    const result = await api(`/api/servicecalls/destinations/${destId}/members`, { method: 'POST', body: { personIds } });
+    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
+    closeMembersModal();
+    loadManageDestinations();
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
 (async function init() {
   ME = requireAuth();
   if (!ME) return;
@@ -237,6 +480,7 @@ async function downloadCsv() {
   try {
     LOCATIONS = await api('/api/locations');
     EQUIPMENT = await api('/api/servicecalls/equipment-types');
+    DESTINATIONS = await api('/api/servicecalls/destinations');
     renderTabs();
   } catch (e) {
     showMsg(e.message, 'error');
