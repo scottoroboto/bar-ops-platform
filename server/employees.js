@@ -3,7 +3,16 @@ const crypto = require('crypto');
 const { withServiceClient } = require('./db');
 const notify = require('./notify');
 
-const APP_KEYS = ['time_clock', 'service_calls', 'scheduling'];
+// NOTE: 'monitoring' was added to employee_apps' app_key CHECK constraint
+// back in patch_010 but never added here — meaning no one could ever be
+// granted Monitoring access through activateEmployee/setAppAccess (the
+// Employees admin UI had no toggle for it either). Owner/manager never
+// noticed because both roles bypass the employee_apps gate entirely for
+// viewing the Monitoring dashboard (see requireMonitoringAccess callers
+// in server/index.js) — but it also meant server/monitoring.js's
+// recipientsFor() found nobody to notify, ever, since that query required
+// an enabled row here. Fixed alongside the alert-routing work (2026-09-01).
+const APP_KEYS = ['time_clock', 'service_calls', 'scheduling', 'monitoring'];
 
 function slugUsername(name) {
   return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '');
