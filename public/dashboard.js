@@ -1,6 +1,7 @@
 const APP_INFO = {
   time_clock: { label: 'Time Clock', icon: '⏱️', href: '/timeclock.html' },
   service_calls: { label: 'Service Calls', icon: '🛠️', href: '/servicecalls.html' },
+  monitoring: { label: 'Systems Monitoring', icon: '📡', href: '/monitoring.html' },
   scheduling: { label: 'Scheduling', icon: '🗓️', href: '#', comingSoon: true },
 };
 
@@ -57,6 +58,7 @@ const APP_INFO = {
       <button class="secondary" onclick="location.href='/employees.html'">Employees</button>
       <button class="secondary" onclick="location.href='/timeclock.html?view=roster'">Time Clock roster</button>
       <button class="secondary" onclick="location.href='/servicecalls.html'">Service Calls (all locations)</button>
+      <button class="secondary" onclick="location.href='/monitoring.html'">Systems Monitoring</button>
     `;
   }
 })();
