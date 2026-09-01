@@ -189,6 +189,7 @@ function renderTopnav(person, activeLabel) {
     { label: 'Home', href: '/dashboard.html' },
     { label: 'Time Clock', href: '/timeclock.html' },
     { label: 'Service Calls', href: '/servicecalls.html' },
+    { label: 'Systems Monitoring', href: '/monitoring.html' },
   ];
   if (person.role === 'manager' || person.role === 'owner') {
     tabs.push({ label: 'Employees', href: '/employees.html' });
