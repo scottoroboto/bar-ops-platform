@@ -84,6 +84,15 @@ async function addSystem({ locationId, category, kind, name, externalRef, config
     return { ok: false, error: 'Location, category, kind, and name are all required.' };
   }
   return withServiceClient(async (svc) => {
+    // Defense-in-depth backstop for the client-side Ticket 3 filter in
+    // public/monitoring.js — Ticket 3 is being sold and is deliberately
+    // out of scope for monitoring (see db/patch_010_monitoring.sql), so
+    // reject a system registration for it even if a request bypasses the
+    // UI (a direct API call, a stale cached page, etc).
+    const { rows: locRows } = await svc.query('SELECT name FROM locations WHERE id = $1', [locationId]);
+    if (locRows[0] && locRows[0].name === 'Ticket 3') {
+      return { ok: false, error: 'Ticket 3 is out of scope for Systems Monitoring.' };
+    }
     const { rows } = await svc.query(
       `INSERT INTO monitored_systems (location_id, category, kind, name, external_ref, config, added_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
