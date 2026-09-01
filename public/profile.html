@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>My Profile — Bar Ops</title>
+<title>My Account — Bar Ops</title>
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -21,6 +21,13 @@
     <label for="phone">Phone</label>
     <input id="phone" type="tel">
     <button class="primary" onclick="saveProfile()">Save changes</button>
+  </div>
+
+  <div class="card">
+    <h2>Security</h2>
+    <p class="muted">Both of these need a quick password re-check first, since they're sensitive changes.</p>
+    <button class="secondary" onclick="location.href='/change-pin.html'">Change my PIN</button>
+    <button class="secondary" onclick="location.href='/change-password.html'">Change my password</button>
   </div>
 
   <div class="card">
@@ -46,7 +53,7 @@
       if (person && result.person) {
         person.name = result.person.name;
         setPerson(person);
-        renderTopbar('My Profile');
+        renderTopbar('My Account');
       }
       showMsg('Saved.', 'success');
     } catch (e) {
@@ -57,7 +64,7 @@
   (async function init() {
     const person = requireAuth();
     if (!person) return;
-    renderTopbar('My Profile');
+    renderTopbar('My Account');
     document.getElementById('name').value = person.name || '';
     try {
       const me = await api('/api/auth/me');
