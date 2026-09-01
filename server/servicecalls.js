@@ -46,11 +46,77 @@ async function withNames(rows) {
   }));
 }
 
+// ---------------------------------------------------------------------
+// Send-to destinations — attached to each call as destination_names, e.g.
+// ["Maintenance", "Kitchen Manager"]. Replaces the old single
+// assigned_to_role value; a call can now go to more than one destination
+// at once (that's what replaces "both"). service_call_destinations/
+// service_call_recipients carry no RLS (same open-reference-data posture
+// as equipment_types/locations/positions — see patch_012), so this just
+// queries on whatever client it's given, same as the equipment_name join
+// in CALL_SELECT above.
+// ---------------------------------------------------------------------
+async function destinationNamesForCalls(client, callIds) {
+  const ids = [...new Set(callIds.filter(Boolean))];
+  if (!ids.length) return {};
+  const { rows } = await client.query(
+    `SELECT r.call_id, d.name FROM service_call_recipients r
+     JOIN service_call_destinations d ON d.id = r.destination_id
+     WHERE r.call_id = ANY($1)
+     ORDER BY d.name`,
+    [ids]
+  );
+  const map = {};
+  for (const row of rows) (map[row.call_id] ||= []).push(row.name);
+  return map;
+}
+
+// ---------------------------------------------------------------------
+// Call notes — append-only ("all logged"): every note is timestamped and
+// attributed, nothing is ever edited or removed. Author names go through
+// resolveNames() for the same reason created_by_name/closed_by_name do —
+// the note's author might not be someone the viewer's own RLS-scoped
+// connection can see a `people` row for (e.g. a maintenance note left on
+// a staff member's call).
+// ---------------------------------------------------------------------
+async function listNotesForCall(client, callId) {
+  const { rows } = await client.query(
+    `SELECT * FROM service_call_notes WHERE call_id = $1 ORDER BY created_at ASC`,
+    [callId]
+  );
+  const names = await resolveNames(rows.map((r) => r.author_id));
+  return rows.map((r) => ({ ...r, author_name: names[r.author_id] || null }));
+}
+
+async function noteCountsForCalls(client, callIds) {
+  const ids = [...new Set(callIds.filter(Boolean))];
+  if (!ids.length) return {};
+  const { rows } = await client.query(
+    `SELECT call_id, COUNT(*)::int AS n FROM service_call_notes WHERE call_id = ANY($1) GROUP BY call_id`,
+    [ids]
+  );
+  return Object.fromEntries(rows.map((r) => [r.call_id, r.n]));
+}
+
+async function addNote(client, { callId, personId, note }) {
+  const trimmed = (note || '').trim();
+  if (!trimmed) return { ok: false, error: 'Write a note before saving.' };
+  const { rows: existingRows } = await client.query('SELECT id FROM service_calls WHERE id = $1', [callId]);
+  if (!existingRows[0]) return { ok: false, error: 'Not found.' };
+  await client.query(
+    `INSERT INTO service_call_notes (call_id, author_id, note) VALUES ($1,$2,$3)`,
+    [callId, personId, trimmed]
+  );
+  return { ok: true, notes: await listNotesForCall(client, callId) };
+}
+
 async function getCall(client, id) {
   const { rows } = await client.query(`${CALL_SELECT} WHERE sc.id = $1`, [id]);
   if (!rows[0]) return null;
   const [named] = await withNames(rows);
-  return withMinutesOpen(named);
+  const destMap = await destinationNamesForCalls(client, [id]);
+  const notes = await listNotesForCall(client, id);
+  return { ...withMinutesOpen(named), destination_names: destMap[id] || [], notes };
 }
 
 async function listCalls(client, filters = {}) {
@@ -67,16 +133,22 @@ async function listCalls(client, filters = {}) {
 
   const { rows } = await client.query(`${CALL_SELECT} ${where}`, params);
   const named = await withNames(rows);
+  const ids = named.map((r) => r.id);
+  const [destMap, noteCounts] = await Promise.all([
+    destinationNamesForCalls(client, ids),
+    noteCountsForCalls(client, ids),
+  ]);
+  const withDest = named.map((r) => ({ ...r, destination_names: destMap[r.id] || [], notes_count: noteCounts[r.id] || 0 }));
 
   // Open calls first (oldest first — a running reminder to close them),
   // then closed calls, most recently closed first.
-  named.sort((a, b) => {
+  withDest.sort((a, b) => {
     if (a.status !== b.status) return a.status === 'open' ? -1 : 1;
     if (a.status === 'open') return new Date(a.created_at) - new Date(b.created_at);
     return new Date(b.closed_at) - new Date(a.closed_at);
   });
 
-  return named.map(withMinutesOpen);
+  return withDest.map(withMinutesOpen);
 }
 
 function withMinutesOpen(row) {
@@ -85,22 +157,26 @@ function withMinutesOpen(row) {
   return { ...row, minutes_open: minutesOpen };
 }
 
-async function createCall(client, person, { locationId, equipmentTypeId, equipmentOther, description, assignedToRole }) {
+async function createCall(client, person, { locationId, equipmentTypeId, equipmentOther, description, destinationIds }) {
   const hasAccess = await requireServiceCallsAccess(client, person.id);
   if (!hasAccess && person.role !== 'owner') {
     return { ok: false, error: 'Service Calls isn’t turned on for your account yet — ask your manager.' };
   }
-  if (!locationId || !description || !assignedToRole) {
+  const ids = [...new Set((Array.isArray(destinationIds) ? destinationIds : []).filter(Boolean))];
+  if (!locationId || !description || !ids.length) {
     return { ok: false, error: 'Location, description, and who to notify are all required.' };
   }
 
   const { rows } = await client.query(
-    `INSERT INTO service_calls (location_id, equipment_type_id, equipment_other, description, created_by, assigned_to_role)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-    [locationId, equipmentTypeId || null, equipmentOther || null, description, person.id, assignedToRole]
+    `INSERT INTO service_calls (location_id, equipment_type_id, equipment_other, description, created_by)
+     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [locationId, equipmentTypeId || null, equipmentOther || null, description, person.id]
   );
+  const callId = rows[0].id;
+  const values = ids.map((_, i) => `($1, $${i + 2})`).join(',');
+  await client.query(`INSERT INTO service_call_recipients (call_id, destination_id) VALUES ${values}`, [callId, ...ids]);
 
-  const call = await getCall(client, rows[0].id);
+  const call = await getCall(client, callId);
   await notifyNewCall(client, call).catch((err) => console.error('notifyNewCall error', err));
   return { ok: true, call };
 }
@@ -122,29 +198,27 @@ async function closeCall(client, { id, closedBy, remedy }) {
 }
 
 // ---------------------------------------------------------------------
-// Notifications — same recipient logic as the prototype (active people
-// whose role matches assigned_to_role), narrowed to people who actually
-// have Service Calls access, and to managers at the call's own location
-// specifically (maintenance floats across all 3 bars, so they're notified
-// regardless of location).
+// Notifications — recipients are whoever is a member of one of the call's
+// chosen destinations (service_call_destination_members), rather than
+// "everyone whose platform role matches". Deliberately does NOT also
+// require the recipient to have Service Calls access turned on for
+// themselves — being added to a destination is the owner/manager
+// explicitly saying "notify this person", independent of whether they use
+// the app themselves (same reasoning as Systems Monitoring's alert
+// routing).
 //
-// Deliberately runs on the service (RLS-bypass) connection, not the
-// caller's authed one: figuring out who to notify is a system operation,
-// not something scoped to what the *caller* can see. A staff member's own
-// `people` visibility is just their own row (see people_select_self), so
-// running this on their authed connection silently returned zero
-// recipients — maintenance/managers were never notified when the person
-// filing the call was staff, which is the normal case.
+// Runs on the service (RLS-bypass) connection, not the caller's authed
+// one: figuring out who to notify is a system operation, not something
+// scoped to what the *caller* can see.
 // ---------------------------------------------------------------------
 async function recipientsFor(call) {
-  const roles = call.assigned_to_role === 'both' ? ['maintenance', 'manager'] : [call.assigned_to_role];
   return withServiceClient(async (svc) => {
     const { rows } = await svc.query(
-      `SELECT p.* FROM people p
-       JOIN employee_apps ea ON ea.person_id = p.id AND ea.app_key = 'service_calls' AND ea.enabled = true
-       WHERE p.status = 'active' AND p.role = ANY($1)
-         AND (p.role = 'maintenance' OR p.location_id = $2)`,
-      [roles, call.location_id]
+      `SELECT DISTINCT p.* FROM people p
+       JOIN service_call_destination_members m ON m.person_id = p.id
+       JOIN service_call_recipients r ON r.destination_id = m.destination_id
+       WHERE r.call_id = $1 AND p.status = 'active'`,
+      [call.id]
     );
     return rows;
   });
@@ -179,15 +253,57 @@ async function notifyCallClosed(client, call) {
   await notify.sendEmail(client, 'service_calls', call.id, person.email, subject, text);
 }
 
+// ---------------------------------------------------------------------
+// Send-to destinations admin (manager/owner) — a destination's member set
+// is replaced wholesale rather than added/removed one at a time, matching
+// how the Manage tab presents it: a checkbox grid of everyone, saved all
+// at once.
+// ---------------------------------------------------------------------
+async function listDestinationsWithMembers() {
+  return withServiceClient(async (client) => {
+    const { rows: destinations } = await client.query('SELECT * FROM service_call_destinations ORDER BY active DESC, name');
+    const { rows: members } = await client.query(
+      `SELECT m.destination_id, p.id AS person_id, p.name FROM service_call_destination_members m
+       JOIN people p ON p.id = m.person_id ORDER BY p.name`
+    );
+    return destinations.map((d) => ({
+      ...d,
+      members: members.filter((m) => m.destination_id === d.id).map((m) => ({ id: m.person_id, name: m.name })),
+    }));
+  });
+}
+
+async function setDestinationMembers({ destinationId, personIds }) {
+  return withServiceClient(async (client) => {
+    await client.query('DELETE FROM service_call_destination_members WHERE destination_id = $1', [destinationId]);
+    const ids = [...new Set((personIds || []).filter(Boolean))];
+    if (ids.length) {
+      const values = ids.map((_, i) => `($1, $${i + 2})`).join(',');
+      await client.query(`INSERT INTO service_call_destination_members (destination_id, person_id) VALUES ${values}`, [destinationId, ...ids]);
+    }
+    const { rows } = await client.query(
+      `SELECT p.id, p.name FROM service_call_destination_members m JOIN people p ON p.id = m.person_id WHERE m.destination_id = $1 ORDER BY p.name`,
+      [destinationId]
+    );
+    return { ok: true, members: rows };
+  });
+}
+
 function toCsv(rows) {
-  const headers = ['id', 'location_name', 'equipment_name', 'equipment_other', 'description', 'created_by_name', 'created_at', 'status', 'closed_by_name', 'closed_at', 'minutes_open', 'remedy'];
+  const headers = ['id', 'location_name', 'equipment_name', 'equipment_other', 'description', 'created_by_name', 'created_at', 'status', 'sent_to', 'closed_by_name', 'closed_at', 'minutes_open', 'remedy'];
   const esc = (v) => {
     const val = v instanceof Date ? v.toISOString() : (v == null ? '' : v);
     return `"${String(val).replace(/"/g, '""')}"`;
   };
   const lines = [headers.join(',')];
-  for (const r of rows) lines.push(headers.map((h) => esc(r[h])).join(','));
+  for (const r of rows) {
+    const row = { ...r, sent_to: (r.destination_names || []).join('; ') };
+    lines.push(headers.map((h) => esc(row[h])).join(','));
+  }
   return lines.join('\n');
 }
 
-module.exports = { listCalls, getCall, createCall, closeCall, requireServiceCallsAccess, toCsv };
+module.exports = {
+  listCalls, getCall, createCall, closeCall, requireServiceCallsAccess, toCsv,
+  addNote, listDestinationsWithMembers, setDestinationMembers,
+};
