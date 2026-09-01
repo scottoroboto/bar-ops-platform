@@ -509,14 +509,21 @@ app.get('/api/monitoring/alerts', auth.requireSession('light'), async (req, res)
 // through the service client with the role check enforced right here.
 app.post('/api/monitoring/systems', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
-  const { locationId, category, kind, name, externalRef, config } = req.body;
-  const result = await monitoring.addSystem({ locationId, category, kind, name, externalRef, config, addedBy: req.person.id });
+  const { locationId, category, kind, name, externalRef, config, make, model, serialNumber } = req.body;
+  const result = await monitoring.addSystem({ locationId, category, kind, name, externalRef, config, make, model, serialNumber, addedBy: req.person.id });
   res.json(result);
 });
 
 app.post('/api/monitoring/systems/:id/archive', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   const result = await monitoring.archiveSystem(req.params.id);
+  res.json(result);
+});
+
+app.post('/api/monitoring/systems/:id/update', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const { locationId, category, kind, name, make, model, serialNumber } = req.body;
+  const result = await monitoring.updateSystem({ id: req.params.id, locationId, category, kind, name, make, model, serialNumber });
   res.json(result);
 });
 
@@ -527,6 +534,30 @@ app.get('/api/monitoring/notify-settings', auth.requireSession('light'), async (
 });
 app.post('/api/monitoring/notify-settings', auth.requireSession('light'), async (req, res) => {
   const result = await monitoring.setNotifyChannel(req.person.id, req.body.channel);
+  res.json(result);
+});
+
+// Alert routing admin — "notify this person about this category at this
+// location" — independent of that person's own Monitoring dashboard
+// access. A manager is scoped to their own location (their assignments
+// plus any all-location ones); the owner sees and can create any route.
+app.get('/api/monitoring/alert-routes', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const locationFilter = req.person.role === 'manager' ? req.person.location_id : undefined;
+  res.json(await monitoring.listAlertRoutes({ locationFilter }));
+});
+app.post('/api/monitoring/alert-routes', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  // A manager can only route alerts for their own location, even if the
+  // request body tries to say otherwise; the owner can route any location
+  // or leave it blank for "every location".
+  const locationId = req.person.role === 'owner' ? (req.body.locationId || null) : req.person.location_id;
+  const result = await monitoring.addAlertRoute({ personId: req.body.personId, locationId, category: req.body.category || null, addedBy: req.person.id });
+  res.json(result);
+});
+app.post('/api/monitoring/alert-routes/:id/remove', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const result = await monitoring.removeAlertRoute(req.params.id);
   res.json(result);
 });
 
