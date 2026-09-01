@@ -7,6 +7,34 @@ const CATEGORY_LABEL = {
   ice_machine: 'Ice Machine', power: 'Power', other: 'Other',
 };
 
+// Status tab visual language (card-grid dashboard) — one small stroke-based
+// icon per category (all 16x16, currentColor) and one color/label per
+// status, shared by the stat strip, location cards, and system tiles below.
+const STATUS_META = {
+  online: { label: 'Online', dot: '#3fbf7f', badgeClass: 'on' },
+  warning: { label: 'Warning', dot: '#e0a83e', badgeClass: 'stale' },
+  offline: { label: 'Offline', dot: '#e5566d', badgeClass: 'danger' },
+  unknown: { label: 'Unknown', dot: '#9aa3b2', badgeClass: 'off' },
+};
+function statusMeta(status) { return STATUS_META[status] || STATUS_META.unknown; }
+
+const CATEGORY_ICON = {
+  network: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="18" height="8" rx="2"></rect><circle cx="8" cy="13" r="1"></circle><circle cx="12" cy="13" r="1"></circle><path d="M12 9V6a2 2 0 0 1 2-2h1"></path></svg>',
+  hvac: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M4.2 7.5l2.6 1.5M17.2 15l2.6 1.5M4.2 16.5l2.6-1.5M17.2 9l2.6-1.5"></path></svg>',
+  refrigeration: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="1.5"></rect><path d="M6 9h12"></path></svg>',
+  freezer: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M4.5 6l15 12M19.5 6l-15 12"></path></svg>',
+  ice_machine: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"></rect><path d="M5 12h14M12 5v14"></path></svg>',
+  power: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"></path></svg>',
+  other: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"></rect><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"></circle></svg>',
+};
+function categoryIcon(cat) { return CATEGORY_ICON[cat] || CATEGORY_ICON.other; }
+
+// Category types with no live data source yet (see server/monitoring.js —
+// only 'kind's starting 'unifi_' are actually polled today). Shown as a
+// grayed-out roadmap strip at the bottom of the Status tab rather than
+// pretending they're monitored.
+const UPCOMING_CATEGORIES = ['hvac', 'refrigeration', 'freezer', 'ice_machine', 'power'];
+
 function showMsg(text, kind) {
   document.getElementById('msgBox').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
 }
@@ -56,41 +84,96 @@ function renderTabs() {
   setTab('status');
 }
 
-// ---------------- Status board ----------------
+// ---------------- Status board (card-grid dashboard) ----------------
 async function loadStatus() {
   const el = document.getElementById('panelStatus');
   el.innerHTML = '<div class="card"><p class="muted">Loading…</p></div>';
   try {
-    const systems = await api('/api/monitoring/systems');
+    const [systems, alerts] = await Promise.all([
+      api('/api/monitoring/systems'),
+      api('/api/monitoring/alerts'),
+    ]);
     if (!systems.length) {
       el.innerHTML = `<div class="card"><p class="muted">Nothing registered yet.${IS_MANAGER ? ' Add a system from the "Add / Manage" tab once you have a device to point it at.' : ' Check back once your manager has registered something.'}</p></div>`;
       return;
     }
+
+    const openAlerts = alerts.filter(a => !a.closed_at)
+      .sort((a, b) => new Date(b.opened_at) - new Date(a.opened_at));
+
+    const counts = { online: 0, warning: 0, offline: 0, unknown: 0 };
+    for (const s of systems) counts[STATUS_META[s.last_status] ? s.last_status : 'unknown']++;
+
     const byLocation = {};
     for (const s of systems) (byLocation[s.location_name] = byLocation[s.location_name] || []).push(s);
 
-    el.innerHTML = Object.keys(byLocation).sort().map(loc => `
-      <div class="card">
-        <h2>${escapeHtml(loc)}</h2>
-        ${byLocation[loc].map(systemRowHtml).join('')}
-      </div>
-    `).join('');
+    el.innerHTML = `
+      ${openAlerts.length ? alertBannerHtml(openAlerts) : ''}
+      ${statSummaryHtml(counts)}
+      ${Object.keys(byLocation).sort().map(loc => locationCardHtml(loc, byLocation[loc])).join('')}
+      ${roadmapCardHtml()}
+    `;
   } catch (e) {
     el.innerHTML = `<div class="card"><p class="msg error">${escapeHtml(e.message)}</p></div>`;
   }
 }
 
-function systemRowHtml(s) {
-  const status = s.last_status || 'unknown';
-  return `<div class="list-row" style="flex-direction:column; align-items:stretch;">
-    <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="toggleHistory('${s.id}')">
-      <div>
-        <div class="name">${escapeHtml(s.name)} <span class="badge ${statusBadgeClass(status)}">${escapeHtml(status)}</span></div>
-        <div class="sub">${CATEGORY_LABEL[s.category] || s.category} · ${escapeHtml(s.kind)} · checked ${relTime(s.last_checked_at)}</div>
-      </div>
-      <span class="muted">history ▾</span>
+function alertBannerHtml(openAlerts) {
+  const top = openAlerts[0];
+  const more = openAlerts.length > 1 ? ` <span class="alert-more">(+${openAlerts.length - 1} more)</span>` : '';
+  return `<div class="alert-banner">
+    <span class="dot"></span>
+    <span class="sp"><b>${escapeHtml(top.system_name)}</b> at ${escapeHtml(top.location_name)} — ${escapeHtml(top.message)} · ${relTime(top.opened_at)}${more}</span>
+    <span class="link" onclick="setTab('alerts')">View Alerts →</span>
+  </div>`;
+}
+
+function statSummaryHtml(counts) {
+  return `<div class="stat-strip">${['online', 'warning', 'offline', 'unknown'].map(key => {
+    const m = statusMeta(key);
+    return `<div class="stat-tile"><div class="n">${counts[key]}</div><div class="l"><span class="dot" style="background:${m.dot}"></span>${m.label}</div></div>`;
+  }).join('')}</div>`;
+}
+
+function locationCardHtml(name, systems) {
+  const online = systems.filter(s => (s.last_status || 'unknown') === 'online').length;
+  const anyOffline = systems.some(s => s.last_status === 'offline');
+  const pillClass = anyOffline ? 'danger' : (online === systems.length ? 'on' : 'stale');
+  return `<div class="loc-card">
+    <div class="loc-header">
+      <div><div class="name">${escapeHtml(name)}</div><div class="sub">${systems.length} system${systems.length === 1 ? '' : 's'}</div></div>
+      <span class="badge ${pillClass}">${online} of ${systems.length} online</span>
     </div>
-    <div id="hist-${s.id}" style="display:none; margin-top:10px;"></div>
+    <div class="sys-grid">${systems.map(systemTileHtml).join('')}</div>
+  </div>`;
+}
+
+function systemTileHtml(s) {
+  const status = s.last_status || 'unknown';
+  const m = statusMeta(status);
+  return `<div class="sys-tile" style="border-left-color:${m.dot}">
+    <div class="sys-tile-head" onclick="toggleHistory('${s.id}')">
+      <div class="top-row">
+        <div class="sys-icon">${categoryIcon(s.category)}</div>
+        <div><div class="sys-name">${escapeHtml(s.name)}</div><div class="sys-sub">${CATEGORY_LABEL[s.category] || s.category} · ${escapeHtml(s.kind)}</div></div>
+      </div>
+      <div class="status-row"><span class="dot" style="background:${m.dot}"></span><span class="label" style="color:${m.dot}">${m.label}</span></div>
+      <div class="sys-checked">checked ${relTime(s.last_checked_at)} · history ▾</div>
+    </div>
+    <div id="hist-${s.id}" class="sys-hist" style="display:none;"></div>
+  </div>`;
+}
+
+function roadmapCardHtml() {
+  return `<div class="roadmap-card">
+    <div class="title">More on the way</div>
+    <div class="sub">Phase 2 adds these system types once sensor hardware is chosen — the registry's already built for them.</div>
+    <div class="roadmap-row">
+      ${UPCOMING_CATEGORIES.map(cat => `<div class="roadmap-item">
+        <div class="roadmap-icon">${categoryIcon(cat)}</div>
+        <div class="rl">${CATEGORY_LABEL[cat]}</div>
+      </div>`).join('')}
+    </div>
   </div>`;
 }
 
