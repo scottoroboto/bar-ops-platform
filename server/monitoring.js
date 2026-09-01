@@ -73,10 +73,34 @@ async function listSystems(client, { locationId } = {}) {
             (SELECT id FROM system_alerts sa WHERE sa.system_id = ms.id AND sa.closed_at IS NULL LIMIT 1) AS open_alert_id
      FROM monitored_systems ms JOIN locations l ON l.id = ms.location_id
      WHERE ${clauses.join(' AND ')}
-     ORDER BY l.name, ms.category, ms.name`,
+     ORDER BY l.name, ms.sort_order, ms.category, ms.name`,
     params
   );
   return rows;
+}
+
+// Manual reorder within a location — "move up/below one" per Scotto.
+// Swaps sort_order with whichever active sibling in the same location sits
+// immediately above/below in the current order; a no-op at either end of
+// the list (nothing to swap with) rather than an error.
+async function moveSystem(systemId, direction) {
+  if (direction !== 'up' && direction !== 'down') return { ok: false, error: 'Invalid direction.' };
+  return withServiceClient(async (svc) => {
+    const { rows: sysRows } = await svc.query('SELECT * FROM monitored_systems WHERE id = $1', [systemId]);
+    const system = sysRows[0];
+    if (!system) return { ok: false, error: 'Not found.' };
+    const { rows: siblings } = await svc.query(
+      `SELECT id, sort_order FROM monitored_systems WHERE location_id = $1 AND active = true ORDER BY sort_order, category, name`,
+      [system.location_id]
+    );
+    const idx = siblings.findIndex((s) => s.id === systemId);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (idx === -1 || swapIdx < 0 || swapIdx >= siblings.length) return { ok: true }; // already at the edge — nothing to do
+    const other = siblings[swapIdx];
+    await svc.query('UPDATE monitored_systems SET sort_order = $1 WHERE id = $2', [other.sort_order, systemId]);
+    await svc.query('UPDATE monitored_systems SET sort_order = $1 WHERE id = $2', [siblings[idx].sort_order, other.id]);
+    return { ok: true };
+  });
 }
 
 async function addSystem({ locationId, category, kind, name, externalRef, config, make, model, serialNumber, addedBy }) {
@@ -94,8 +118,10 @@ async function addSystem({ locationId, category, kind, name, externalRef, config
       return { ok: false, error: 'Ticket 3 is out of scope for Systems Monitoring.' };
     }
     const { rows } = await svc.query(
-      `INSERT INTO monitored_systems (location_id, category, kind, name, external_ref, config, make, model, serial_number, added_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      `INSERT INTO monitored_systems (location_id, category, kind, name, external_ref, config, make, model, serial_number, added_by, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+         (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM monitored_systems WHERE location_id = $1))
+       RETURNING *`,
       [locationId, category, kind, name, externalRef || null, JSON.stringify(config || {}), make || null, model || null, serialNumber || null, addedBy]
     );
     return { ok: true, system: rows[0] };
@@ -382,7 +408,7 @@ async function pollUnifiSystems() {
 }
 
 module.exports = {
-  requireMonitoringAccess, listSystems, addSystem, updateSystem, archiveSystem,
+  requireMonitoringAccess, listSystems, addSystem, updateSystem, archiveSystem, moveSystem,
   listStatusHistory, listAlerts, recordStatus,
   getNotifySettings, setNotifyChannel,
   listAlertRoutes, addAlertRoute, removeAlertRoute,
