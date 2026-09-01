@@ -410,7 +410,7 @@ res.json(result);
 
 // ---------------- Service Calls ----------------
 app.get('/api/servicecalls/equipment-types', auth.requireSession('light'), async (req, res) => {
-const { rows } = await pool.query('SELECT * FROM equipment_types WHERE active = true ORDER BY name');
+const { rows } = await pool.query('SELECT * FROM equipment_types WHERE active = true ORDER BY sort_order, name');
 res.json(rows);
 });
 
@@ -418,8 +418,28 @@ res.json(rows);
 // can restore one. Mirrors /api/positions/admin.
 app.get('/api/servicecalls/equipment-types/admin', auth.requireSession('light'), async (req, res) => {
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
-const { rows } = await pool.query('SELECT * FROM equipment_types ORDER BY active DESC, name');
+const { rows } = await pool.query('SELECT * FROM equipment_types ORDER BY active DESC, sort_order, name');
 res.json(rows);
+});
+
+// Manual reorder ("move up/below one" per Scotto) — active types only;
+// archived ones don't participate and stay wherever they sort by name.
+app.post('/api/servicecalls/equipment-types/:id/move', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const direction = req.body.direction;
+if (direction !== 'up' && direction !== 'down') return res.status(400).json({ ok: false, error: 'Invalid direction.' });
+const result = await withServiceClient(async (client) => {
+const { rows: siblings } = await client.query('SELECT id, sort_order FROM equipment_types WHERE active = true ORDER BY sort_order, name');
+const idx = siblings.findIndex((s) => s.id === req.params.id);
+const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+if (idx === -1) return { ok: false, error: 'Not found.' };
+if (swapIdx < 0 || swapIdx >= siblings.length) return { ok: true }; // already at the edge
+const other = siblings[swapIdx];
+await client.query('UPDATE equipment_types SET sort_order = $1 WHERE id = $2', [other.sort_order, req.params.id]);
+await client.query('UPDATE equipment_types SET sort_order = $1 WHERE id = $2', [siblings[idx].sort_order, other.id]);
+return { ok: true };
+});
+res.json(result);
 });
 
 // Equipment types are manager+owner to add/archive/restore, same as
@@ -431,7 +451,12 @@ const name = (req.body.name || '').trim();
 if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
 try {
 const equipment = await withServiceClient(async (client) => {
-const { rows } = await client.query('INSERT INTO equipment_types (name) VALUES ($1) RETURNING *', [name]);
+const { rows } = await client.query(
+  `INSERT INTO equipment_types (name, sort_order)
+   VALUES ($1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM equipment_types))
+   RETURNING *`,
+  [name]
+);
 return rows[0];
 });
 res.json({ ok: true, equipment });
@@ -668,6 +693,12 @@ app.post('/api/monitoring/systems/:id/update', auth.requireSession('full'), asyn
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   const { locationId, category, kind, name, make, model, serialNumber } = req.body;
   const result = await monitoring.updateSystem({ id: req.params.id, locationId, category, kind, name, make, model, serialNumber });
+  res.json(result);
+});
+
+app.post('/api/monitoring/systems/:id/move', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const result = await monitoring.moveSystem(req.params.id, req.body.direction);
   res.json(result);
 });
 
