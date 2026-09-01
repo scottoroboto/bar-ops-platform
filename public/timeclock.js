@@ -122,9 +122,16 @@ async function loadPeriod(idx) {
 }
 
 async function editPunch(id, clockIn, clockOut) {
-  const newIn = window.prompt('Clock-in (ISO or "2026-08-19 14:30"):', clockIn ? clockIn.slice(0, 16).replace('T', ' ') : '');
+  // Pre-filled and entered in the bar's own timezone (Central), not
+  // whatever timezone the manager's own device happens to be set to —
+  // see toBarTimeInput/APP_TIMEZONE in common.js. Previously this sliced
+  // the raw UTC timestamp directly, so the prompt showed UTC wall-clock
+  // numbers mislabeled as if they were local (e.g. a 9am Central clock-in
+  // showed as "14:00" here), and whatever got typed back was then stored
+  // as if it were UTC too — that's the reported "off by 5 hours" bug.
+  const newIn = window.prompt('Clock-in — bar time (Central), e.g. "2026-08-19 07:00":', clockIn ? toBarTimeInput(clockIn) : '');
   if (newIn === null) return;
-  const newOut = window.prompt('Clock-out (blank = still open):', clockOut ? clockOut.slice(0, 16).replace('T', ' ') : '');
+  const newOut = window.prompt('Clock-out — bar time (Central), blank = still open:', clockOut ? toBarTimeInput(clockOut) : '');
   if (newOut === null) return;
   const reason = window.prompt('Reason for this edit (for the audit log):', '');
   try {
