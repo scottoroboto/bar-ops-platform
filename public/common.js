@@ -176,25 +176,15 @@ function renderTopbar(activeLabel) {
         <a class="logout" href="#" onclick="logout(); return false;">Sign out</a>
       </div>
     </div>
-    ${person ? renderTopnav(person, activeLabel) : ''}`;
+    ${person ? renderTopnav(activeLabel) : ''}`;
 }
 
-// A persistent row of tabs so every page is one click from every other
-// page — previously some pages (like Employees) had no way back except
-// the browser's own back button. Time Clock/Service Calls are always
-// shown (each page itself explains if that app isn't turned on for you
-// yet); Employees is manager/owner only, matching the server-side gate.
-function renderTopnav(person, activeLabel) {
-  const tabs = [
-    { label: 'Home', href: '/dashboard.html' },
-    { label: 'Time Clock', href: '/timeclock.html' },
-    { label: 'Service Calls', href: '/servicecalls.html' },
-    { label: 'Systems Monitoring', href: '/monitoring.html' },
-  ];
-  if (person.role === 'manager' || person.role === 'owner') {
-    tabs.push({ label: 'Employees', href: '/employees.html' });
-  }
-  return `<nav class="topnav">${tabs.map(t =>
-    `<a class="tab${t.label === activeLabel ? ' active' : ''}" href="${t.href}">${escapeHtml(t.label)}</a>`
-  ).join('')}</nav>`;
+// Every non-home page gets one simple way back to the hub — the Apps Home
+// page itself is where all app switching happens now (icon grid), so
+// there's no need for a duplicate row of per-app tabs on every page (that
+// used to shadow the Admin card's own links). Apps Home doesn't show this
+// link to itself.
+function renderTopnav(activeLabel) {
+  if (activeLabel === 'Apps Home') return '';
+  return `<nav class="topnav"><a class="tab" href="/dashboard.html">← Apps Home</a></nav>`;
 }
