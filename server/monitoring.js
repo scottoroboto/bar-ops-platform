@@ -63,9 +63,9 @@ async function requireMonitoringAccess(client, personId) {
 // Registry
 // ---------------------------------------------------------------------
 async function listSystems(client, { locationId } = {}) {
-  const clauses = ['active = true'];
+  const clauses = ['ms.active = true'];
   const params = [];
-  if (locationId) { params.push(locationId); clauses.push(`location_id = $${params.length}`); }
+  if (locationId) { params.push(locationId); clauses.push(`ms.location_id = $${params.length}`); }
   const { rows } = await client.query(
     `SELECT ms.*, l.name AS location_name,
             (SELECT status FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_status,
