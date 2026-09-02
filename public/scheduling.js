@@ -408,14 +408,14 @@ async function submitShift() {
   const resultEl = document.getElementById('shResult');
   if (!payload.date || !payload.startTime || !payload.endTime) { resultEl.innerHTML = '<p class="msg error">Date, start, and end are required.</p>'; return; }
   try {
-    const result = await api('/api/scheduling/drafts', { method: 'POST', body: payload });
+    const result = await withStepUp(() => api('/api/scheduling/drafts', { method: 'POST', body: payload }));
     if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
     const dupLines = document.getElementById('shDuplicateDates').value.split('\n').map(s => s.trim()).filter(Boolean);
     if (dupLines.length) {
-      await api('/api/scheduling/drafts/duplicate', {
+      await withStepUp(() => api('/api/scheduling/drafts/duplicate', {
         method: 'POST',
         body: { scheduleId: payload.scheduleId, personId: payload.personId, positionId: payload.positionId, startTime: payload.startTime, endTime: payload.endTime, targetDates: dupLines },
-      });
+      }));
     }
     closeShiftModal();
     showMsg('Saved as a draft — publish when ready.', 'success');
@@ -427,7 +427,7 @@ async function submitShift() {
 async function submitCancelShift() {
   const payload = currentShiftPayload();
   try {
-    const result = await api('/api/scheduling/drafts/cancel', { method: 'POST', body: { draftId: payload.draftId, shiftId: payload.id } });
+    const result = await withStepUp(() => api('/api/scheduling/drafts/cancel', { method: 'POST', body: { draftId: payload.draftId, shiftId: payload.id } }));
     if (!result.ok) { document.getElementById('shResult').innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
     closeShiftModal();
     showMsg('Marked for cancellation — publish when ready.', 'success');
@@ -440,7 +440,7 @@ async function submitCancelShift() {
 async function discardDrafts() {
   if (!DRAFT_COUNT) return;
   try {
-    await api('/api/scheduling/drafts/discard', { method: 'POST' });
+    await withStepUp(() => api('/api/scheduling/drafts/discard', { method: 'POST' }));
     showMsg('Drafts discarded.', 'info');
     loadSchedGrid();
   } catch (e) {
@@ -452,7 +452,7 @@ async function submitCopyWeekForward() {
   const personId = document.getElementById('copyEmployee').value;
   const resultEl = document.getElementById('copyResult');
   try {
-    const result = await api('/api/scheduling/copy-week-forward', { method: 'POST', body: { personId, weekStart: WEEK_START } });
+    const result = await withStepUp(() => api('/api/scheduling/copy-week-forward', { method: 'POST', body: { personId, weekStart: WEEK_START } }));
     resultEl.innerHTML = `<p class="msg success">Added ${result.drafted} shift${result.drafted === 1 ? '' : 's'} as drafts for the following week.</p>`;
     loadSchedGrid();
   } catch (e) {
@@ -477,7 +477,7 @@ function closePublishModal() {
 async function doPublish() {
   const bodyEl = document.getElementById('publishBody');
   try {
-    const result = await api('/api/scheduling/publish', { method: 'POST', body: { overrideReasons: PUBLISH_OVERRIDES } });
+    const result = await withStepUp(() => api('/api/scheduling/publish', { method: 'POST', body: { overrideReasons: PUBLISH_OVERRIDES } }));
     if (result.success) {
       closePublishModal();
       showMsg(`Published ${result.published} shift${result.published === 1 ? '' : 's'} — notified ${result.notifiedEmployees} employee${result.notifiedEmployees === 1 ? '' : 's'}.`, 'success');
@@ -548,7 +548,7 @@ async function loadTimeOffAll() {
 }
 async function decideTimeOff(id, approve) {
   try {
-    const result = await api(`/api/scheduling/time-off/${id}/decide`, { method: 'POST', body: { approve } });
+    const result = await withStepUp(() => api(`/api/scheduling/time-off/${id}/decide`, { method: 'POST', body: { approve } }));
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     loadTimeOffPending();
     loadTimeOffAll();
@@ -609,7 +609,7 @@ async function submitAddSchedule() {
   const resultEl = document.getElementById('schedResult');
   if (!name || !locationId) { resultEl.innerHTML = '<p class="msg error">Name and location are required.</p>'; return; }
   try {
-    const result = await api('/api/scheduling/schedules', { method: 'POST', body: { name, locationId } });
+    const result = await withStepUp(() => api('/api/scheduling/schedules', { method: 'POST', body: { name, locationId } }));
     if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
     document.getElementById('newSchedName').value = '';
     resultEl.innerHTML = '';
@@ -620,12 +620,12 @@ async function submitAddSchedule() {
   }
 }
 async function archiveSchedule(id) {
-  await api(`/api/scheduling/schedules/${id}/archive`, { method: 'POST' });
+  await withStepUp(() => api(`/api/scheduling/schedules/${id}/archive`, { method: 'POST' }));
   await refreshScheduleCaches();
   loadSetupSchedules();
 }
 async function restoreSchedule(id) {
-  await api(`/api/scheduling/schedules/${id}/restore`, { method: 'POST' });
+  await withStepUp(() => api(`/api/scheduling/schedules/${id}/restore`, { method: 'POST' }));
   await refreshScheduleCaches();
   loadSetupSchedules();
 }
@@ -678,10 +678,10 @@ async function submitQual() {
   const managerScheduleIds = Array.from(document.querySelectorAll('#qualManagerSchedules input:checked')).map(i => i.value);
   const resultEl = document.getElementById('qualResult');
   try {
-    await api(`/api/scheduling/employees/${personId}/schedules`, { method: 'POST', body: { scheduleIds } });
-    await api(`/api/scheduling/employees/${personId}/positions`, { method: 'POST', body: { positionIds } });
+    await withStepUp(() => api(`/api/scheduling/employees/${personId}/schedules`, { method: 'POST', body: { scheduleIds } }));
+    await withStepUp(() => api(`/api/scheduling/employees/${personId}/positions`, { method: 'POST', body: { positionIds } }));
     if (document.getElementById('qualManagerWrap').style.display !== 'none') {
-      await api(`/api/scheduling/employees/${personId}/managed-schedules`, { method: 'POST', body: { scheduleIds: managerScheduleIds } });
+      await withStepUp(() => api(`/api/scheduling/employees/${personId}/managed-schedules`, { method: 'POST', body: { scheduleIds: managerScheduleIds } }));
     }
     closeQualModal();
     showMsg('Saved.', 'success');
