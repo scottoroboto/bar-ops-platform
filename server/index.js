@@ -270,6 +270,32 @@ await withServiceClient((client) => client.query(
 res.json({ ok: true, deviceToken: token });
 });
 
+// Lets a page check "is THIS BROWSER a trusted device" independent of who's
+// logged in — e.g. Venue Control's Apps Home tile, which should show up on
+// the location's trusted iPad for whoever's using it, not just for a
+// specific role. requireSession('light') because every caller is already
+// logged in by the time they check this; the token itself carries no
+// permissions on its own, it just says which location this browser was
+// trusted for.
+app.get('/api/devices/mine', auth.requireSession('light'), async (req, res) => {
+const token = req.query.deviceToken;
+if (!token) return res.json({ trusted: false });
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT d.id, d.label, d.location_id, l.name AS location_name
+   FROM devices d JOIN locations l ON l.id = d.location_id
+   WHERE d.device_token = $1`,
+[token]
+));
+if (!rows[0]) return res.json({ trusted: false });
+res.json({
+trusted: true,
+deviceId: rows[0].id,
+label: rows[0].label,
+locationId: rows[0].location_id,
+locationName: rows[0].location_name,
+});
+});
+
 // ---------------- Employees (owner/manager) ----------------
 app.get('/api/employees/pending', auth.requireSession('light'), async (req, res) => {
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
