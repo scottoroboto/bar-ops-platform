@@ -311,9 +311,15 @@ app.get('/api/venue-control/sites', auth.requireSession('light'), async (req, re
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 const { rows } = await withServiceClient((client) => client.query(
 `SELECT l.id AS location_id, l.name AS location_name, l.active AS location_active,
-        vs.id AS site_id, vs.enabled AS site_enabled
+        vs.id AS site_id, vs.enabled AS site_enabled,
+        vs.agent_token_hash IS NOT NULL AS has_agent_token,
+        va.hostname AS agent_hostname, va.status AS agent_status, va.last_seen_at AS agent_last_seen_at
    FROM locations l
    LEFT JOIN vc_sites vs ON vs.location_id = l.id
+   LEFT JOIN LATERAL (
+     SELECT hostname, status, last_seen_at FROM vc_agents
+      WHERE site_id = vs.id ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1
+   ) va ON true
    ORDER BY l.name`
 ));
 res.json(rows);
@@ -332,6 +338,126 @@ const { rows } = await client.query(
 return rows[0];
 });
 res.json({ ok: true, site });
+});
+
+// ---------------- Venue Control — agent tokens + agent-facing API (Phase 0) ----------------
+// docs/venue-control.md §12, Phase 0: "Registration, config pull, SQLite
+// cache, heartbeat, local UI shell, admin PIN. Proves the cloud<->agent path
+// with nothing at risk." Nothing here talks to a TV or receiver -- that
+// starts at Phase 2. This just proves the on-site box and the cloud can find
+// each other and stay in sync.
+//
+// Deviation from the spec's §8.1 agent-facing routes, logged here since
+// docs/venue-control.md itself stays an unmodified copy of the original
+// spec: registration no longer takes a site_slug, because patch_017 dropped
+// vc_sites.slug/name when vc_sites was reconciled with locations (see that
+// migration). The per-site bearer token IS the site identity for every
+// agent-facing call below -- one less thing to keep in sync by hand, and
+// still matches §11's "authenticates with a per-site bearer token."
+//
+// Token is generated here (owner-only, full session), shown to Scotto
+// exactly once in the response, and stored only as a SHA-256 hash in
+// vc_sites.agent_token_hash -- same "shown once, hashed at rest" shape as
+// every temp-password/reset flow elsewhere in this app. Regenerating
+// immediately invalidates whatever token was issued before, since the
+// column only ever holds the current hash.
+app.post('/api/venue-control/sites/:locationId/agent-token', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const token = crypto.randomBytes(32).toString('base64url');
+const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+const site = await withServiceClient(async (client) => {
+const { rows } = await client.query(
+`UPDATE vc_sites SET agent_token_hash = $1, updated_at = now()
+   WHERE location_id = $2
+   RETURNING id, location_id`,
+[tokenHash, req.params.locationId]
+);
+return rows[0];
+});
+if (!site) return res.status(404).json({ error: 'Turn Venue Control on for this location before generating an agent token.' });
+res.json({ ok: true, agentToken: token });
+});
+
+// Every /api/venue/agent/* route below is called by the on-site agent box,
+// not by a logged-in person -- so it's gated by the per-site bearer token
+// instead of auth.requireSession. Looks up the site by the token's hash;
+// vc_sites has RLS FORCE with zero policies like every other feature-scoped
+// table in this app, so this goes through withServiceClient same as
+// everywhere else.
+function requireAgentAuth() {
+return async (req, res, next) => {
+const header = req.get('authorization') || '';
+const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+if (!token) return res.status(401).json({ error: 'Missing agent bearer token.' });
+const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT vs.id AS site_id, vs.location_id, vs.timezone, vs.scan_ranges, vs.enabled, l.name AS location_name
+   FROM vc_sites vs JOIN locations l ON l.id = vs.location_id
+   WHERE vs.agent_token_hash = $1`,
+[tokenHash]
+));
+if (!rows[0]) return res.status(401).json({ error: 'Invalid agent token.' });
+if (!rows[0].enabled) return res.status(403).json({ error: 'Venue Control is turned off for this location.' });
+req.vcSite = rows[0];
+next();
+};
+}
+
+// Agent calls this on every boot. Keeps exactly one vc_agents row current
+// per site (updates the most-recently-seen row if one exists) rather than
+// growing a new row every restart -- a site normally has one agent box.
+app.post('/api/venue/agent/register', requireAgentAuth(), async (req, res) => {
+const { hostname, agentVersion, platform, lanIp } = req.body || {};
+const agent = await withServiceClient(async (client) => {
+const { rows: existing } = await client.query(
+'SELECT id FROM vc_agents WHERE site_id = $1 ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1',
+[req.vcSite.site_id]
+);
+if (existing[0]) {
+const { rows } = await client.query(
+`UPDATE vc_agents SET hostname=$1, lan_ip=$2, agent_version=$3, platform=$4, status='online', last_seen_at=now()
+   WHERE id=$5 RETURNING id`,
+[hostname, lanIp, agentVersion, platform, existing[0].id]
+);
+return rows[0];
+}
+const { rows } = await client.query(
+`INSERT INTO vc_agents (site_id, hostname, lan_ip, agent_version, platform, status, last_seen_at)
+   VALUES ($1,$2,$3,$4,$5,'online', now()) RETURNING id`,
+[req.vcSite.site_id, hostname, lanIp, agentVersion, platform]
+);
+return rows[0];
+});
+res.json({ ok: true, agentId: agent.id, siteId: req.vcSite.site_id, locationName: req.vcSite.location_name, timezone: req.vcSite.timezone });
+});
+
+// Phase 0 config is just the site shell (name/timezone/scan_ranges) so the
+// agent has something real to poll and cache -- sources/tvs/etc join in
+// starting Phase 2. ETag keeps the 30s poll near-free when nothing changed.
+app.get('/api/venue/agent/config', requireAgentAuth(), async (req, res) => {
+const config = {
+schema_version: 1,
+site: {
+location_id: req.vcSite.location_id,
+name: req.vcSite.location_name,
+timezone: req.vcSite.timezone,
+scan_ranges: req.vcSite.scan_ranges,
+},
+};
+const etag = crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
+if (req.get('if-none-match') === etag) return res.status(304).end();
+res.set('ETag', etag);
+res.json(config);
+});
+
+app.post('/api/venue/agent/heartbeat', requireAgentAuth(), async (req, res) => {
+const { status, agentVersion, configEtag } = req.body || {};
+await withServiceClient((client) => client.query(
+`UPDATE vc_agents SET status=$1, agent_version=COALESCE($2, agent_version), config_etag=COALESCE($3, config_etag), last_seen_at=now()
+   WHERE site_id=$4`,
+[status || 'online', agentVersion, configEtag, req.vcSite.site_id]
+));
+res.json({ ok: true });
 });
 
 // ---------------- Employees (owner/manager) ----------------
