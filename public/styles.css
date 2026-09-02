@@ -291,3 +291,19 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 @media (max-width: 480px) {
   .sc-checkbox-grid { grid-template-columns: 1fr; }
 }
+
+/* Scheduling: Print / multi-week view — hidden on screen, shown only inside
+   the browser's print dialog (mirrors the old Apps Script system's approach:
+   render into a hidden block, then window.print()). */
+.print-view { display: none; }
+@media print {
+  body > *:not(.print-view) { display: none !important; }
+  .print-view { display: block !important; }
+  .print-week-block { margin-bottom: 24px; }
+  .print-week-block.print-new-page { page-break-before: always; }
+  .print-week-title { font-weight: 700; font-size: 15px; margin-bottom: 6px; }
+  .print-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .print-table th, .print-table td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
+  .print-table th { background: #eee; }
+  .print-emp-name { font-weight: 700; white-space: nowrap; }
+}

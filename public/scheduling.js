@@ -13,7 +13,7 @@ let ALL_SCHEDULES = [];        // every active schedule, for pickers
 let MANAGEABLE_SCHEDULES = []; // schedules this manager (or every schedule, for the owner) can write to
 let EMPLOYEES = [];            // full roster w/ schedule_ids/position_ids/manager_schedule_ids
 let SELECTED_SCHEDULE_IDS = [];
-let WEEK_START = '';           // ISO date, Sunday of the currently-loaded week
+let WEEK_START = '';           // ISO date, Saturday of the currently-loaded week (business week runs Sat-Fri)
 let WEEK_SHIFTS = [];          // this week's live shifts + my draft overlay
 let DRAFT_COUNT = 0;
 let PUBLISH_OVERRIDES = {};    // draftId -> override reason, accumulated across a Publish retry
@@ -35,8 +35,10 @@ function addDaysISO(iso, n) {
   return dateToISO(d);
 }
 function startOfWeekISO(iso) {
+  // Business week runs Saturday through Friday (not the JS-default Sun-Sat).
+  // getDay(): Sun=0 ... Sat=6. Days since the most recent Saturday = (day+1) % 7.
   const d = isoToDate(iso);
-  d.setDate(d.getDate() - d.getDay());
+  d.setDate(d.getDate() - ((d.getDay() + 1) % 7));
   return dateToISO(d);
 }
 function todayISO() { return dateToISO(new Date()); }
@@ -79,7 +81,7 @@ function renderTabs() {
 }
 
 function closeAllModals() {
-  closeShiftModal(); closePublishModal(); closeTimeOffModal(); closeQualModal();
+  closeShiftModal(); closePublishModal(); closeTimeOffModal(); closeQualModal(); closePrintModal();
 }
 
 // =========================================================
@@ -271,6 +273,7 @@ async function renderScheduler() {
           <button class="small ghost" onclick="shiftSchedWeek(-7)">‹ Prev</button>
           <button class="small ghost" onclick="goToCurrentSchedWeek()">Today</button>
           <button class="small ghost" onclick="shiftSchedWeek(7)">Next ›</button>
+          <button class="small ghost" onclick="openPrintModal()">Print</button>
           <button class="small secondary" onclick="openShiftModal({})">+ Add shift</button>
         </div>
       </div>
@@ -499,6 +502,89 @@ async function doPublish() {
   } catch (e) {
     bodyEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
+}
+
+// ---- Print / multi-week view (mirrors the old system's Print dialog:
+// pick schedules + employees, pick 1-3 weeks starting at whatever week the
+// Scheduler grid is currently showing, render into a print-only block, and
+// hand off to the browser's print dialog — same as before, save-as-PDF works
+// there too). Published shifts only, no drafts. ----
+function openPrintModal() {
+  const schedChecks = MANAGEABLE_SCHEDULES.map(s => `<label class="sc-checkbox"><input type="checkbox" class="printSchedCb" value="${s.id}" ${SELECTED_SCHEDULE_IDS.includes(s.id) ? 'checked' : ''} onchange="refreshPrintEmployeeList()"> ${escapeHtml(s.name)} <span class="muted">(${escapeHtml(s.location_name)})</span></label>`).join('');
+  document.getElementById('printBody').innerHTML = `
+    <div class="card" style="margin:0 0 12px;">
+      <label>Schedules</label>
+      <div id="printSchedPicker" class="sc-checkbox-grid">${schedChecks || '<p class="muted">No schedules assigned to you.</p>'}</div>
+    </div>
+    <div class="card" style="margin:0 0 12px;">
+      <label>Employees</label>
+      <div id="printEmpPicker" class="sc-checkbox-grid"></div>
+    </div>
+    <label for="printWeeks">How many weeks</label>
+    <select id="printWeeks">
+      <option value="1">1 week (just this one)</option>
+      <option value="2">2 weeks</option>
+      <option value="3">3 weeks</option>
+    </select>
+    <p class="muted" style="font-size:12px;">Starting from the week of ${dayLabel(WEEK_START)} — the week currently showing in the Scheduler grid. Use Prev/Next there first if you want to print ahead. Weeks with no published shifts yet just print blank.</p>
+    <div id="printResult"></div>`;
+  refreshPrintEmployeeList();
+  document.getElementById('printModal').style.display = '';
+  document.getElementById('modalBackdrop').style.display = '';
+}
+function closePrintModal() {
+  document.getElementById('printModal').style.display = 'none';
+  document.getElementById('modalBackdrop').style.display = 'none';
+}
+function refreshPrintEmployeeList() {
+  const scheduleIds = Array.from(document.querySelectorAll('.printSchedCb:checked')).map(el => el.value);
+  const roster = EMPLOYEES.filter(e => e.schedule_ids.some(id => scheduleIds.includes(id)));
+  const empEl = document.getElementById('printEmpPicker');
+  const prevChecked = new Set(Array.from(document.querySelectorAll('.printEmpCb:checked')).map(el => el.value));
+  empEl.innerHTML = roster.length
+    ? roster.map(e => `<label class="sc-checkbox"><input type="checkbox" class="printEmpCb" value="${e.id}" ${prevChecked.has(String(e.id)) || !prevChecked.size ? 'checked' : ''}> ${escapeHtml(e.name)}</label>`).join('')
+    : '<p class="muted">Pick a schedule above first.</p>';
+}
+async function submitPrint() {
+  const resultEl = document.getElementById('printResult');
+  const scheduleIds = Array.from(document.querySelectorAll('.printSchedCb:checked')).map(el => el.value);
+  const employeeIds = Array.from(document.querySelectorAll('.printEmpCb:checked')).map(el => el.value);
+  if (!scheduleIds.length) { resultEl.innerHTML = '<p class="msg error">Pick at least one schedule.</p>'; return; }
+  if (!employeeIds.length) { resultEl.innerHTML = '<p class="msg error">Pick at least one employee.</p>'; return; }
+  const numWeeks = Number(document.getElementById('printWeeks').value);
+  resultEl.innerHTML = '<p class="muted">Preparing…</p>';
+  try {
+    const shifts = await api(`/api/scheduling/print?scheduleIds=${scheduleIds.join(',')}&weekStart=${WEEK_START}&weeks=${numWeeks}`);
+    renderPrintView(shifts.filter(s => employeeIds.includes(String(s.person_id))), numWeeks);
+    closePrintModal();
+    window.print();
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+function renderPrintView(shifts, numWeeks) {
+  const dayHeader = (d) => `<th>${isoToDate(d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</th>`;
+  const empNames = [...new Set(shifts.map(s => s.person_name))].sort((a, b) => a.localeCompare(b));
+  let html = `<h2 style="margin-bottom:2px;">Bar Ops Scheduling</h2>`;
+  for (let w = 0; w < numWeeks; w++) {
+    const wStart = addDaysISO(WEEK_START, w * 7);
+    const dates = weekDatesFrom(wStart);
+    const header = `<th>Employee</th>${dates.map(dayHeader).join('')}`;
+    const rows = (empNames.length ? empNames : ['No employees selected']).map(name => {
+      if (!empNames.length) return `<tr><td colspan="8">No shifts to print.</td></tr>`;
+      const cells = dates.map(d => {
+        const cellShifts = shifts.filter(s => s.person_name === name && s.shift_date === d);
+        const lines = cellShifts.map(s => `<span style="display:block;">${escapeHtml(s.position_name)} ${formatTime12(s.start_time)}–${formatTime12(s.end_time)}</span>`).join('');
+        return `<td>${lines}</td>`;
+      }).join('');
+      return `<tr><td class="print-emp-name">${escapeHtml(name)}</td>${cells}</tr>`;
+    }).join('');
+    html += `<div class="print-week-block${w > 0 ? ' print-new-page' : ''}">
+      <div class="print-week-title">Week of ${dayLabel(dates[0])} – ${dayLabel(dates[6])}</div>
+      <table class="print-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>
+    </div>`;
+  }
+  document.getElementById('printView').innerHTML = html;
 }
 
 // =========================================================

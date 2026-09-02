@@ -49,6 +49,16 @@
   </div>
 </div>
 
+<!-- Print / multi-week modal (Scheduler tab) -->
+<div class="card" id="printModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:460px; max-height:86vh; overflow-y:auto; height:fit-content; top:6%; z-index:20;">
+  <h2>Print schedule</h2>
+  <div id="printBody"></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closePrintModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitPrint()">Print</button>
+  </div>
+</div>
+
 <!-- Publish confirm / conflicts modal (Scheduler tab) -->
 <div class="card" id="publishModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:460px; max-height:86vh; overflow-y:auto; height:fit-content; top:6%; z-index:20;">
   <h2>Publish drafts</h2>
@@ -95,6 +105,9 @@
 </div>
 
 <div id="modalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10;" onclick="closeAllModals()"></div>
+
+<!-- Print-only view — hidden on screen, shown only inside the browser's print dialog -->
+<div class="print-view" id="printView"></div>
 
 <script src="/common.js"></script>
 <script src="/scheduling.js"></script>
