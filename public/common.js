@@ -37,6 +37,25 @@ function setAppAccess(a) { localStorage.setItem('bp_appAccess', JSON.stringify(a
 function getDeviceToken() { return localStorage.getItem('bp_deviceToken'); }
 function setDeviceToken(t) { if (t) localStorage.setItem('bp_deviceToken', t); else localStorage.removeItem('bp_deviceToken'); }
 
+// Whether THIS BROWSER (not the logged-in person) has ever been trusted via
+// "Trust this device" (see trustThisDevice() in employees.js and the
+// devices table) — independent of who's currently signed in on it. Used to
+// gate anything that should only be reachable from one specific physical
+// device (e.g. Venue Control on the location's iPad), as opposed to normal
+// role-based gating. Returns null if untrusted/unverifiable, or
+// { deviceId, label, locationId, locationName } if this browser holds a
+// still-valid device token.
+async function getTrustedDeviceInfo() {
+  const token = getDeviceToken();
+  if (!token) return null;
+  try {
+    const result = await api('/api/devices/mine?deviceToken=' + encodeURIComponent(token));
+    return result.trusted ? result : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function clearSession() { setToken(null); setPerson(null); setAppAccess([]); }
 
 function goLogin(message) {

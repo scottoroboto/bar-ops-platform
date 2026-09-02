@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Venue Control — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<div class="wrap wide" id="app">
+  <div id="msgBox"></div>
+  <div class="card">
+    <h1>Venue Control</h1>
+    <p class="muted" id="deviceNote"></p>
+    <p>This will control the DirecTV receivers and TVs on the headend — changing
+      channels, turning TVs on and off, and applying whole-room presets — from
+      this iPad or from here remotely.</p>
+    <p class="muted">Not built yet. The design spec lives in
+      <code>docs/venue-control.md</code> in the repo. First up is a
+      discovery/diagnostics pass at the bar to map out exactly which TVs speak
+      which control protocol — nothing here will do anything until that's
+      done and an on-site control box is running.</p>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script src="/venue-control.js"></script>
+</body>
+</html>
