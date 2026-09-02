@@ -77,7 +77,16 @@ async function sendOnboardingInvite() {
   const name = document.getElementById('inviteName').value.trim();
   const email = document.getElementById('inviteEmail').value.trim();
   const resultEl = document.getElementById('inviteResult');
+  const btn = document.getElementById('sendInviteBtn');
   if (!email) { resultEl.innerHTML = '<p class="msg error">Enter an email address.</p>'; return; }
+  // The server can take a little while to respond (e.g. right after the app
+  // has been idle), and with no feedback here a slow request just looks like
+  // the button did nothing. Show a visible "working on it" state immediately
+  // and always clear it, however the request turns out.
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  resultEl.innerHTML = '<p class="msg info">Sending…</p>';
   try {
     const result = await withStepUp(() => api('/api/employees/invite', { method: 'POST', body: { name, email } }));
     if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error || 'Could not send invite.')}</p>`; return; }
@@ -86,6 +95,9 @@ async function sendOnboardingInvite() {
     document.getElementById('inviteEmail').value = '';
   } catch (e) {
     resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
   }
 }
 
