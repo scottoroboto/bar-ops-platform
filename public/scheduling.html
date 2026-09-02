@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Scheduling — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<div class="wrap wide" id="app">
+  <div id="msgBox"></div>
+  <div class="tabs" id="tabs"></div>
+
+  <div id="panelMine"></div>
+  <div id="panelScheduler" style="display:none;"></div>
+  <div id="panelTimeOff" style="display:none;"></div>
+  <div id="panelSetup" style="display:none;"></div>
+</div>
+
+<!-- Add/Edit shift modal (Scheduler tab) -->
+<div class="card" id="shiftModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; max-height:86vh; overflow-y:auto; height:fit-content; top:6%; z-index:20;">
+  <h2 id="shiftModalTitle">Shift</h2>
+  <input type="hidden" id="shDraftId">
+  <input type="hidden" id="shShiftId">
+  <label for="shPerson">Employee</label>
+  <select id="shPerson"></select>
+  <label for="shSchedule">Schedule</label>
+  <select id="shSchedule"></select>
+  <label for="shPosition">Position</label>
+  <select id="shPosition"></select>
+  <label for="shDate">Date</label>
+  <input type="date" id="shDate">
+  <div style="display:flex; gap:10px;">
+    <div style="flex:1;"><label for="shStart">Start</label><input type="time" id="shStart"></div>
+    <div style="flex:1;"><label for="shEnd">End</label><input type="time" id="shEnd"></div>
+  </div>
+  <div id="shDuplicateWrap" style="display:none;">
+    <label for="shDuplicateDates">Also add on these dates (one per line, YYYY-MM-DD)</label>
+    <textarea id="shDuplicateDates" rows="2" placeholder="2026-09-13&#10;2026-09-20"></textarea>
+  </div>
+  <div id="shResult"></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeShiftModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitShift()">Save as draft</button>
+  </div>
+  <div class="stack-actions" id="shCancelRow" style="display:none;">
+    <button class="secondary" style="flex:1;" onclick="submitCancelShift()">Cancel this shift</button>
+  </div>
+</div>
+
+<!-- Publish confirm / conflicts modal (Scheduler tab) -->
+<div class="card" id="publishModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:460px; max-height:86vh; overflow-y:auto; height:fit-content; top:6%; z-index:20;">
+  <h2>Publish drafts</h2>
+  <div id="publishBody"></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closePublishModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" id="publishConfirmBtn" onclick="doPublish()">Publish</button>
+  </div>
+</div>
+
+<!-- Time off request modal (My Schedule tab) -->
+<div class="card" id="timeOffModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:400px; height:fit-content; top:15%; z-index:20;">
+  <h2>Request time off</h2>
+  <label for="toStart">First day</label>
+  <input type="date" id="toStart">
+  <label for="toEnd">Last day</label>
+  <input type="date" id="toEnd">
+  <label for="toMessage">Message (optional)</label>
+  <textarea id="toMessage" rows="2" placeholder="Anything your manager should know"></textarea>
+  <div id="toResult"></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeTimeOffModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitTimeOffRequest()">Submit request</button>
+  </div>
+</div>
+
+<!-- Employee qualification matrix modal (Setup tab, owner only edits) -->
+<div class="card" id="qualModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:460px; max-height:86vh; overflow-y:auto; height:fit-content; top:6%; z-index:20;">
+  <h2 id="qualModalTitle">Employee</h2>
+  <input type="hidden" id="qualPersonId">
+  <label>Checked into these schedules</label>
+  <div id="qualSchedules" class="sc-checkbox-grid"></div>
+  <label style="margin-top:12px;">Qualified for these positions</label>
+  <div id="qualPositions" class="sc-checkbox-grid"></div>
+  <div id="qualManagerWrap">
+    <label style="margin-top:12px;">Manages these schedules</label>
+    <div id="qualManagerSchedules" class="sc-checkbox-grid"></div>
+  </div>
+  <div id="qualResult"></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeQualModal()">Close</button>
+    <button class="primary" style="margin-top:0;" id="qualSaveBtn" onclick="submitQual()">Save</button>
+  </div>
+</div>
+
+<div id="modalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10;" onclick="closeAllModals()"></div>
+
+<script src="/common.js"></script>
+<script src="/scheduling.js"></script>
+</body>
+</html>

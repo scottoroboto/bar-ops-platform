@@ -15,7 +15,7 @@ const APP_INFO = {
   monitoring: { label: 'Systems Monitoring', icon: ICONS.monitoring, href: '/monitoring.html' },
   service_calls: { label: 'Service Calls', icon: ICONS.service_calls, href: '/servicecalls.html' },
   time_clock: { label: 'Time Clock', icon: ICONS.time_clock, href: '/timeclock.html' },
-  scheduling: { label: 'Scheduling', icon: ICONS.scheduling, href: '#', comingSoon: true },
+  scheduling: { label: 'Scheduling', icon: ICONS.scheduling, href: '/scheduling.html' },
 };
 
 // One tile renderer for every icon on this page — real apps, the
@@ -93,6 +93,11 @@ async function employeesReviewCount(person) {
   if (scEntry && scEntry.enabled) jobs.service_calls = safeCount('/api/servicecalls?status=open');
   const monEntry = access.find(a => a.app_key === 'monitoring');
   if (monEntry && monEntry.enabled) jobs.monitoring = safeCount('/api/monitoring/alerts?openOnly=true');
+  // Badge is pending-time-off-to-approve — only meaningful for a manager/
+  // owner who actually manages a schedule; safeCount already no-ops to 0
+  // on a 403/empty response for anyone else.
+  const schedEntry = access.find(a => a.app_key === 'scheduling');
+  if (schedEntry && schedEntry.enabled && isManagerOrOwner) jobs.scheduling = safeCount('/api/scheduling/time-off/to-approve');
   if (isManagerOrOwner) jobs.employees = employeesReviewCount(person);
 
   const counts = {};
