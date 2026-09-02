@@ -365,6 +365,27 @@ async function getWeekShifts(scheduleIds, weekStartISO) {
   });
 }
 
+async function getShiftsForPrint(scheduleIds, weekStartISO, numWeeks) {
+  // Published shifts only (no draft overlay) across `numWeeks` consecutive
+  // weeks starting at weekStartISO -- backs the Scheduler tab's Print dialog.
+  const ids = Array.isArray(scheduleIds) ? scheduleIds : [scheduleIds];
+  const n = Math.max(1, Math.min(3, Number(numWeeks) || 1));
+  const dates = Array.from({ length: n * 7 }, (_, i) => addDaysToDateStr(weekStartISO, i));
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query(
+      `SELECT sh.*, p.name AS person_name, s.name AS schedule_name, pos.name AS position_name
+       FROM shifts sh
+       JOIN people p ON p.id = sh.person_id
+       JOIN schedules s ON s.id = sh.schedule_id
+       JOIN positions pos ON pos.id = sh.position_id
+       WHERE sh.schedule_id = ANY($1) AND sh.status != 'cancelled' AND sh.shift_date = ANY($2)
+       ORDER BY sh.shift_date, sh.start_time`,
+      [ids, dates]
+    );
+    return rows;
+  });
+}
+
 async function getMyDrafts(personId) {
   return withServiceClient(async (client) => {
     const { rows } = await client.query('SELECT * FROM shift_drafts WHERE created_by = $1', [personId]);
@@ -827,7 +848,7 @@ module.exports = {
   listSchedules, listSchedulesPublic, saveSchedule, archiveSchedule, restoreSchedule,
   getEmployeesForScheduling, setEmployeeScheduleQualifications, setEmployeePositionQualifications, setManagerScheduleAssignments,
   getMyManageableScheduleIds, getSchedulingBootstrapData,
-  checkShiftConflicts, getWeekShifts, getWeekShiftsWithDrafts,
+  checkShiftConflicts, getWeekShifts, getWeekShiftsWithDrafts, getShiftsForPrint,
   getMyDrafts, getMyDraftSummary, saveDraftShift, draftCancelShift, discardMyDrafts,
   draftDuplicateShift, copyWeekForwardForEmployee, publishMyDrafts,
   getPendingTimeOffCountForManager, getTimeOffRequestsICanApprove, getAllTimeOffRequestsIManage,

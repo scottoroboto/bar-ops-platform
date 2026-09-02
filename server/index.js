@@ -843,6 +843,19 @@ app.get('/api/scheduling/week', auth.requireSession('light'), async (req, res) =
   res.json(await scheduling.getWeekShiftsWithDrafts(scheduleIds, req.query.weekStart, req.person.id));
 });
 
+// Print/multi-week view — published shifts only (no draft overlay), 1-3
+// weeks starting at weekStart, scoped to schedules this manager/owner
+// actually manages (same filtering as /week above).
+app.get('/api/scheduling/print', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  if (!req.query.weekStart) return res.status(400).json({ error: 'weekStart is required.' });
+  const requested = (req.query.scheduleIds || '').split(',').filter(Boolean);
+  const manageable = await scheduling.getMyManageableScheduleIds(req.person);
+  const scheduleIds = requested.length ? requested.filter((id) => manageable.includes(id)) : manageable;
+  if (!scheduleIds.length) return res.json([]);
+  res.json(await scheduling.getShiftsForPrint(scheduleIds, req.query.weekStart, req.query.weeks));
+});
+
 app.get('/api/scheduling/my-drafts/summary', auth.requireSession('light'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   res.json(await scheduling.getMyDraftSummary(req.person.id));
