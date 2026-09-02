@@ -9,6 +9,7 @@ const employees = require('./employees');
 const timeclock = require('./timeclock');
 const servicecalls = require('./servicecalls');
 const monitoring = require('./monitoring');
+const scheduling = require('./scheduling');
 const notify = require('./notify');
 const jotform = require('./jotform');
 const resetRequests = require('./resetRequests');
@@ -747,6 +748,198 @@ app.post('/api/monitoring/alert-routes/:id/remove', auth.requireSession('full'),
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   const result = await monitoring.removeAlertRoute(req.params.id);
   res.json(result);
+});
+
+// ---------------- Scheduling ----------------
+// Shift model: Schedule (roster/crew under a Location) x Position
+// (qualification) x Employee. Manager-scoped via manager_schedules (not
+// people.role) — the owner can manage every schedule regardless; a
+// manager only manages schedules they're explicitly assigned to. See
+// server/scheduling.js's header comment and db/patch_014 for the full
+// design writeup (ported from the old Google Apps Script "TSB Scheduling"
+// system, reviewed 2026-09-02).
+//
+// Self-service routes (my shifts, my availability, my time-off requests)
+// use the same isManagerOrOwner-bypass / employee_apps.scheduling-gate
+// pattern as Service Calls/Monitoring: a manager or owner always has
+// access as part of their role, anyone else needs Scheduling turned on
+// for their account.
+//
+// Schedule creation/rename/archive and the employee qualification-matrix
+// writes (which schedules/positions an employee is checked into, which
+// schedules a manager can manage) are owner-only here — those wholesale-
+// replace an employee's whole assignment set (see setEmployeeSchedule
+// Qualifications etc. in scheduling.js), and a manager saving with only
+// their own manageable schedules in view would silently wipe that
+// employee's assignments to schedules outside the manager's scope. Once
+// there's a real need for delegated qualification-matrix editing this
+// will need scoped merge logic, not a wider role check.
+async function requireSelfServiceSchedulingAccess(req, res) {
+  const isManagerOrOwner = req.person.role === 'manager' || req.person.role === 'owner';
+  if (isManagerOrOwner) return true;
+  const hasAccess = await scheduling.requireSchedulingAccess(req.person.id);
+  if (!hasAccess) {
+    res.status(403).json({ error: 'Scheduling isn’t turned on for your account yet — ask your manager.', ok: false });
+    return false;
+  }
+  return true;
+}
+
+// Manager/owner scheduler bootstrap — schedules they manage (or every
+// schedule, for the owner), the full employee roster with qualification
+// matrices, and their pending-time-off count for the tile badge.
+app.get('/api/scheduling/bootstrap', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.getSchedulingBootstrapData(req.person));
+});
+
+// ---- Schedules (admin) ----
+app.get('/api/scheduling/schedules/admin', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.listSchedules());
+});
+app.post('/api/scheduling/schedules', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can add or rename a schedule.' });
+  res.json(await scheduling.saveSchedule({ id: req.body.id, locationId: req.body.locationId, name: req.body.name }));
+});
+app.post('/api/scheduling/schedules/:id/archive', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can archive a schedule.' });
+  res.json(await scheduling.archiveSchedule(req.params.id));
+});
+app.post('/api/scheduling/schedules/:id/restore', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can restore a schedule.' });
+  res.json(await scheduling.restoreSchedule(req.params.id));
+});
+
+// ---- Employee qualification matrix (admin) ----
+app.get('/api/scheduling/employees', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.getEmployeesForScheduling());
+});
+app.post('/api/scheduling/employees/:id/schedules', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change which schedules an employee is checked into.' });
+  res.json(await scheduling.setEmployeeScheduleQualifications(req.params.id, req.body.scheduleIds));
+});
+app.post('/api/scheduling/employees/:id/positions', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change an employee’s scheduling positions.' });
+  res.json(await scheduling.setEmployeePositionQualifications(req.params.id, req.body.positionIds));
+});
+app.post('/api/scheduling/employees/:id/managed-schedules', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change which schedules a manager oversees.' });
+  res.json(await scheduling.setManagerScheduleAssignments(req.params.id, req.body.scheduleIds));
+});
+
+// ---- Scheduler (manager/owner) — live shifts + this manager's own draft
+// overlay, scoped to schedules they actually manage (the owner sees any
+// requested schedule; a manager's request is filtered down to their own
+// manageable set, silently dropping anything else). ----
+app.get('/api/scheduling/week', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  if (!req.query.weekStart) return res.status(400).json({ error: 'weekStart is required.' });
+  const requested = (req.query.scheduleIds || '').split(',').filter(Boolean);
+  const manageable = await scheduling.getMyManageableScheduleIds(req.person);
+  const scheduleIds = requested.length ? requested.filter((id) => manageable.includes(id)) : manageable;
+  if (!scheduleIds.length) return res.json([]);
+  res.json(await scheduling.getWeekShiftsWithDrafts(scheduleIds, req.query.weekStart, req.person.id));
+});
+
+app.get('/api/scheduling/my-drafts/summary', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.getMyDraftSummary(req.person.id));
+});
+
+app.post('/api/scheduling/drafts', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const manageable = await scheduling.getMyManageableScheduleIds(req.person);
+  if (!manageable.includes(req.body.scheduleId)) return res.status(403).json({ ok: false, error: 'You don’t manage that schedule.' });
+  res.json(await scheduling.saveDraftShift(req.body, req.person.id));
+});
+app.post('/api/scheduling/drafts/cancel', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.draftCancelShift(req.body, req.person.id));
+});
+app.post('/api/scheduling/drafts/discard', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.discardMyDrafts(req.person.id));
+});
+app.post('/api/scheduling/drafts/duplicate', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const manageable = await scheduling.getMyManageableScheduleIds(req.person);
+  if (!manageable.includes(req.body.scheduleId)) return res.status(403).json({ ok: false, error: 'You don’t manage that schedule.' });
+  res.json(await scheduling.draftDuplicateShift(req.body, req.body.targetDates || [], req.person.id));
+});
+
+// "Copy this week forward" — per employee (Scotto's explicit call, not a
+// whole-Schedule bulk copy — see scheduling.js's copyWeekForwardForEmployee).
+app.post('/api/scheduling/copy-week-forward', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  if (!req.body.personId || !req.body.weekStart) return res.status(400).json({ ok: false, error: 'personId and weekStart are required.' });
+  res.json(await scheduling.copyWeekForwardForEmployee({ personId: req.body.personId, weekStartISO: req.body.weekStart, createdBy: req.person.id }));
+});
+
+// Publish — validates this manager's entire draft batch, applies it if
+// clean, and notifies affected employees (email + SMS). Gated the same
+// as every other sensitive write (requireSession('full')); per Scotto,
+// no extra step-up prompt on top of that — the client just shows a plain
+// "Are you sure?" confirm before calling this.
+app.post('/api/scheduling/publish', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.publishMyDrafts(req.body.overrideReasons || {}, req.person.id));
+});
+
+// ---- Time off ----
+app.get('/api/scheduling/time-off/pending-count', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json({ count: await scheduling.getPendingTimeOffCountForManager(req.person) });
+});
+app.get('/api/scheduling/time-off/to-approve', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.getTimeOffRequestsICanApprove(req.person));
+});
+app.get('/api/scheduling/time-off/all', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.getAllTimeOffRequestsIManage(req.person));
+});
+app.post('/api/scheduling/time-off/:id/decide', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const decision = req.body.approve ? 'approved' : 'denied';
+  res.json(await scheduling.decideTimeOffRequest(req.params.id, decision, req.person));
+});
+
+// Self-service — any employee with Scheduling turned on (managers/owners
+// always allowed, same as everywhere else in this app).
+app.get('/api/scheduling/time-off/mine', auth.requireSession('light'), async (req, res) => {
+  if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
+  res.json(await scheduling.getMyTimeOffRequests(req.person.id));
+});
+app.post('/api/scheduling/time-off', auth.requireSession('light'), async (req, res) => {
+  if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
+  res.json(await scheduling.submitTimeOffRequest(req.person, req.body));
+});
+
+// ---- Availability (pure self-service) ----
+app.get('/api/scheduling/availability/mine', auth.requireSession('light'), async (req, res) => {
+  if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
+  res.json(await scheduling.getMyAvailability(req.person.id));
+});
+app.post('/api/scheduling/availability', auth.requireSession('light'), async (req, res) => {
+  if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
+  res.json(await scheduling.saveMyAvailabilityRow(req.body, req.person.id));
+});
+app.post('/api/scheduling/availability/:id/delete', auth.requireSession('light'), async (req, res) => {
+  if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
+  res.json(await scheduling.deleteMyAvailabilityRow(req.params.id, req.person.id));
+});
+
+// ---- Employee portal: my shifts ----
+app.get('/api/scheduling/my-shifts', auth.requireSession('light'), async (req, res) => {
+  if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
+  if (!req.query.weekStart) return res.status(400).json({ error: 'weekStart is required.' });
+  res.json(await scheduling.getMyAllShiftsForWeek(req.person.id, req.query.weekStart));
+});
+app.get('/api/scheduling/my-shifts/upcoming', auth.requireSession('light'), async (req, res) => {
+  if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
+  res.json(await scheduling.getEmployeeUpcomingShifts(req.person.id));
 });
 
 const PORT = process.env.PORT || 3001;
