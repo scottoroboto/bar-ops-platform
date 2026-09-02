@@ -55,10 +55,27 @@ async function api(path, opts = {}) {
   const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
   const token = getToken();
   if (token) headers.Authorization = 'Bearer ' + token;
-  const res = await fetch(path, Object.assign({}, opts, {
-    headers,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-  }));
+  // Hard client-side timeout. Without this, a stuck request (a slow-to-wake
+  // free-tier server, a dropped mobile connection) just leaves the caller's
+  // "Sending…" state spinning forever with no error to react to — on iOS in
+  // particular, a hung fetch sometimes never rejects on its own. 45s is
+  // generous enough to cover a cold-start wake-up, short enough that a
+  // truly stuck request doesn't look "frozen" for minutes.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  let res;
+  try {
+    res = await fetch(path, Object.assign({}, opts, {
+      headers,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      signal: controller.signal,
+    }));
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('That took too long to respond. The server may be waking up — please try again.');
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
   let data = null;
   try { data = await res.json(); } catch (e) { /* non-JSON error page */ }
 
