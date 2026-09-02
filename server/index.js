@@ -296,6 +296,44 @@ locationName: rows[0].location_name,
 });
 });
 
+// ---------------- Venue Control — per-site enable/disable (owner-only) ----------------
+// This is separate from the device-trust check above: that gate controls
+// WHO can even open the Venue Control ("TV") page/tile. This controls
+// WHICH locations have Venue Control turned on at all — e.g. Ticket 3,
+// which stays inactive platform-wide (locations.active = false) but can
+// still be individually turned on here per Scotto's request. One vc_sites
+// row per location (see db/patch_017_venue_control_use_locations.sql);
+// a location with no row yet just hasn't been added to Venue Control.
+// Owner-only regardless of device trust — this is setup/config, not
+// day-to-day TV control, so a trusted shared iPad should not be able to
+// flip it.
+app.get('/api/venue-control/sites', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT l.id AS location_id, l.name AS location_name, l.active AS location_active,
+        vs.id AS site_id, vs.enabled AS site_enabled
+   FROM locations l
+   LEFT JOIN vc_sites vs ON vs.location_id = l.id
+   ORDER BY l.name`
+));
+res.json(rows);
+});
+
+app.post('/api/venue-control/sites/:locationId/set-enabled', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const enabled = !!req.body.enabled;
+const site = await withServiceClient(async (client) => {
+const { rows } = await client.query(
+`INSERT INTO vc_sites (location_id, enabled) VALUES ($1, $2)
+   ON CONFLICT (location_id) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = now()
+   RETURNING id, location_id, enabled`,
+[req.params.locationId, enabled]
+);
+return rows[0];
+});
+res.json({ ok: true, site });
+});
+
 // ---------------- Employees (owner/manager) ----------------
 app.get('/api/employees/pending', auth.requireSession('light'), async (req, res) => {
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
