@@ -66,7 +66,13 @@ async function sendEmail(client, relatedTable, relatedId, to, subject, text) {
     const message = err.name === 'AbortError' ? 'Timed out reaching Resend (15s).' : String(err.message || err);
     console.log(`[notify][email] FAILED to=${to}: ${message}`);
     await logNotification(client, relatedTable, relatedId, 'email', to, 'failed', message);
-    return { ok: false, error: new Error(message) };
+    // A plain string, not an Error object: this return value gets JSON-
+    // serialized straight back to the client in some callers (e.g. the
+    // onboarding-invite route). Error objects serialize to "{}" (their
+    // message isn't an own enumerable property), which the client then
+    // wraps in `new Error({})` — producing the literal text "[object
+    // Object]" instead of a real message. Learned this the hard way.
+    return { ok: false, error: message };
   }
 }
 
@@ -82,8 +88,9 @@ async function sendSms(client, relatedTable, relatedId, to, body) {
     await logNotification(client, relatedTable, relatedId, 'sms', to, 'sent', body);
     return { ok: true };
   } catch (err) {
-    await logNotification(client, relatedTable, relatedId, 'sms', to, 'failed', String(err.message || err));
-    return { ok: false, error: err };
+    const message = String(err.message || err);
+    await logNotification(client, relatedTable, relatedId, 'sms', to, 'failed', message);
+    return { ok: false, error: message };
   }
 }
 
