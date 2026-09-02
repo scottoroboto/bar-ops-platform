@@ -50,27 +50,6 @@
     <div id="employeeList"><p class="muted">Loading…</p></div>
   </div>
 
-  <div class="card" id="positionsCard" style="display:none;">
-    <h2>Positions</h2>
-    <p class="muted">Options offered on the apply page and during employee review. Archiving a position just removes it from future dropdowns — it doesn't touch anyone's existing records.</p>
-    <div id="positionsList"><p class="muted">Loading…</p></div>
-    <label for="newPositionName">Add a position</label>
-    <input id="newPositionName" placeholder="e.g. Bartender">
-    <label class="toggle-row" style="gap:8px;"><span class="label">Management position (hidden from the public apply page)</span>
-      <span class="switch"><input type="checkbox" id="newPositionManagement"><span class="slider"></span></span>
-    </label>
-    <button class="secondary" onclick="addPosition()">Add position</button>
-  </div>
-
-  <div class="card" id="locationsCard" style="display:none;">
-    <h2>Locations</h2>
-    <p class="muted">Only the owner can add, rename, or archive locations.</p>
-    <div id="locationsList"><p class="muted">Loading…</p></div>
-    <label for="newLocationName">Add a location</label>
-    <input id="newLocationName" placeholder="e.g. Ticket 4">
-    <button class="secondary" onclick="addLocation()">Add location</button>
-  </div>
-
   <div class="card">
     <h2>Shared device</h2>
     <p class="muted">Trust the iPad behind the bar once — after that, staff just sign in on it with their own username + PIN.</p>
@@ -122,21 +101,27 @@
   <div id="activateResult"></div>
 </div>
 
-<!-- Employee detail / edit modal (owner only) -->
+<!-- Employee detail modal — contact info for everyone who can click a row
+     (owner + manager); position/location/pay rate are shown read-only to a
+     manager and only become editable selects (with a Save button) for the
+     owner, since /api/employees/:id/update stays owner-only server-side. -->
 <div class="card" id="employeeDetailModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:8%; z-index:20; max-height:84vh; overflow-y:auto;">
   <h2 id="detailName">Employee</h2>
   <p class="muted" id="detailMeta"></p>
   <input type="hidden" id="detailPersonId">
   <div id="detailContact" class="muted" style="margin-bottom:14px; line-height:1.6;"></div>
-  <label for="detailPosition">Position</label>
-  <select id="detailPosition"></select>
-  <label for="detailLocation">Location</label>
-  <select id="detailLocation"></select>
-  <label for="detailPayRate">Pay rate ($/hr)</label>
-  <input id="detailPayRate" type="number" step="0.01">
+  <div id="detailReadOnly" class="muted" style="margin-bottom:14px; line-height:1.6; display:none;"></div>
+  <div id="detailEditFields">
+    <label for="detailPosition">Position</label>
+    <select id="detailPosition"></select>
+    <label for="detailLocation">Location</label>
+    <select id="detailLocation"></select>
+    <label for="detailPayRate">Pay rate ($/hr)</label>
+    <input id="detailPayRate" type="number" step="0.01">
+  </div>
   <div class="stack-actions">
-    <button class="ghost" onclick="closeEmployeeDetail()">Cancel</button>
-    <button class="primary" style="margin-top:0;" onclick="saveEmployeeDetail()">Save changes</button>
+    <button class="ghost" onclick="closeEmployeeDetail()">Close</button>
+    <button class="primary" style="margin-top:0;" id="detailSaveBtn" onclick="saveEmployeeDetail()">Save changes</button>
   </div>
   <div id="detailResult"></div>
 </div>

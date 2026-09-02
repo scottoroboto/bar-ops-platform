@@ -122,14 +122,14 @@ function renderAllEmployees() {
   el.innerHTML = ALL_EMPLOYEES.map(p => `
     <div class="list-row" style="flex-direction:column; align-items:stretch;">
       <div style="display:flex; justify-content:space-between;">
-        <div${ME.role === 'owner' ? ` class="clickable" onclick="openEmployeeDetail('${p.id}')" style="cursor:pointer;"` : ''}>
+        <div class="clickable" onclick="openEmployeeDetail('${p.id}')" style="cursor:pointer;">
           <div class="name">${escapeHtml(p.name)} <span class="badge ${p.status === 'active' ? 'on' : 'off'}">${escapeHtml(p.status)}</span></div>
           <div class="sub">${escapeHtml(p.role)} · ${escapeHtml(p.position || '—')} · ${escapeHtml(locationName(p.location_id))}${p.pay_rate ? ' · $' + p.pay_rate + '/hr' : ''}</div>
         </div>
         ${ME.role === 'manager' ? `<button class="small ghost" style="margin-top:0;" onclick="openRequestRaiseModal('${p.id}')">Request raise</button>` : ''}
       </div>
       ${ME.role === 'owner' ? `
-      <div style="margin-top:8px; display:flex; gap:18px; flex-wrap:wrap;">
+      <div class="toggle-grid-2col">
         ${appToggleHtml(p, 'time_clock', 'Time Clock')}
         ${appToggleHtml(p, 'service_calls', 'Service Calls')}
         ${appToggleHtml(p, 'scheduling', 'Scheduling')}
@@ -139,10 +139,14 @@ function renderAllEmployees() {
   `).join('');
 }
 
+// 2-up grid, label centered underneath the switch rather than beside it —
+// scanning ~50 employees' access columns is easier this way than a
+// flex-wrapped row of label+switch pairs.
 function appToggleHtml(person, key, label) {
   const on = !!(person.appAccess && person.appAccess[key]);
-  return `<label class="toggle-row" style="gap:8px;"><span class="label">${label}</span>
+  return `<label class="toggle-col">
     <span class="switch"><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleAccess('${person.id}','${key}',this.checked)"><span class="slider"></span></span>
+    <span class="label">${label}</span>
   </label>`;
 }
 
@@ -232,16 +236,22 @@ async function submitActivate() {
   }
 }
 
-// ---- Employee detail / edit modal (owner only) ----
+// ---- Employee detail modal ----
 // Contact info here is the same email/phone the "all employees" list
 // already fetches for every person (server/employees.js's
 // listAllWithAccess) — this just surfaces it, rather than pulling
 // anything new or more sensitive. Nothing genuinely secure (password/PIN
 // hashes, SSN, banking) is ever sent to the client at all; that stays in
 // Jotform (see JOTFORM_HIRE_PACK_URL) or hashed server-side only.
+//
+// Owner gets the full editable form (position/location/pay rate + Save).
+// A manager gets contact info plus those same three fields read-only —
+// /api/employees/:id/update stays owner-only server-side, so there's no
+// point offering controls that would just 403 on save.
 function openEmployeeDetail(id) {
   const p = ALL_EMPLOYEES.find(p => p.id === id);
   if (!p) return;
+  const isOwner = ME.role === 'owner';
   document.getElementById('detailPersonId').value = p.id;
   document.getElementById('detailName').textContent = p.name;
   document.getElementById('detailMeta').textContent = `${p.role} · ${p.status}${p.username ? ' · @' + p.username : ''}`;
@@ -250,10 +260,22 @@ function openEmployeeDetail(id) {
     <div>Phone: ${p.phone ? escapeHtml(p.phone) : '<span class="muted">not on file</span>'}</div>
     <div>Hired: ${p.activated_at ? fmtDateTime(p.activated_at) : '<span class="muted">—</span>'}</div>
   `;
-  fillPositionSelect(document.getElementById('detailPosition'), p.position || '');
-  fillLocationSelect(document.getElementById('detailLocation'));
-  if (p.location_id) document.getElementById('detailLocation').value = p.location_id;
-  document.getElementById('detailPayRate').value = p.pay_rate || '';
+  document.getElementById('detailEditFields').style.display = isOwner ? '' : 'none';
+  document.getElementById('detailSaveBtn').style.display = isOwner ? '' : 'none';
+  const readOnlyEl = document.getElementById('detailReadOnly');
+  if (isOwner) {
+    readOnlyEl.style.display = 'none';
+    fillPositionSelect(document.getElementById('detailPosition'), p.position || '');
+    fillLocationSelect(document.getElementById('detailLocation'));
+    if (p.location_id) document.getElementById('detailLocation').value = p.location_id;
+    document.getElementById('detailPayRate').value = p.pay_rate || '';
+  } else {
+    readOnlyEl.style.display = '';
+    readOnlyEl.innerHTML = `
+      <div>Position: ${p.position ? escapeHtml(p.position) : '<span class="muted">—</span>'}</div>
+      <div>Location: ${escapeHtml(locationName(p.location_id))}</div>
+    `;
+  }
   document.getElementById('detailResult').innerHTML = '';
   document.getElementById('employeeDetailModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
@@ -442,207 +464,6 @@ async function decideResetRequest(id, approve) {
 
 function closeAllModals() { closeReviewModal(); closeActivateModal(); closeEmployeeDetail(); closeRequestRaiseModal(); }
 
-// ---- Positions admin (manager + owner can add; delete is really "archive") ----
-let POSITIONS_ADMIN = [];
-let editingPositionId = null;
-
-async function loadPositionsAdmin() {
-  if (ME.role !== 'manager' && ME.role !== 'owner') return;
-  document.getElementById('positionsCard').style.display = '';
-  try {
-    POSITIONS_ADMIN = await api('/api/positions/admin');
-    // Also feeds fillPositionSelect() (the Review employee dropdown) — no
-    // separate fetch needed, just the active subset of what we just got.
-    POSITIONS = POSITIONS_ADMIN.filter(p => p.active);
-    renderPositionsList();
-  } catch (e) {
-    document.getElementById('positionsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
-  }
-}
-
-function renderPositionsList() {
-  const el = document.getElementById('positionsList');
-  if (!POSITIONS_ADMIN.length) { el.innerHTML = '<p class="muted">No positions yet.</p>'; return; }
-  el.innerHTML = POSITIONS_ADMIN.map(p => {
-    if (p.id === editingPositionId) {
-      return `
-        <div class="list-row" style="flex-direction:column; align-items:stretch;">
-          <input id="editPositionName" value="${escapeHtml(p.name)}">
-          <label class="toggle-row" style="gap:8px;"><span class="label">Management position</span>
-            <span class="switch"><input type="checkbox" id="editPositionManagement" ${p.is_management ? 'checked' : ''}><span class="slider"></span></span>
-          </label>
-          <div class="stack-actions">
-            <button class="ghost small" onclick="cancelEditPosition()">Cancel</button>
-            <button class="primary small" style="margin-top:0;" onclick="saveEditPosition('${p.id}')">Save</button>
-          </div>
-        </div>`;
-    }
-    return `
-      <div class="list-row">
-        <div class="name">${escapeHtml(p.name)} ${p.is_management ? '<span class="badge off">management</span>' : ''} <span class="badge ${p.active ? 'on' : 'off'}">${p.active ? 'active' : 'archived'}</span></div>
-        <div class="stack-actions" style="margin-top:0;">
-          <button class="small ghost" onclick="startEditPosition('${p.id}')">Edit</button>
-          ${p.active
-            ? `<button class="small ghost" onclick="archivePosition('${p.id}')">Archive</button>`
-            : `<button class="small secondary" style="margin-top:0;" onclick="restorePosition('${p.id}')">Restore</button>`}
-        </div>
-      </div>`;
-  }).join('');
-}
-
-function startEditPosition(id) { editingPositionId = id; renderPositionsList(); }
-function cancelEditPosition() { editingPositionId = null; renderPositionsList(); }
-
-async function refreshPositions() {
-  await loadPositionsAdmin();
-  POSITIONS = await api('/api/positions');
-}
-
-async function saveEditPosition(id) {
-  const name = document.getElementById('editPositionName').value.trim();
-  const isManagement = document.getElementById('editPositionManagement').checked;
-  if (!name) { showMsg('Position name is required.', 'error'); return; }
-  try {
-    await withStepUp(() => api(`/api/positions/${id}/update`, { method: 'POST', body: { name, isManagement } }));
-    editingPositionId = null;
-    showMsg('Position updated.', 'success');
-    await refreshPositions();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-async function archivePosition(id) {
-  try {
-    await withStepUp(() => api(`/api/positions/${id}/archive`, { method: 'POST' }));
-    showMsg('Position archived.', 'success');
-    await refreshPositions();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-async function restorePosition(id) {
-  try {
-    await withStepUp(() => api(`/api/positions/${id}/restore`, { method: 'POST' }));
-    showMsg('Position restored.', 'success');
-    await refreshPositions();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-async function addPosition() {
-  const name = document.getElementById('newPositionName').value.trim();
-  const isManagement = document.getElementById('newPositionManagement').checked;
-  if (!name) { showMsg('Position name is required.', 'error'); return; }
-  try {
-    await withStepUp(() => api('/api/positions', { method: 'POST', body: { name, isManagement } }));
-    document.getElementById('newPositionName').value = '';
-    document.getElementById('newPositionManagement').checked = false;
-    showMsg('Position added.', 'success');
-    await refreshPositions();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-// ---- Locations admin (owner only) ----
-let LOCATIONS_ADMIN = [];
-let editingLocationId = null;
-
-async function loadLocationsAdmin() {
-  if (ME.role !== 'owner') return;
-  document.getElementById('locationsCard').style.display = '';
-  try {
-    LOCATIONS_ADMIN = await api('/api/locations/admin');
-    renderLocationsList();
-  } catch (e) {
-    document.getElementById('locationsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
-  }
-}
-
-function renderLocationsList() {
-  const el = document.getElementById('locationsList');
-  if (!LOCATIONS_ADMIN.length) { el.innerHTML = '<p class="muted">No locations yet.</p>'; return; }
-  el.innerHTML = LOCATIONS_ADMIN.map(l => {
-    if (l.id === editingLocationId) {
-      return `
-        <div class="list-row" style="flex-direction:column; align-items:stretch;">
-          <input id="editLocationName" value="${escapeHtml(l.name)}">
-          <div class="stack-actions">
-            <button class="ghost small" onclick="cancelEditLocation()">Cancel</button>
-            <button class="primary small" style="margin-top:0;" onclick="saveEditLocation('${l.id}')">Save</button>
-          </div>
-        </div>`;
-    }
-    return `
-      <div class="list-row">
-        <div class="name">${escapeHtml(l.name)} <span class="badge ${l.active ? 'on' : 'off'}">${l.active ? 'active' : 'archived'}</span></div>
-        <div class="stack-actions" style="margin-top:0;">
-          <button class="small ghost" onclick="startEditLocation('${l.id}')">Edit</button>
-          ${l.active
-            ? `<button class="small ghost" onclick="archiveLocation('${l.id}')">Archive</button>`
-            : `<button class="small secondary" style="margin-top:0;" onclick="restoreLocation('${l.id}')">Restore</button>`}
-        </div>
-      </div>`;
-  }).join('');
-}
-
-function startEditLocation(id) { editingLocationId = id; renderLocationsList(); }
-function cancelEditLocation() { editingLocationId = null; renderLocationsList(); }
-
-async function refreshLocations() {
-  await loadLocationsAdmin();
-  LOCATIONS = await api('/api/locations');
-}
-
-async function saveEditLocation(id) {
-  const name = document.getElementById('editLocationName').value.trim();
-  if (!name) { showMsg('Location name is required.', 'error'); return; }
-  try {
-    await withStepUp(() => api(`/api/locations/${id}/update`, { method: 'POST', body: { name } }));
-    editingLocationId = null;
-    showMsg('Location updated.', 'success');
-    await refreshLocations();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-async function archiveLocation(id) {
-  try {
-    await withStepUp(() => api(`/api/locations/${id}/archive`, { method: 'POST' }));
-    showMsg('Location archived.', 'success');
-    await refreshLocations();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-async function restoreLocation(id) {
-  try {
-    await withStepUp(() => api(`/api/locations/${id}/restore`, { method: 'POST' }));
-    showMsg('Location restored.', 'success');
-    await refreshLocations();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-async function addLocation() {
-  const name = document.getElementById('newLocationName').value.trim();
-  if (!name) { showMsg('Location name is required.', 'error'); return; }
-  try {
-    await withStepUp(() => api('/api/locations', { method: 'POST', body: { name } }));
-    document.getElementById('newLocationName').value = '';
-    showMsg('Location added.', 'success');
-    await refreshLocations();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
 // ---- Shared device trust ----
 async function trustThisDevice() {
   const label = document.getElementById('deviceLabel').value.trim() || 'Shared device';
@@ -665,16 +486,15 @@ async function trustThisDevice() {
   try {
     LOCATIONS = await api('/api/locations');
     fillLocationSelect(document.getElementById('deviceLocation'));
+    // Positions and Locations admin moved to their own page (Apps Home >
+    // Positions) — this page only needs the active-position list to feed
+    // the Review/Detail dropdowns (fillPositionSelect).
+    POSITIONS = await api('/api/positions');
     await loadPending();
     await loadAllEmployees();
-    await loadLocationsAdmin();
   } catch (e) {
     showMsg(e.message, 'error');
   }
-  // Positions is a newer, separate table — loadPositionsAdmin() has its own
-  // try/catch and shows its card regardless, so if this table hasn't been
-  // migrated in yet, the rest of the page above still works normally.
-  await loadPositionsAdmin();
   // Same resilience for pay rate requests — its own try/catch, owner-only.
   await loadPayRateRequests();
   // Same again for reset requests — its own try/catch, owner-only, and a

@@ -186,6 +186,25 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
 .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; }
 .toggle-row .label { font-size: 14px; }
 
+/* 2-up app-access grid (Employees page) — switch on top, label centered
+   underneath, so a manager scanning ~50 employees can read the column of
+   toggles straight down instead of hunting through a wrapped row of
+   label+switch pairs. */
+.toggle-grid-2col {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 10px;
+}
+.toggle-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+}
+.toggle-col .label { font-size: 12px; text-align: center; color: var(--muted); }
+
 .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .switch .slider {
