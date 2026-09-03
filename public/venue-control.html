@@ -60,6 +60,8 @@
     </select>
     <label for="newSourceIp">IP address</label>
     <input id="newSourceIp" placeholder="e.g. 192.168.1.90">
+    <label for="newSourcePort">Port (optional — defaults to 8080 for directv, 8060 for roku)</label>
+    <input id="newSourcePort" type="number" placeholder="e.g. 8080">
     <label for="newSourceReceiverId">Receiver ID (optional)</label>
     <input id="newSourceReceiverId" placeholder="e.g. 0368 0879 2810">
     <label for="newSourceCard">Access card # (optional)</label>
@@ -132,7 +134,7 @@
 
   <div class="card" id="schedulesCard" style="display:none;">
     <h2>Schedules</h2>
-    <p class="muted">Fire automatically in this location's own timezone, evaluated on the agent box — e.g. all TVs on at 10:45, all off at 1:30 AM. Whole-room layout schedules aren't runnable yet (Phase 5); they can be created but won't do anything when they fire.</p>
+    <p class="muted">Fire automatically in this location's own timezone, evaluated on the agent box — e.g. all TVs on at 10:45, all off at 1:30 AM.</p>
     <div id="schedulesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
 
     <label for="newSchedName">Add a schedule — name</label>
@@ -143,6 +145,7 @@
     <select id="newSchedAction" onchange="onSchedActionChange()">
       <option value="tvs_power">tvs_power — turn TVs on/off</option>
       <option value="source_tune">source_tune — retune a receiver</option>
+      <option value="source_launch">source_launch — launch a Roku app</option>
       <option value="apply_layout">apply_layout — apply a whole-room preset</option>
     </select>
     <div id="schedPayloadTvsPower">
@@ -157,6 +160,12 @@
       <label for="newSchedMajor">Channel</label>
       <input id="newSchedMajor" type="number" placeholder="major, e.g. 206">
       <input id="newSchedMinor" type="number" placeholder="minor (optional)" style="margin-top:8px;">
+    </div>
+    <div id="schedPayloadSourceLaunch" style="display:none;">
+      <label for="newSchedLaunchSlot">Roku source slot</label>
+      <input id="newSchedLaunchSlot" type="number" placeholder="e.g. 20">
+      <label for="newSchedAppId">App ID</label>
+      <input id="newSchedAppId" placeholder="e.g. 12 (find it on the agent's Sources tab -> Apps…)">
     </div>
     <div id="schedPayloadApplyLayout" style="display:none;">
       <label for="newSchedLayout">Layout</label>

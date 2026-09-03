@@ -222,6 +222,7 @@ function renderSourcesList() {
             ${['directv', 'roku', 'static', 'spare'].map((k) => `<option value="${k}" ${s.kind === k ? 'selected' : ''}>${k}</option>`).join('')}
           </select>
           <input id="editSourceIp" value="${escapeHtml(s.ip || '')}" placeholder="IP address" style="margin-top:8px;">
+          <input id="editSourcePort" type="number" value="${s.port || ''}" placeholder="Port (8080 directv / 8060 roku)" style="margin-top:8px;">
           <input id="editSourceReceiverId" value="${escapeHtml(s.receiver_id || '')}" placeholder="Receiver ID" style="margin-top:8px;">
           <input id="editSourceCard" value="${escapeHtml(s.access_card_id || '')}" placeholder="Access card #" style="margin-top:8px;">
           <div class="stack-actions">
@@ -233,7 +234,7 @@ function renderSourcesList() {
     return `
       <div class="list-row">
         <div class="name">${escapeHtml(s.label)} <span class="badge ${s.enabled ? 'on' : 'off'}">${s.enabled ? 'active' : 'archived'}</span>
-          <div class="sub">slot ${s.slot} · ${escapeHtml(s.qam_channel)} · ${escapeHtml(s.kind)}${s.ip ? ' · ' + escapeHtml(s.ip) : ''}</div>
+          <div class="sub">slot ${s.slot} · ${escapeHtml(s.qam_channel)} · ${escapeHtml(s.kind)}${s.ip ? ' · ' + escapeHtml(s.ip) + ':' + escapeHtml(String(s.port || '')) : ''}</div>
         </div>
         <div class="stack-actions" style="margin-top:0;">
           <button class="small ghost" onclick="startEditSource('${s.id}')">Edit</button>
@@ -254,13 +255,14 @@ async function saveEditSource(id) {
   const label = document.getElementById('editSourceLabel').value.trim();
   const kind = document.getElementById('editSourceKind').value;
   const ip = document.getElementById('editSourceIp').value.trim();
+  const port = Number(document.getElementById('editSourcePort').value) || null;
   const receiverId = document.getElementById('editSourceReceiverId').value.trim();
   const accessCardId = document.getElementById('editSourceCard').value.trim();
   if (!slot || !qamChannel || !label) { showSourceMsg('Slot, QAM channel, and label are required.', 'error'); return; }
   try {
     await withStepUp(() => api(`/api/venue-control/sources/${id}/update`, {
       method: 'POST',
-      body: { slot, qamChannel, label, kind, ip: ip || null, receiverId: receiverId || null, accessCardId: accessCardId || null },
+      body: { slot, qamChannel, label, kind, ip: ip || null, port, receiverId: receiverId || null, accessCardId: accessCardId || null },
     }));
     editingSourceId = null;
     showSourceMsg('Source updated.', 'success');
@@ -297,6 +299,7 @@ async function addSource() {
   const label = document.getElementById('newSourceLabel').value.trim();
   const kind = document.getElementById('newSourceKind').value;
   const ip = document.getElementById('newSourceIp').value.trim();
+  const port = Number(document.getElementById('newSourcePort').value) || null;
   const receiverId = document.getElementById('newSourceReceiverId').value.trim();
   const accessCardId = document.getElementById('newSourceCard').value.trim();
   if (!locationId) { showSourceMsg('Turn Venue Control on for a location first.', 'error'); return; }
@@ -304,12 +307,13 @@ async function addSource() {
   try {
     await withStepUp(() => api(`/api/venue-control/sites/${locationId}/sources`, {
       method: 'POST',
-      body: { slot, qamChannel, label, kind, ip: ip || null, receiverId: receiverId || null, accessCardId: accessCardId || null },
+      body: { slot, qamChannel, label, kind, ip: ip || null, port, receiverId: receiverId || null, accessCardId: accessCardId || null },
     }));
     document.getElementById('newSourceSlot').value = '';
     document.getElementById('newSourceQam').value = '';
     document.getElementById('newSourceLabel').value = '';
     document.getElementById('newSourceIp').value = '';
+    document.getElementById('newSourcePort').value = '';
     document.getElementById('newSourceReceiverId').value = '';
     document.getElementById('newSourceCard').value = '';
     showSourceMsg('Source added.', 'success');
@@ -704,6 +708,7 @@ function onSchedActionChange() {
   const action = document.getElementById('newSchedAction').value;
   document.getElementById('schedPayloadTvsPower').style.display = action === 'tvs_power' ? '' : 'none';
   document.getElementById('schedPayloadSourceTune').style.display = action === 'source_tune' ? '' : 'none';
+  document.getElementById('schedPayloadSourceLaunch').style.display = action === 'source_launch' ? '' : 'none';
   document.getElementById('schedPayloadApplyLayout').style.display = action === 'apply_layout' ? '' : 'none';
 }
 
@@ -724,6 +729,7 @@ function layoutName(layoutId) {
 function describeSchedulePayload(s) {
   if (s.action_type === 'tvs_power') return `${s.payload.state} · ${s.payload.zone_id ? zoneName(s.payload.zone_id) : 'all zones'}`;
   if (s.action_type === 'source_tune') return `slot ${s.payload.slot} &rarr; ${s.payload.major}${s.payload.minor != null ? '.' + s.payload.minor : ''}`;
+  if (s.action_type === 'source_launch') return `slot ${s.payload.slot} &rarr; app ${escapeHtml(String(s.payload.app_id))}`;
   if (s.action_type === 'apply_layout') return s.payload.layout_id != null ? `apply "${escapeHtml(layoutName(s.payload.layout_id))}"` : 'no layout set';
   return s.action_type;
 }
@@ -783,6 +789,11 @@ async function addSchedule() {
     const minorRaw = document.getElementById('newSchedMinor').value;
     if (!slot || !major) { showSchedMsg('Slot and channel are required for source_tune.', 'error'); return; }
     payload = { slot, major, minor: minorRaw ? Number(minorRaw) : null };
+  } else if (actionType === 'source_launch') {
+    const slot = Number(document.getElementById('newSchedLaunchSlot').value);
+    const appId = document.getElementById('newSchedAppId').value.trim();
+    if (!slot || !appId) { showSchedMsg('Slot and app ID are required for source_launch.', 'error'); return; }
+    payload = { slot, app_id: appId };
   } else if (actionType === 'apply_layout') {
     const layoutId = document.getElementById('newSchedLayout').value;
     if (!layoutId) { showSchedMsg('Add a layout first.', 'error'); return; }
