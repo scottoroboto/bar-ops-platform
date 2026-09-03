@@ -822,12 +822,16 @@ const { rows } = await client.query(
 record = rows[0];
 } else {
 if (!fields.slot || !fields.qamChannel) throw Object.assign(new Error('A source needs "slot" and "qamChannel".'), { status: 400 });
+// Phase 6: include port here too (same defaultSourcePort() rule as the
+// manual add/edit routes) -- this INSERT previously omitted it entirely,
+// which left every adopted source on the table's flat 8080 default even
+// when discovery correctly classified it as a Roku (ECP is on 8060).
 const { rows } = await client.query(
-`INSERT INTO vc_sources (site_id, slot, qam_channel, label, kind, ip, mac)
-   VALUES ($1,$2,$3,$4,$5,$6,$7)
+`INSERT INTO vc_sources (site_id, slot, qam_channel, label, kind, ip, port, mac)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
    RETURNING *`,
 [req.vcSite.site_id, fields.slot, fields.qamChannel, fields.label || 'Unnamed source', fields.kind || 'directv',
- fields.ip || null, fields.mac || null]
+ fields.ip || null, fields.port || defaultSourcePort(fields.kind), fields.mac || null]
 );
 record = rows[0];
 }
@@ -916,6 +920,16 @@ const { rows } = await withServiceClient((client) => client.query(
 res.json(rows);
 });
 
+// Phase 6: the port default used to be a flat COALESCE(...,8080) regardless
+// of kind, which was harmless while every source was a DirecTV receiver
+// (SHEF's actual port) but silently wrong the moment a Roku (ECP on 8060)
+// row was added with no explicit port -- discovery-adopted or hand-added,
+// same bug either way. Computed here in JS, once, so add/edit/adopt all
+// apply the same rule instead of three copies of a port-per-kind table.
+function defaultSourcePort(kind) {
+  return kind === 'roku' ? 8060 : 8080;
+}
+
 app.post('/api/venue-control/sites/:locationId/sources', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 const { slot, qamChannel, label, kind, ip, port, mac, receiverId, accessCardId, notes } = req.body || {};
@@ -926,9 +940,9 @@ const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE loc
 if (!siteRows[0]) throw Object.assign(new Error('Turn Venue Control on for this location before adding sources.'), { status: 404 });
 const { rows } = await client.query(
 `INSERT INTO vc_sources (site_id, slot, qam_channel, label, kind, ip, port, mac, receiver_id, access_card_id, notes)
-   VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,8080),$8,$9,$10,$11)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
    RETURNING *`,
-[siteRows[0].id, slot, qamChannel, label.trim(), kind || 'directv', ip || null, port || null, mac || null,
+[siteRows[0].id, slot, qamChannel, label.trim(), kind || 'directv', ip || null, port || defaultSourcePort(kind), mac || null,
  receiverId || null, accessCardId || null, notes || null]
 );
 return rows[0];
@@ -948,11 +962,11 @@ if (!slot || !qamChannel || !(label || '').trim()) return res.status(400).json({
 try {
 const { rows } = await withServiceClient((client) => client.query(
 `UPDATE vc_sources SET
-   slot=$1, qam_channel=$2, label=$3, kind=$4, ip=$5, port=COALESCE($6,8080), mac=$7,
+   slot=$1, qam_channel=$2, label=$3, kind=$4, ip=$5, port=$6, mac=$7,
    receiver_id=$8, access_card_id=$9, notes=$10, enabled=COALESCE($11,enabled), updated_at=now()
  WHERE id=$12
  RETURNING *`,
-[slot, qamChannel, label.trim(), kind || 'directv', ip || null, port || null, mac || null,
+[slot, qamChannel, label.trim(), kind || 'directv', ip || null, port || defaultSourcePort(kind), mac || null,
  receiverId || null, accessCardId || null, notes || null, typeof enabled === 'boolean' ? enabled : null, req.params.id]
 ));
 if (!rows[0]) return res.status(404).json({ error: 'Source not found.' });
