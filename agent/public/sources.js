@@ -49,12 +49,45 @@ async function refreshSources() {
   }
 }
 
-function liveBadge(live) {
+// Phase 6: liveBadge() now branches on kind -- a directv source's live
+// state carries major/minor (a tuned QAM channel); a roku source's carries
+// appId/appName (the running app, or null while sitting on the home
+// screen). Both share the same not-polled-yet/unreachable cases.
+function liveBadge(live, kind) {
   if (!live) return '<span class="badge wait">not polled yet</span>';
   if (!live.ok) return `<span class="badge off">unreachable</span>`;
+  if (kind === 'roku') {
+    const label = live.appId != null ? escapeHtml(live.appName || `app ${live.appId}`) : 'Home screen';
+    return `<span class="badge on">showing ${label}</span>`;
+  }
   const ch = live.major != null ? `${live.major}${live.minor != null ? '.' + live.minor : ''}` : '?';
   const state = live.active === false ? ' (standby)' : '';
   return `<span class="badge on">showing ${escapeHtml(String(ch))}${state}</span>`;
+}
+
+// Per-kind controls block -- directv keeps the channel/guide/info grid it's
+// always had; roku gets a Home button + an "Apps…" button that opens the
+// launcher dialog; static/spare (no driver, §12 Phase 6) get a short,
+// kind-specific explanation instead of a dead control area.
+function sourceControls(s) {
+  if (s.kind === 'directv') {
+    return `
+      <div class="source-controls">
+        <input type="text" id="chan_${s.slot}" placeholder="e.g. 206 or 206.1">
+        <button class="small" onclick="goToChannel(${s.slot})">Go</button>
+        <button class="small" onclick="sendKey(${s.slot}, 'guide')">Guide</button>
+        <button class="small" onclick="sendKey(${s.slot}, 'info')">Info</button>
+      </div>`;
+  }
+  if (s.kind === 'roku') {
+    return `
+      <div class="source-controls">
+        <button class="small" onclick="sendKey(${s.slot}, 'Home')">Home</button>
+        <button class="small" onclick="openRokuApps(${s.slot})">Apps…</button>
+      </div>`;
+  }
+  if (s.kind === 'spare') return `<p class="muted">Empty slot — reserved for a future source.</p>`;
+  return `<p class="muted">Always-on, no remote control needed.</p>`; // 'static' -- e.g. the cornhole scoreboard Pi
 }
 
 function renderSources() {
@@ -65,15 +98,9 @@ function renderSources() {
     <div class="source-row">
       <div class="source-top">
         <div class="source-name">${escapeHtml(s.label)} <span class="muted">· slot ${s.slot} · ${escapeHtml(s.qam_channel)}</span></div>
-        ${liveBadge(s.live)}
+        ${liveBadge(s.live, s.kind)}
       </div>
-      ${s.kind !== 'directv' ? `<p class="muted">${escapeHtml(s.kind)} — not controllable from here yet.</p>` : `
-      <div class="source-controls">
-        <input type="text" id="chan_${s.slot}" placeholder="e.g. 206 or 206.1">
-        <button class="small" onclick="goToChannel(${s.slot})">Go</button>
-        <button class="small" onclick="sendKey(${s.slot}, 'guide')">Guide</button>
-        <button class="small" onclick="sendKey(${s.slot}, 'info')">Info</button>
-      </div>`}
+      ${sourceControls(s)}
     </div>
   `).join('');
 }
@@ -104,6 +131,38 @@ async function sendKey(slot, key) {
     await api(`/api/sources/${slot}/key`, { method: 'POST', body: JSON.stringify({ key }) });
   } catch (e) {
     alert(e.message);
+  }
+}
+
+let ROKU_APPS_SLOT = null;
+
+async function openRokuApps(slot) {
+  ROKU_APPS_SLOT = slot;
+  document.getElementById('rokuAppsMsg').innerHTML = '';
+  document.getElementById('rokuAppsGrid').innerHTML = '<p class="muted">Loading…</p>';
+  document.getElementById('rokuAppsDialog').showModal();
+  try {
+    const { apps } = await api(`/api/sources/${slot}/apps`);
+    if (!apps.length) {
+      document.getElementById('rokuAppsGrid').innerHTML = '<p class="muted">No apps reported by this Roku.</p>';
+      return;
+    }
+    document.getElementById('rokuAppsGrid').innerHTML = apps.map((a) => `
+      <button class="fav-btn" onclick="launchRokuApp('${a.id}')">${escapeHtml(a.name)}</button>
+    `).join('');
+  } catch (e) {
+    document.getElementById('rokuAppsGrid').innerHTML = '';
+    document.getElementById('rokuAppsMsg').innerHTML = `<div class="msg error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function launchRokuApp(appId) {
+  try {
+    await api(`/api/sources/${ROKU_APPS_SLOT}/launch`, { method: 'POST', body: JSON.stringify({ appId }) });
+    document.getElementById('rokuAppsDialog').close();
+    await refreshSources();
+  } catch (e) {
+    document.getElementById('rokuAppsMsg').innerHTML = `<div class="msg error">${escapeHtml(e.message)}</div>`;
   }
 }
 

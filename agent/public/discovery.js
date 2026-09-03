@@ -167,15 +167,36 @@ function renderAdoptFields() {
       <div class="field"><label>Default source slot (optional)</label><input id="af_defaultSourceSlot" type="number"></div>
     `;
   } else {
+    // Pre-select the kind discovery already classified this device as
+    // (§9.1's own "classified_as" field) rather than always defaulting to
+    // directv -- a device the scanner already identified as a Roku via
+    // :8060/query/device-info shouldn't make the admin re-pick it by hand.
+    // Port defaults follow the same kind -> port rule as the cloud admin's
+    // add/edit source form (server/index.js's defaultSourcePort()); updated
+    // live if the admin changes Kind after the fact.
+    const device = (LAST_RUN && LAST_RUN.devices || []).find((d) => d.ip === ADOPT_IP);
+    const guessedKind = device && device.classified_as === 'roku' ? 'roku' : device && device.classified_as === 'directv' ? 'directv' : 'directv';
     el.innerHTML = `
       <div class="field"><label>Slot</label><input id="af_slot" type="number"></div>
       <div class="field"><label>QAM channel</label><input id="af_qamChannel" placeholder="14.1"></div>
       <div class="field"><label>Label</label><input id="af_label" placeholder="DirecTV 14"></div>
       <div class="field"><label>Kind</label>
-        <select id="af_kind"><option value="directv">directv</option><option value="roku">roku</option><option value="static">static</option><option value="spare">spare</option></select>
+        <select id="af_kind" onchange="onAdoptKindChange()">
+          ${['directv', 'roku', 'static', 'spare'].map((k) => `<option value="${k}" ${k === guessedKind ? 'selected' : ''}>${k}</option>`).join('')}
+        </select>
       </div>
+      <div class="field"><label>Port</label><input id="af_port" type="number" placeholder="${guessedKind === 'roku' ? '8060' : '8080'}"></div>
     `;
   }
+}
+
+// Keeps the Port placeholder in sync with Kind (directv -> 8080, roku ->
+// 8060) -- only the placeholder, not the value, so an admin who's already
+// typed a real port isn't overwritten by flipping Kind back and forth.
+function onAdoptKindChange() {
+  const kind = document.getElementById('af_kind').value;
+  const portField = document.getElementById('af_port');
+  if (portField) portField.placeholder = kind === 'roku' ? '8060' : '8080';
 }
 
 async function submitAdopt() {
@@ -194,6 +215,7 @@ async function submitAdopt() {
         qamChannel: document.getElementById('af_qamChannel').value,
         label: document.getElementById('af_label').value,
         kind: document.getElementById('af_kind').value,
+        port: document.getElementById('af_port').value ? Number(document.getElementById('af_port').value) : null,
       };
   try {
     await api('/api/discovery/adopt', { method: 'POST', body: JSON.stringify({ run_id: LAST_RUN.id, ip: ADOPT_IP, as, ...fields }) });
