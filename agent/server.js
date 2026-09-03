@@ -424,7 +424,7 @@ app.post('/api/tvs/:id/volume', async (req, res) => {
   try {
     const tv = findTv(req.params.id);
     const { op } = req.body || {};
-    if (!['up', 'down', 'mute'].includes(op)) return res.status(400).json({ error: 'Missing/invalid "op" -- expected "up", "down", or "mute".' });
+    if (!['up', 'down', 'mute', 'unmute'].includes(op)) return res.status(400).json({ error: 'Missing/invalid "op" -- expected "up", "down", "mute", or "unmute".' });
     const result = await samsungWs.setVolume(tv, op);
     maybeReportToken(tv, result);
     res.json({ ok: true, result });
