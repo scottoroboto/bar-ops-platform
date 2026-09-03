@@ -449,8 +449,25 @@ const { rows: favorites } = await withServiceClient((client) => client.query(
 'SELECT * FROM vc_favorites WHERE (site_id = $1 OR site_id IS NULL) AND enabled = true ORDER BY category, sort_order, name',
 [req.vcSite.site_id]
 ));
+// Phase 3 (docs/venue-control.md §12) joins in zones, the TV inventory,
+// and cron schedules -- same "cached mirror, disabled rows left out
+// entirely" shape as sources/favorites above. lib/tv-poller.js,
+// lib/scheduler.js, and agent/server.js's TV routes all read these off
+// this same config object, never Postgres directly.
+const { rows: zones } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_zones WHERE site_id = $1 ORDER BY sort_order, name',
+[req.vcSite.site_id]
+));
+const { rows: tvs } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_tvs WHERE site_id = $1 AND enabled = true ORDER BY sort_order, name',
+[req.vcSite.site_id]
+));
+const { rows: schedules } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_schedules WHERE site_id = $1 AND enabled = true ORDER BY name',
+[req.vcSite.site_id]
+));
 const config = {
-schema_version: 2,
+schema_version: 3,
 site: {
 location_id: req.vcSite.location_id,
 name: req.vcSite.location_name,
@@ -465,6 +482,17 @@ enabled: s.enabled,
 })),
 favorites: favorites.map((f) => ({
 id: f.id, name: f.name, major: f.major, minor: f.minor, category: f.category, color: f.color, shared: f.site_id === null,
+})),
+zones: zones.map((z) => ({ id: z.id, name: z.name, sort_order: z.sort_order })),
+tvs: tvs.map((t) => ({
+id: t.id, zone_id: t.zone_id, name: t.name, tag: t.tag, brand: t.brand, model: t.model,
+ip: t.ip, mac: t.mac, control_method: t.control_method, ws_port: t.ws_port, ws_token: t.ws_token,
+st_device_id: t.st_device_id, wol_enabled: t.wol_enabled,
+power_capable: t.power_capable, channel_capable: t.channel_capable, volume_capable: t.volume_capable,
+default_source_slot: t.default_source_slot, enabled: t.enabled,
+})),
+schedules: schedules.map((s) => ({
+id: s.id, name: s.name, cron_expr: s.cron_expr, action_type: s.action_type, payload: s.payload, enabled: s.enabled,
 })),
 };
 const etag = crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
@@ -572,6 +600,37 @@ res.json({ ok: true, ...created });
 } catch (err) {
 res.status(err.status || 400).json({ error: err.message });
 }
+});
+
+// Phase 3's two small agent->cloud pushes (docs/venue-control.md §3 calls
+// out that a general commands/results queue would land "once there's
+// something on the agent worth commanding" -- these two narrow writes
+// don't need that whole queue built to be worth having):
+// lib/scheduler.js reports what a fired schedule actually did, and
+// agent/server.js's TV routes report a freshly captured WS pairing token
+// so the next command doesn't need the on-screen "Allow this device?"
+// prompt again.
+app.post('/api/venue/agent/schedules/:id/result', requireAgentAuth(), async (req, res) => {
+const { result } = req.body || {};
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_schedules SET last_run_at = now(), last_result = $1
+   WHERE id = $2 AND site_id = $3 RETURNING id`,
+[String(result || '').slice(0, 2000), req.params.id, req.vcSite.site_id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Schedule not found for this site.' });
+res.json({ ok: true });
+});
+
+app.post('/api/venue/agent/tvs/:id/token', requireAgentAuth(), async (req, res) => {
+const { ws_token } = req.body || {};
+if (!ws_token) return res.status(400).json({ error: 'Missing "ws_token".' });
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_tvs SET ws_token = $1, updated_at = now()
+   WHERE id = $2 AND site_id = $3 RETURNING id`,
+[ws_token, req.params.id, req.vcSite.site_id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'TV not found for this site.' });
+res.json({ ok: true });
 });
 
 // ---------------- Venue Control — Source control (Phase 2) ----------------
@@ -771,6 +830,232 @@ await client.query('UPDATE vc_favorites SET sort_order = $1 WHERE id = $2', [sib
 return { ok: true };
 });
 res.status(result.ok === false ? 404 : 200).json(result);
+});
+
+// ---------------- Venue Control — Zones (Phase 3) ----------------
+// Physical TV groupings (docs/venue-control.md §5: "ZONES (physical TV
+// groupings; sources are deliberately flat)"). vc_zones has no `enabled`
+// column -- deleting a zone is a real delete. vc_tvs.zone_id is
+// ON DELETE SET NULL, so deleting a zone just un-assigns any TVs in it
+// (they show up under "Unassigned" on the agent's TVs tab) rather than
+// losing anything about the TVs themselves, which is why this doesn't need
+// the archive/restore soft-delete pattern sources/favorites/TVs use for
+// rows tied to real hardware history.
+app.get('/api/venue-control/sites/:locationId/zones', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT z.* FROM vc_zones z JOIN vc_sites vs ON vs.id = z.site_id
+  WHERE vs.location_id = $1
+  ORDER BY z.sort_order, z.name`,
+[req.params.locationId]
+));
+res.json(rows);
+});
+
+app.post('/api/venue-control/sites/:locationId/zones', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { name, sortOrder } = req.body || {};
+if (!(name || '').trim()) return res.status(400).json({ error: 'A zone needs a "name".' });
+try {
+const zone = await withServiceClient(async (client) => {
+const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]);
+if (!siteRows[0]) throw Object.assign(new Error('Turn Venue Control on for this location before adding zones.'), { status: 404 });
+const { rows } = await client.query(
+'INSERT INTO vc_zones (site_id, name, sort_order) VALUES ($1,$2,COALESCE($3,0)) RETURNING *',
+[siteRows[0].id, name.trim(), sortOrder ?? null]
+);
+return rows[0];
+});
+res.json({ ok: true, zone });
+} catch (err) {
+if (err.code === '23505') return res.status(400).json({ error: 'A zone with that name already exists at this location.' });
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/zones/:id/update', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { name, sortOrder } = req.body || {};
+try {
+const { rows } = await withServiceClient((client) => client.query(
+'UPDATE vc_zones SET name = COALESCE($1, name), sort_order = COALESCE($2, sort_order) WHERE id = $3 RETURNING *',
+[name ? name.trim() : null, sortOrder ?? null, req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Zone not found.' });
+res.json({ ok: true, zone: rows[0] });
+} catch (err) {
+if (err.code === '23505') return res.status(400).json({ error: 'A zone with that name already exists at this location.' });
+res.status(400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/zones/:id/delete', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query('DELETE FROM vc_zones WHERE id = $1 RETURNING id', [req.params.id]));
+if (!rows[0]) return res.status(404).json({ error: 'Zone not found.' });
+res.json({ ok: true });
+});
+
+// ---------------- Venue Control — TVs (Phase 3) ----------------
+// docs/venue-control.md §12, Phase 3: "Discrete on/off with state
+// verification, WoL, zones, bulk and per-zone operations, schedules." The
+// driver/poller/staff routes live on the agent (samsung-ws.js,
+// samsung-st.js, tv-poller.js, agent/server.js's /api/tvs/*) -- these are
+// the cloud half: owner setup for the TV inventory, same posture as
+// Sources above (receiver/TV setup is configuration, not day-to-day
+// control, which happens on the agent's own staff-PIN-gated TVs tab).
+app.get('/api/venue-control/sites/:locationId/tvs', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT t.* FROM vc_tvs t JOIN vc_sites vs ON vs.id = t.site_id
+  WHERE vs.location_id = $1
+  ORDER BY t.sort_order, t.name`,
+[req.params.locationId]
+));
+res.json(rows);
+});
+
+app.post('/api/venue-control/sites/:locationId/tvs', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { zoneId, name, tag, brand, model, ip, mac, controlMethod, wsPort, stDeviceId, wolEnabled, defaultSourceSlot, notes } = req.body || {};
+if (!(name || '').trim()) return res.status(400).json({ error: 'A TV needs a "name".' });
+try {
+const tv = await withServiceClient(async (client) => {
+const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]);
+if (!siteRows[0]) throw Object.assign(new Error('Turn Venue Control on for this location before adding TVs.'), { status: 404 });
+const { rows } = await client.query(
+`INSERT INTO vc_tvs (site_id, zone_id, name, tag, brand, model, ip, mac, control_method, ws_port, st_device_id, wol_enabled, default_source_slot, notes)
+   VALUES ($1,$2,$3,$4,COALESCE($5,'samsung'),$6,$7,$8,COALESCE($9,'unknown'),$10,$11,$12,$13,$14)
+   RETURNING *`,
+[siteRows[0].id, zoneId || null, name.trim(), tag || null, brand || null, model || null, ip || null, mac || null,
+ controlMethod || null, wsPort || null, stDeviceId || null, !!wolEnabled, defaultSourceSlot || null, notes || null]
+);
+return rows[0];
+});
+res.json({ ok: true, tv });
+} catch (err) {
+if (err.code === '23505') return res.status(400).json({ error: 'That MAC address is already used by another TV at this location.' });
+if (err.code === '23514' && err.constraint === 'vc_tvs_control_chk') return res.status(400).json({ error: 'Not a recognized control method.' });
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/tvs/:id/update', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { zoneId, name, tag, brand, model, ip, mac, controlMethod, wsPort, stDeviceId, wolEnabled,
+powerCapable, channelCapable, volumeCapable, defaultSourceSlot, notes, resetToken } = req.body || {};
+try {
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_tvs SET
+   zone_id = $1, name = COALESCE($2, name), tag = $3, brand = COALESCE($4, brand), model = $5,
+   ip = $6, mac = $7, control_method = COALESCE($8, control_method), ws_port = $9, st_device_id = $10,
+   wol_enabled = COALESCE($11, wol_enabled), power_capable = COALESCE($12, power_capable),
+   channel_capable = COALESCE($13, channel_capable), volume_capable = COALESCE($14, volume_capable),
+   default_source_slot = $15, notes = $16,
+   ws_token = CASE WHEN $17 THEN NULL ELSE ws_token END,
+   updated_at = now()
+   WHERE id = $18 RETURNING *`,
+[zoneId ?? null, name ? name.trim() : null, tag || null, brand || null, model || null, ip || null, mac || null,
+ controlMethod || null, wsPort || null, stDeviceId || null, wolEnabled, powerCapable, channelCapable, volumeCapable,
+ defaultSourceSlot ?? null, notes || null, !!resetToken, req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'TV not found.' });
+res.json({ ok: true, tv: rows[0] });
+} catch (err) {
+if (err.code === '23505') return res.status(400).json({ error: 'That MAC address is already used by another TV at this location.' });
+if (err.code === '23514' && err.constraint === 'vc_tvs_control_chk') return res.status(400).json({ error: 'Not a recognized control method.' });
+res.status(400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/tvs/:id/archive', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+'UPDATE vc_tvs SET enabled = false, updated_at = now() WHERE id = $1 RETURNING *',
+[req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'TV not found.' });
+res.json({ ok: true, tv: rows[0] });
+});
+
+app.post('/api/venue-control/tvs/:id/restore', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+'UPDATE vc_tvs SET enabled = true, updated_at = now() WHERE id = $1 RETURNING *',
+[req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'TV not found.' });
+res.json({ ok: true, tv: rows[0] });
+});
+
+// ---------------- Venue Control — Schedules (Phase 3) ----------------
+// docs/venue-control.md §5: "Cron is evaluated by the agent in the site's
+// own timezone" -- these routes just manage the rows; agent/lib/scheduler.js
+// is what actually reads cron_expr/action_type/payload and fires them.
+// `enabled` doubles as this table's archive/restore switch (turning a
+// schedule off is itself a meaningful, reversible action here, unlike a
+// hard delete) -- update accepts it directly rather than needing separate
+// archive/restore routes the way sources/favorites/TVs do.
+app.get('/api/venue-control/sites/:locationId/schedules', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT s.* FROM vc_schedules s JOIN vc_sites vs ON vs.id = s.site_id
+  WHERE vs.location_id = $1
+  ORDER BY s.name`,
+[req.params.locationId]
+));
+res.json(rows);
+});
+
+app.post('/api/venue-control/sites/:locationId/schedules', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { name, cronExpr, actionType, payload } = req.body || {};
+if (!(name || '').trim() || !cronExpr || !actionType) return res.status(400).json({ error: 'A schedule needs "name", "cronExpr", and "actionType".' });
+if (String(cronExpr).trim().split(/\s+/).length !== 5) return res.status(400).json({ error: 'cronExpr must have exactly 5 fields (minute hour day-of-month month day-of-week).' });
+try {
+const schedule = await withServiceClient(async (client) => {
+const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]);
+if (!siteRows[0]) throw Object.assign(new Error('Turn Venue Control on for this location before adding schedules.'), { status: 404 });
+const { rows } = await client.query(
+`INSERT INTO vc_schedules (site_id, name, cron_expr, action_type, payload)
+   VALUES ($1,$2,$3,$4,COALESCE($5,'{}'::JSONB))
+   RETURNING *`,
+[siteRows[0].id, name.trim(), cronExpr, actionType, payload ? JSON.stringify(payload) : null]
+);
+return rows[0];
+});
+res.json({ ok: true, schedule });
+} catch (err) {
+if (err.code === '23514' && err.constraint === 'vc_sched_action_chk') return res.status(400).json({ error: 'Not a recognized action type -- expected "tvs_power", "apply_layout", or "source_tune".' });
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/schedules/:id/update', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { name, cronExpr, actionType, payload, enabled } = req.body || {};
+if (cronExpr && String(cronExpr).trim().split(/\s+/).length !== 5) return res.status(400).json({ error: 'cronExpr must have exactly 5 fields (minute hour day-of-month month day-of-week).' });
+try {
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_schedules SET
+   name = COALESCE($1, name), cron_expr = COALESCE($2, cron_expr), action_type = COALESCE($3, action_type),
+   payload = COALESCE($4, payload), enabled = COALESCE($5, enabled)
+   WHERE id = $6 RETURNING *`,
+[name ? name.trim() : null, cronExpr || null, actionType || null, payload ? JSON.stringify(payload) : null, enabled, req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Schedule not found.' });
+res.json({ ok: true, schedule: rows[0] });
+} catch (err) {
+if (err.code === '23514' && err.constraint === 'vc_sched_action_chk') return res.status(400).json({ error: 'Not a recognized action type -- expected "tvs_power", "apply_layout", or "source_tune".' });
+res.status(400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/schedules/:id/delete', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query('DELETE FROM vc_schedules WHERE id = $1 RETURNING id', [req.params.id]));
+if (!rows[0]) return res.status(404).json({ error: 'Schedule not found.' });
+res.json({ ok: true });
 });
 
 // ---------------- Employees (owner/manager) ----------------
