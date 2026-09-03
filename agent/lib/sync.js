@@ -146,6 +146,18 @@ async function restoreBackup(backupId) {
   return data;
 }
 
+// A9 (docs/venue-control-gui-reconciliation.md): batch push for
+// lib/health.js's once-a-minute AV device-health sample -- see that file
+// for how `items` is built from the existing source/TV pollers.
+async function pushHealth(items) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/health`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ items }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `health push failed: ${res.status}`);
+  return data;
+}
+
 // Batch push for lib/activity.js's queue -- see that file for what gets
 // queued and how often this fires.
 async function pushActivity(entries) {
@@ -215,5 +227,5 @@ function stop() {
 module.exports = {
   register, pullConfig, heartbeat, start, stop,
   reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems,
-  takeBackupNow, listBackups, restoreBackup, pushActivity,
+  takeBackupNow, listBackups, restoreBackup, pushActivity, pushHealth,
 };
