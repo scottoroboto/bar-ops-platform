@@ -5,10 +5,12 @@ always-on box at the bar — not on Render, not in the cloud — and talks
 directly to the DirecTV receivers on the headend. What it can do now: prove
 this box and TSB Platform can find each other and stay in sync (Phase 0),
 scan its own network to find and catalog what's out there (Phase 1,
-Discovery & Diagnostics — see step 8 below), and actually change channels
-on the receivers (Phase 2, Source control — see step 9 below). TV power/
-selection and whole-room layouts are still ahead. See
-`docs/venue-control.md` in the main repo for the full plan.
+Discovery & Diagnostics — see step 8 below), actually change channels on
+the receivers (Phase 2, Source control — see step 9 below), and turn TVs on
+and off with real state verification, including scheduled on/off times
+(Phase 3, TV power — see step 10 below). TV source (channel) selection and
+whole-room layouts are still ahead. See `docs/venue-control.md` in the main
+repo for the full plan.
 
 ## 1. Pick the box
 
@@ -147,6 +149,47 @@ Control → Sources** for this location — the box can actually tune it.
 
 Nothing here needs the internet once the config has synced at least once —
 tuning talks straight from this box to the receivers on the LAN.
+
+## 10. Turn TVs on and off (Phase 3)
+
+Once at least one TV has been added — either adopted from a Discovery scan
+(step 8) or added directly in TSB Platform under **Venue Control → TVs** for
+this location, with a `control_method` set (`samsung_ws_token`,
+`samsung_ws_plain`, or `smartthings`) — the box can power it on/off with a
+real read-verify-report cycle, not a blind toggle.
+
+1. On the box (or any device on the same LAN), open
+   `http://<the box's LAN IP>:8088/tvs.html`.
+2. Enter the staff PIN from step 5 (an admin PIN also works here).
+3. TVs are grouped by zone (set in TSB Platform → Venue Control → Zones).
+   Each shows its last-polled power state — the agent polls every 20
+   seconds in the background. **On**/**Off** send a real command and
+   immediately re-check the TV before reporting back, so "all on" never
+   silently leaves one off. **Vol −**/**Vol +**/**Mute** work the same way
+   where the TV's control method supports it.
+4. **Zone on**/**Zone off** at the top of each group, or **All on**/**All
+   off** at the very top, fan out to every TV in that scope at once (four
+   at a time, per `docs/venue-control.md` §7.2, so ~50 TVs don't all try to
+   open a connection in the same instant).
+5. **First-time pairing**: a `samsung_ws_token` TV shows an "Allow this
+   device?" prompt on its own screen the first time the agent talks to it —
+   someone needs to be there to accept it once. After that, the agent
+   remembers the token (pushed back to TSB Platform automatically) and
+   never needs the prompt again unless the TV is factory-reset.
+6. **Schedules** (TSB Platform → Venue Control → Schedules) fire
+   automatically in this location's own timezone — no one needs to be
+   looking at this page for "all TVs on at 10:45, all off at 1:30 AM" to
+   happen. `source_tune` schedules (retuning receivers on a timer) work the
+   same way. Whole-room layout schedules aren't built yet (Phase 5) — a
+   schedule pointed at one just logs that and does nothing.
+7. A TV with no `control_method` set yet, or set to `unknown`/`none`, shows
+   up in the list but with no power buttons — same "visible but not
+   controllable yet" treatment non-DirecTV sources get on the Sources tab.
+
+SmartThings is an optional fallback, not required — see `.env.example`'s
+`SMARTTHINGS_TOKEN` comment. Without it, power/volume still work over each
+TV's local WS connection; SmartThings just isn't there as a second attempt
+if that fails or before pairing has happened.
 
 ## Keeping it running
 

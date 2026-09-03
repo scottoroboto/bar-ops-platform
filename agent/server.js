@@ -9,7 +9,10 @@ const cache = require('./lib/cache');
 const sync = require('./lib/sync');
 const discovery = require('./lib/discovery');
 const poller = require('./lib/poller');
+const tvPoller = require('./lib/tv-poller');
+const scheduler = require('./lib/scheduler');
 const directv = require('./lib/drivers/directv');
+const samsungWs = require('./lib/drivers/samsung-ws');
 
 const app = express();
 app.use(express.json());
@@ -66,6 +69,8 @@ next();
 }
 app.use('/api/sources', requireStaffPin);
 app.use('/api/favorites', requireStaffPin);
+app.use('/api/tvs', requireStaffPin);
+app.use('/api/zones', requireStaffPin);
 
 // ---------------- Discovery & Diagnostics (Phase 1, docs/venue-control.md §9) ----------------
 // Owner/admin only per §9's own opening line -- gated by the same admin PIN
@@ -227,11 +232,131 @@ app.get('/api/favorites', (req, res) => {
   res.json(config.favorites || []);
 });
 
+// Read-only passthrough so the staff TVs tab can group/label TVs by zone
+// name without a second admin-only endpoint -- same shape as /api/favorites.
+app.get('/api/zones', (req, res) => {
+  const config = cache.get('config') || {};
+  res.json(config.zones || []);
+});
+
+// ---------------- TV power (Phase 3, docs/venue-control.md §7.2/§8.2) ----------------
+// Staff-facing -- gated by requireStaffPin above. Reads TV rows from the
+// synced config the same way findSource() reads sources above; live power
+// state comes from lib/tv-poller.js's in-memory cache, not a fresh read on
+// every page load.
+function findTv(idParam) {
+  const id = Number(idParam);
+  const config = cache.get('config') || {};
+  const tv = (config.tvs || []).find((t) => Number(t.id) === id);
+  if (!tv) throw new Error(`No TV with id ${idParam}.`);
+  if (!tv.ip) throw new Error(`"${tv.name}" has no IP address configured yet.`);
+  return tv;
+}
+
+// Any command that captured a fresh WS pairing token (first-time pairing,
+// or a re-pair after a stale one) pushes it to the cloud so it's usable
+// next time without re-triggering the on-screen "Allow this device?"
+// prompt -- see docs/venue-control.md §7.2 and lib/sync.js's reportTvToken.
+function maybeReportToken(tv, result) {
+  if (result && result.token && result.token !== tv.ws_token) {
+    sync.reportTvToken(tv.id, result.token).catch((err) => console.error('[server] failed to push captured ws_token:', err.message));
+  }
+}
+
+app.get('/api/tvs', (req, res) => {
+  const config = cache.get('config') || {};
+  const liveById = new Map(tvPoller.getAllState().map((s) => [s.id, s]));
+  res.json((config.tvs || []).map((t) => ({
+    id: t.id, name: t.name, tag: t.tag, zone_id: t.zone_id,
+    ip: t.ip, control_method: t.control_method,
+    power_capable: t.power_capable, volume_capable: t.volume_capable,
+    wol_enabled: t.wol_enabled,
+    live: liveById.get(Number(t.id)) || null,
+  })));
+});
+
+// Fans out with concurrency 4 per §7.2 ("Bulk operations run with
+// concurrency 4 and return a per-TV result table") rather than one big
+// Promise.all -- ~50 TVs all opening WS connections at once is exactly the
+// kind of burst the concurrency cap exists to avoid. No zone_id/tv_ids ->
+// whole site, matching §8.2's own route shape.
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) || 1 }, worker));
+  return results;
+}
+
+// Registered BEFORE /api/tvs/:id/power below -- Express matches routes in
+// registration order, and ":id" would otherwise happily match the literal
+// string "bulk" and swallow every call to this route first. (Same bug class
+// already found and fixed once in Phase 2 for /api/sources/bulk/tune vs.
+// /api/sources/:slot/tune -- fixed here proactively rather than waiting to
+// rediscover it via a failing end-to-end test.)
+app.post('/api/tvs/bulk/power', async (req, res) => {
+  const { state, zone_id, tv_ids } = req.body || {};
+  if (state !== 'on' && state !== 'off') return res.status(400).json({ error: 'Missing/invalid "state" -- expected "on" or "off".' });
+  const config = cache.get('config') || {};
+  let targets = (config.tvs || []).filter((t) => t.enabled !== false && t.ip);
+  if (Array.isArray(tv_ids) && tv_ids.length) {
+    const ids = new Set(tv_ids.map(Number));
+    targets = targets.filter((t) => ids.has(Number(t.id)));
+  } else if (zone_id != null) {
+    targets = targets.filter((t) => Number(t.zone_id) === Number(zone_id));
+  }
+  const results = await mapWithConcurrency(targets, 4, async (tv) => {
+    try {
+      const result = await samsungWs.setPower(tv, state);
+      maybeReportToken(tv, result);
+      const live = await tvPoller.pollNow(tv.id).catch(() => null);
+      return { id: tv.id, name: tv.name, ok: result.ok, state: result.state, method: result.method, live };
+    } catch (err) {
+      return { id: tv.id, name: tv.name, ok: false, error: err.message };
+    }
+  });
+  res.json({ ok: true, results });
+});
+
+app.post('/api/tvs/:id/power', async (req, res) => {
+  try {
+    const tv = findTv(req.params.id);
+    const { state } = req.body || {};
+    if (state !== 'on' && state !== 'off') return res.status(400).json({ error: 'Missing/invalid "state" -- expected "on" or "off".' });
+    const result = await samsungWs.setPower(tv, state);
+    maybeReportToken(tv, result);
+    const live = await tvPoller.pollNow(tv.id);
+    res.json({ ok: true, result, live });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/tvs/:id/volume', async (req, res) => {
+  try {
+    const tv = findTv(req.params.id);
+    const { op } = req.body || {};
+    if (!['up', 'down', 'mute'].includes(op)) return res.status(400).json({ error: 'Missing/invalid "op" -- expected "up", "down", or "mute".' });
+    const result = await samsungWs.setVolume(tv, op);
+    maybeReportToken(tv, result);
+    res.json({ ok: true, result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.listen(config.PORT, () => {
   console.log(`[server] Venue Control agent listening on :${config.PORT}`);
   sync.start();
   poller.start();
+  tvPoller.start();
+  scheduler.start();
 });
 
-process.on('SIGTERM', () => { sync.stop(); poller.stop(); process.exit(0); });
-process.on('SIGINT', () => { sync.stop(); poller.stop(); process.exit(0); });
+process.on('SIGTERM', () => { sync.stop(); poller.stop(); tvPoller.stop(); scheduler.stop(); process.exit(0); });
+process.on('SIGINT', () => { sync.stop(); poller.stop(); tvPoller.stop(); scheduler.stop(); process.exit(0); });

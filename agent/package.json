@@ -1,8 +1,8 @@
 {
   "name": "venue-control-agent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "On-site agent for TSB Platform's Venue Control. Phase 0: registration, config pull, heartbeat, local status UI, admin PIN. Phase 1: network discovery/diagnostics (scan, classify, test, adopt). Phase 2: DirecTV SHEF driver + poller, staff Sources tab (channel control + favorites), staff PIN. Samsung/Roku control land in later phases -- see docs/venue-control.md in the main repo.",
+  "description": "On-site agent for TSB Platform's Venue Control. Phase 0: registration, config pull, heartbeat, local status UI, admin PIN. Phase 1: network discovery/diagnostics (scan, classify, test, adopt). Phase 2: DirecTV SHEF driver + poller, staff Sources tab (channel control + favorites), staff PIN. Phase 3: Samsung TV power (WS remote + SmartThings fallback + WoL) with state verification, zones, bulk/per-zone power, staff TVs tab, cron schedules evaluated in the site's own timezone. Roku and whole-room layouts land in later phases -- see docs/venue-control.md in the main repo.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -13,6 +13,7 @@
   "dependencies": {
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "ws": "^8.21.3"
   }
 }
