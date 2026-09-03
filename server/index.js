@@ -460,6 +460,97 @@ await withServiceClient((client) => client.query(
 res.json({ ok: true });
 });
 
+// ---------------- Venue Control — Discovery & Diagnostics (Phase 1) ----------------
+// docs/venue-control.md §12, Phase 1: "The scanner, classification, test
+// operations, adoption... Everything downstream depends on what this
+// finds." The actual scan runs on the agent box against its own LAN (a
+// cloud server can't reach a bar's local subnet) -- see agent/lib/
+// discovery/ for that half. These two routes are the cloud side of §8.1's
+// `POST /api/venue/agent/discovery` line: the agent pushes a completed run
+// here right after scanning, and separately calls the adopt route when an
+// owner turns one scanned device into a real vc_tvs/vc_sources row.
+// Agent-authenticated (requireAgentAuth), same as register/config/
+// heartbeat above -- these are never called by a logged-in person directly.
+app.post('/api/venue/agent/discovery/runs', requireAgentAuth(), async (req, res) => {
+const { ranges, startedAt, finishedAt, hostCount, devices } = req.body || {};
+if (!Array.isArray(devices)) return res.status(400).json({ error: 'Missing "devices" array.' });
+const result = await withServiceClient(async (client) => {
+const { rows: runRows } = await client.query(
+`INSERT INTO vc_discovery_runs (site_id, started_at, finished_at, ranges, host_count, started_by)
+   VALUES ($1, COALESCE($2, now()), $3, $4, $5, 'agent')
+   RETURNING id`,
+[req.vcSite.site_id, startedAt || null, finishedAt || null, ranges || [], hostCount || null]
+);
+const runId = runRows[0].id;
+const deviceRows = [];
+for (const d of devices) {
+const { rows } = await client.query(
+`INSERT INTO vc_discovery_devices (run_id, ip, mac, oui_vendor, open_ports, classified_as, confidence, identity, control_methods)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+   RETURNING id`,
+[runId, d.ip, d.mac || null, d.oui_vendor || null, d.open_ports || [], d.classified_as || 'unknown',
+ d.confidence || 'low', JSON.stringify(d.identity || {}), JSON.stringify(d.control_methods || [])]
+);
+deviceRows.push({ ip: d.ip, id: rows[0].id });
+}
+return { runId, deviceRows };
+});
+res.json({ ok: true, runId: result.runId, devices: result.deviceRows });
+});
+
+// Writes an adopted device through to vc_tvs or vc_sources ("Adoption
+// writes through to Supabase, so a device catalogued at the bar is
+// immediately visible in TSB Platform" -- §9.3), and marks the source
+// discovery-device row as adopted so a later re-scan's health-view diff
+// (§9.4) knows not to flag it as new. Scoped to the calling agent's own
+// site -- a device id from another site's run is rejected, not just
+// trusted from the request body.
+app.post('/api/venue/agent/discovery/adopt', requireAgentAuth(), async (req, res) => {
+const { discoveryDeviceId, as, ...fields } = req.body || {};
+if (!discoveryDeviceId) return res.status(400).json({ error: 'Missing "discoveryDeviceId".' });
+if (as !== 'tv' && as !== 'source') return res.status(400).json({ error: '"as" must be "tv" or "source".' });
+try {
+const created = await withServiceClient(async (client) => {
+const { rows: deviceRows } = await client.query(
+`SELECT dd.id, dr.site_id FROM vc_discovery_devices dd
+   JOIN vc_discovery_runs dr ON dr.id = dd.run_id
+  WHERE dd.id = $1`,
+[discoveryDeviceId]
+);
+const device = deviceRows[0];
+if (!device) throw Object.assign(new Error('Discovery device not found.'), { status: 404 });
+if (device.site_id !== req.vcSite.site_id) throw Object.assign(new Error('That discovery device belongs to a different site.'), { status: 403 });
+
+let record;
+if (as === 'tv') {
+const { rows } = await client.query(
+`INSERT INTO vc_tvs (site_id, zone_id, name, tag, ip, mac, control_method, wol_enabled, default_source_slot)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+   RETURNING *`,
+[req.vcSite.site_id, fields.zoneId || null, fields.name || 'Unnamed TV', fields.tag || null, fields.ip || null,
+ fields.mac || null, fields.controlMethod || 'unknown', !!fields.wolEnabled, fields.defaultSourceSlot || null]
+);
+record = rows[0];
+} else {
+if (!fields.slot || !fields.qamChannel) throw Object.assign(new Error('A source needs "slot" and "qamChannel".'), { status: 400 });
+const { rows } = await client.query(
+`INSERT INTO vc_sources (site_id, slot, qam_channel, label, kind, ip, mac)
+   VALUES ($1,$2,$3,$4,$5,$6,$7)
+   RETURNING *`,
+[req.vcSite.site_id, fields.slot, fields.qamChannel, fields.label || 'Unnamed source', fields.kind || 'directv',
+ fields.ip || null, fields.mac || null]
+);
+record = rows[0];
+}
+await client.query('UPDATE vc_discovery_devices SET adopted_type=$1, adopted_id=$2 WHERE id=$3', [as, record.id, discoveryDeviceId]);
+return record;
+});
+res.json({ ok: true, ...created });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
 // ---------------- Employees (owner/manager) ----------------
 app.get('/api/employees/pending', auth.requireSession('light'), async (req, res) => {
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
