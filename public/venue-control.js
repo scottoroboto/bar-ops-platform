@@ -42,19 +42,44 @@ function showMsg(text, kind) {
   // Control, independent of a location's own active/archived state
   // (locations.active). Lets a location like Ticket 3, which is inactive
   // platform-wide, still be turned on here individually.
+  //
+  // The nine admin sections used to all render at once in one long scroll
+  // (docs/venue-control-gui-reconciliation.md §1: "Ten sections in one
+  // scroll. That is a sidebar or tab set, not a column.") -- now they're
+  // tabbed panels (see showVcPanel() below), so this just reveals the
+  // shared #adminArea shell (location picker + tab bar + panels) once,
+  // rather than un-hiding each card individually.
   if (person.role === 'owner') {
-    document.getElementById('sitesCard').style.display = '';
-    document.getElementById('sourcesCard').style.display = '';
-    document.getElementById('favoritesCard').style.display = '';
-    document.getElementById('zonesCard').style.display = '';
-    document.getElementById('tvsCard').style.display = '';
-    document.getElementById('schedulesCard').style.display = '';
-    document.getElementById('layoutsCard').style.display = '';
-    document.getElementById('backupsCard').style.display = '';
-    document.getElementById('activityCard').style.display = '';
+    document.getElementById('adminArea').style.display = '';
+    initVcTabs();
     await loadSites();
   }
 })();
+
+// ---- Section tabs (docs/venue-control-gui-reconciliation.md §5 item 5:
+// "Admin page restructure — sidebar/sections instead of one scroll"). Purely
+// a visibility layer over the existing cards/lists/forms -- none of the
+// CRUD logic below changed to make room for this, only how each panel is
+// shown or hidden. Defaults to the Sites tab; clicking a tab just toggles
+// .active on the matching button and panel via CSS (see
+// venue-control-admin.css's .vc-panel/.vc-tab rules).
+function initVcTabs() {
+  document.getElementById('vcTabs').querySelectorAll('.vc-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.panel === 'sites');
+  });
+  document.querySelectorAll('.vc-panel').forEach((panel) => {
+    panel.classList.toggle('active', panel.dataset.panel === 'sites');
+  });
+}
+
+function showVcPanel(name) {
+  document.getElementById('vcTabs').querySelectorAll('.vc-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.panel === name);
+  });
+  document.querySelectorAll('.vc-panel').forEach((panel) => {
+    panel.classList.toggle('active', panel.dataset.panel === name);
+  });
+}
 
 let SITES = [];
 
@@ -233,8 +258,8 @@ function renderSourcesList() {
     }
     return `
       <div class="list-row">
-        <div class="name">${escapeHtml(s.label)} <span class="badge ${s.enabled ? 'on' : 'off'}">${s.enabled ? 'active' : 'archived'}</span>
-          <div class="sub">slot ${s.slot} · ${escapeHtml(s.qam_channel)} · ${escapeHtml(s.kind)}${s.ip ? ' · ' + escapeHtml(s.ip) + ':' + escapeHtml(String(s.port || '')) : ''}</div>
+        <div class="name">${escapeHtml(s.label)} <span class="badge ${s.enabled ? 'on' : 'off'}">${s.enabled ? 'active' : 'archived'}</span> ${kindBadge(s.kind)}
+          <div class="sub">slot ${s.slot} · ${escapeHtml(s.qam_channel)}${s.ip ? ' · ' + escapeHtml(s.ip) + ':' + escapeHtml(String(s.port || '')) : ''}</div>
         </div>
         <div class="stack-actions" style="margin-top:0;">
           <button class="small ghost" onclick="startEditSource('${s.id}')">Edit</button>
@@ -244,6 +269,13 @@ function renderSourcesList() {
         </div>
       </div>`;
   }).join('');
+}
+
+// A spare slot should read as "available," not "broken" (docs/venue-
+// control-ui.md, A5): DirecTV green, Roku blue, static/spare grey — matches
+// the admin CSS's .badge.kind-* classes.
+function kindBadge(kind) {
+  return `<span class="badge kind-${escapeHtml(kind)}">${escapeHtml(kind.toUpperCase())}</span>`;
 }
 
 function startEditSource(id) { editingSourceId = id; renderSourcesList(); }

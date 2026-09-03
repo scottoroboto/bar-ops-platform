@@ -1,0 +1,89 @@
+/* Venue Control cloud admin — small additions on top of the platform's own
+   styles.css, not a competing palette. docs/venue-control-ui.md calls for a
+   distinct "TSB near-black/blue" admin system, separate from the staff app's
+   amber-on-charcoal (agent/public/staff-theme.css) -- but this platform's
+   existing dark theme (--bg #0f1115, --card #171a21, --accent #4f8dfd,
+   --card-border #262b36) already IS almost exactly that system (compare the
+   handoff's own #0F1116/#171A21/#4E9BF5/#262B35). So this file adds only the
+   pieces styles.css doesn't already have: the section tab bar that replaces
+   the old one-long-scroll layout, and kind-colored badges for the Sources
+   list (matching A5-admin-sources.html's DIRECTV=green / ROKU=blue /
+   STATIC,SPARE=grey convention) -- everything else keeps using styles.css's
+   existing .card/.list-row/.badge/.msg/button classes unchanged. */
+
+/* ---- Section tabs, replacing the old one-scroll-of-nine-cards layout
+   (docs/venue-control-gui-reconciliation.md §1: "Ten sections in one
+   scroll. That is a sidebar or tab set, not a column.") ---- */
+.vc-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.vc-tab {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
+
+.vc-tab:hover { color: var(--text); border-color: var(--muted); }
+
+.vc-tab.active {
+  background: rgba(79,141,253,0.14);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Panels default hidden; the active one (and any owner-gated container) is
+   shown by adding .active — JS-driven, see initVcTabs() in venue-control.js.
+   The old per-card style.display=''/'none' gating (owner vs. non-owner) is
+   unchanged and still controls the outer #adminArea. */
+.vc-panel { display: none; }
+.vc-panel.active { display: block; }
+
+/* Location picker sits above the tabs now instead of buried inside the
+   Sources card, since it actually scopes every tab (Sources through
+   Activity), not just Sources — matches A5's persistent location pill. */
+.vc-location-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.vc-location-row label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.vc-location-row select {
+  width: auto;
+  min-width: 200px;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+/* Kind-colored badges for the Sources list, matching A5's DIRECTV (green) /
+   ROKU (blue) / STATIC & SPARE (grey) convention — a spare slot should read
+   as "available," not "broken." */
+.badge.kind-directv { background: rgba(63,191,127,0.18); color: #6be3a4; }
+.badge.kind-roku { background: rgba(79,141,253,0.18); color: #8fb6ff; }
+.badge.kind-static, .badge.kind-spare { background: rgba(154,163,178,0.15); color: var(--muted); }
+
+@media (max-width: 640px) {
+  .vc-tabs { gap: 5px; }
+  .vc-tab { padding: 7px 11px; font-size: 12.5px; }
+}

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Venue Control — Bar Ops</title>
 <link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/venue-control-admin.css">
 </head>
 <body>
 <header class="topbar" id="topbar"></header>
@@ -13,36 +14,44 @@
   <div class="card">
     <h1>Venue Control</h1>
     <p class="muted" id="deviceNote"></p>
-    <p>This controls the DirecTV receivers and TVs on the headend — changing
-      channels, turning TVs on and off, and applying whole-room presets — from
-      this iPad or from here remotely.</p>
-    <p class="muted">Discovery &amp; Diagnostics (Phase 1), DirecTV source
-      control (Phase 2), TV power with schedules (Phase 3), TV source
-      (channel) selection (Phase 4), and whole-room layouts with backup/
-      restore and an activity log (Phase 5) are built and live. See
-      <code>docs/venue-control.md</code> in the repo for the full plan. The
-      cards below manage the receiver/TV inventory, zones, favorites,
-      layouts, schedules, backups, and the activity log; day-to-day control
-      happens on the agent's own Sources/TVs/Layouts tabs at the bar, not
-      here. Capturing a layout's current-state items and taking/restoring a
-      backup from the bar itself both happen on the agent's own Admin page
-      too, so a new box can be brought back up without needing this page —
-      see docs/venue-control.md §6.</p>
+    <p>Controls the DirecTV receivers and TVs on the headend — channels,
+      power, and whole-room presets — from this iPad or from here remotely.
+      Day-to-day control happens on the agent's own Sources/TVs/Layouts tabs
+      at the bar; the tabs below manage the inventory behind it.</p>
   </div>
 
-  <div class="card" id="sitesCard" style="display:none;">
+  <div id="adminArea" style="display:none;">
+    <div class="vc-location-row">
+      <label for="sourcesLocationSelect">Location</label>
+      <select id="sourcesLocationSelect" onchange="onSourcesLocationChange()"></select>
+    </div>
+
+    <nav class="vc-tabs" id="vcTabs">
+      <button class="vc-tab" data-panel="sites" onclick="showVcPanel('sites')">Sites</button>
+      <button class="vc-tab" data-panel="sources" onclick="showVcPanel('sources')">Sources</button>
+      <button class="vc-tab" data-panel="favorites" onclick="showVcPanel('favorites')">Favorites</button>
+      <button class="vc-tab" data-panel="zones" onclick="showVcPanel('zones')">Zones</button>
+      <button class="vc-tab" data-panel="tvs" onclick="showVcPanel('tvs')">TVs</button>
+      <button class="vc-tab" data-panel="schedules" onclick="showVcPanel('schedules')">Schedules</button>
+      <button class="vc-tab" data-panel="layouts" onclick="showVcPanel('layouts')">Layouts</button>
+      <button class="vc-tab" data-panel="backups" onclick="showVcPanel('backups')">Backups</button>
+      <button class="vc-tab" data-panel="activity" onclick="showVcPanel('activity')">Activity</button>
+    </nav>
+
+  <section class="vc-panel" data-panel="sites">
+  <div class="card" id="sitesCard">
     <h2>Sites</h2>
     <p class="muted">Turn Venue Control on or off per location. A location with
       Venue Control off just doesn't have a site set up yet — nothing else
       about it changes.</p>
     <div id="sitesList"><p class="muted">Loading…</p></div>
   </div>
+  </section>
 
-  <div class="card" id="sourcesCard" style="display:none;">
+  <section class="vc-panel" data-panel="sources">
+  <div class="card" id="sourcesCard">
     <h2>Sources</h2>
     <p class="muted">The receiver inventory that feeds the QAM plant — slot and QAM channel must be unique per location. Day-to-day channel changes happen on the agent's own Sources tab at the bar, not here.</p>
-    <label for="sourcesLocationSelect">Location</label>
-    <select id="sourcesLocationSelect" onchange="onSourcesLocationChange()"></select>
     <div id="sourcesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
 
     <label for="newSourceSlot">Add a source — slot</label>
@@ -69,8 +78,10 @@
     <button class="secondary" onclick="addSource()">Add source</button>
     <div id="sourceMsg"></div>
   </div>
+  </section>
 
-  <div class="card" id="favoritesCard" style="display:none;">
+  <section class="vc-panel" data-panel="favorites">
+  <div class="card" id="favoritesCard">
     <h2>Favorites</h2>
     <p class="muted">Quick-tune buttons that show up on the agent's Sources tab. "Shared" favorites appear at every location; otherwise a favorite belongs to the location selected above.</p>
     <div id="favoritesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
@@ -90,8 +101,10 @@
     <button class="secondary" onclick="addFavorite()">Add favorite</button>
     <div id="favMsg"></div>
   </div>
+  </section>
 
-  <div class="card" id="zonesCard" style="display:none;">
+  <section class="vc-panel" data-panel="zones">
+  <div class="card" id="zonesCard">
     <h2>Zones</h2>
     <p class="muted">Physical TV groupings (e.g. "Patio", "Main Bar") used for zone-wide power on the agent's TVs tab and for zone-scoped schedules. Deleting a zone just un-assigns its TVs — nothing about the TVs themselves is lost.</p>
     <div id="zonesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
@@ -101,8 +114,10 @@
     <button class="secondary" onclick="addZone()">Add zone</button>
     <div id="zoneMsg"></div>
   </div>
+  </section>
 
-  <div class="card" id="tvsCard" style="display:none;">
+  <section class="vc-panel" data-panel="tvs">
+  <div class="card" id="tvsCard">
     <h2>TVs</h2>
     <p class="muted">The TV inventory that powers the agent's TVs tab. A TV needs a control method (found via Discovery, or set by hand) before it can actually be turned on/off from here.</p>
     <div id="tvsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
@@ -131,8 +146,10 @@
     <button class="secondary" onclick="addTv()">Add TV</button>
     <div id="tvMsg"></div>
   </div>
+  </section>
 
-  <div class="card" id="schedulesCard" style="display:none;">
+  <section class="vc-panel" data-panel="schedules">
+  <div class="card" id="schedulesCard">
     <h2>Schedules</h2>
     <p class="muted">Fire automatically in this location's own timezone, evaluated on the agent box — e.g. all TVs on at 10:45, all off at 1:30 AM.</p>
     <div id="schedulesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
@@ -174,8 +191,10 @@
     <button class="secondary" onclick="addSchedule()">Add schedule</button>
     <div id="schedMsg"></div>
   </div>
+  </section>
 
-  <div class="card" id="layoutsCard" style="display:none;">
+  <section class="vc-panel" data-panel="layouts">
+  <div class="card" id="layoutsCard">
     <h2>Layouts</h2>
     <p class="muted">Whole-room presets — what every source is tuned to and what every TV is showing, applied in one tap from the agent's Layouts tab. Add the layout here, then capture its actual items from the bar itself (agent Admin page → Capture current state) once the room looks right.</p>
     <div id="layoutsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
@@ -187,19 +206,25 @@
     <button class="secondary" onclick="addLayout()">Add layout</button>
     <div id="layoutMsg"></div>
   </div>
+  </section>
 
-  <div class="card" id="backupsCard" style="display:none;">
+  <section class="vc-panel" data-panel="backups">
+  <div class="card" id="backupsCard">
     <h2>Backups &amp; restore</h2>
-    <p class="muted">docs/venue-control.md §6: everything here — zones, sources, TVs, favorites, layouts, schedules — lives in the cloud, so a dead agent box loses nothing. A safety snapshot is taken automatically right before any restore, so restoring is itself reversible.</p>
+    <p class="muted">Everything here — zones, sources, TVs, favorites, layouts, schedules — lives in the cloud, so a dead agent box loses nothing. A safety snapshot is taken automatically right before any restore, so restoring is itself reversible.</p>
     <button class="secondary" onclick="takeBackupAdmin()">Take backup now</button>
     <div id="backupMsg"></div>
     <div id="backupsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
   </div>
+  </section>
 
-  <div class="card" id="activityCard" style="display:none;">
+  <section class="vc-panel" data-panel="activity">
+  <div class="card" id="activityCard">
     <h2>Activity log</h2>
     <p class="muted">Who did what, from where — every archive/delete/restore made here, plus the real day-to-day actions (TV power, source selection, layout apply) taken from the agent's own Sources/TVs/Layouts tabs.</p>
     <div id="activityList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+  </div>
+  </section>
   </div>
 </div>
 
