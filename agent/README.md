@@ -191,6 +191,41 @@ SmartThings is an optional fallback, not required — see `.env.example`'s
 TV's local WS connection; SmartThings just isn't there as a second attempt
 if that fails or before pairing has happened.
 
+## 11. Change what source a TV is showing (Phase 4)
+
+Once a TV has real `slot`/`qam_channel` data behind it — meaning at least one
+source exists in **Venue Control → Sources** — the box can point the TV's
+own built-in cable tuner at any of them, the same way someone would type a
+channel number on the physical remote.
+
+1. This only shows up for a TV marked **Channel capable** in TSB Platform →
+   Venue Control → TVs. That flag starts off for every TV (it's not guessed
+   from the control method or set automatically by Discovery) because this
+   is genuinely unverified: unlike power, there's no way for the agent to
+   read back what a Samsung TV's tuner actually landed on. Try it once with
+   the TV in view, confirm the channel actually changed, then turn the flag
+   on for that TV.
+2. The TV also needs to already be sitting on its Cable/Antenna input with
+   the QAM channel list programmed — exactly the state it's in today for
+   staff using the physical remote. This doesn't switch inputs; it only
+   types a channel number into the tuner that's already showing.
+3. On `http://<the box's LAN IP>:8088/tvs.html`, a channel-capable TV shows
+   a **Source** line under its power controls with a **Change source**
+   button. Tapping it opens every configured source (the same 16 slots the
+   Sources tab manages); tapping one sends the channel as key presses —
+   `KEY_1`, `KEY_2`, `KEY_MINUS`, `KEY_1`, `KEY_ENTER` for `12.1`, exactly as
+   the remote would — with a short pause between each key.
+4. The source line shown is the **last one this box actually told the TV to
+   go to**, not a live read — the agent has no way to ask the TV what it's
+   currently showing. Before any command's been sent since the agent last
+   restarted, it shows the TV's own **default source slot** (set on the TVs
+   admin card) labeled "usual, unconfirmed" rather than presented as fact.
+5. There's no schedule action for this yet — `source_tune` schedules retune
+   a *receiver* (DirecTV), not a TV's own tuner. Pointing a TV at a source
+   on a timer would need a new schedule action type; not built this round,
+   since day-to-day this is normally a one-off staff tap, not something
+   that needs to happen automatically at a fixed time.
+
 ## Keeping it running
 
 For a real deployment (not just this first test), the agent should restart

@@ -152,6 +152,19 @@ function findSource(slotParam) {
   return source;
 }
 
+// Like findSource, but for pointing a TV at a slot (Phase 4, §7.2/§8.2):
+// selecting a channel on the TV's own cable tuner only needs the source's
+// qam_channel string -- it doesn't touch the receiver at all, so unlike
+// findSource this has no kind/ip requirement. A TV can be pointed at any
+// programmed slot regardless of what (if anything) is actually driving it.
+function findSourceForSlot(slotParam) {
+  const slot = Number(slotParam);
+  const config = cache.get('config') || {};
+  const source = (config.sources || []).find((s) => Number(s.slot) === slot);
+  if (!source) throw new Error(`No source at slot ${slotParam}.`);
+  return source;
+}
+
 app.get('/api/sources', (req, res) => {
   const config = cache.get('config') || {};
   const liveBySlot = new Map(poller.getAllState().map((s) => [s.slot, s]));
@@ -269,8 +282,8 @@ app.get('/api/tvs', (req, res) => {
   res.json((config.tvs || []).map((t) => ({
     id: t.id, name: t.name, tag: t.tag, zone_id: t.zone_id,
     ip: t.ip, control_method: t.control_method,
-    power_capable: t.power_capable, volume_capable: t.volume_capable,
-    wol_enabled: t.wol_enabled,
+    power_capable: t.power_capable, channel_capable: t.channel_capable, volume_capable: t.volume_capable,
+    wol_enabled: t.wol_enabled, default_source_slot: t.default_source_slot,
     live: liveById.get(Number(t.id)) || null,
   })));
 });
@@ -345,6 +358,78 @@ app.post('/api/tvs/:id/volume', async (req, res) => {
     const result = await samsungWs.setVolume(tv, op);
     maybeReportToken(tv, result);
     res.json({ ok: true, result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------- TV source selection (Phase 4, docs/venue-control.md §7.2/§8.2) ----------------
+// Staff-facing -- gated by requireStaffPin above, same as power/volume.
+// Sends the source's qam_channel as key-code presses over the same WS
+// remote-control path power uses -- see samsung-ws.js's selectChannel().
+// This is genuinely unverified (§7.2: "marked stretch because it is
+// unverified") -- there's no way to read back what a Samsung TV's built-in
+// tuner actually landed on, so a 200 here means "the keys were sent",
+// not "the picture changed." Staff confirm visually, same as the doc says.
+//
+// channel_capable gates this the same way the *_capable flags gate every
+// other TV capability (§5: "written by discovery tool, not guessed") --
+// but nothing in Phase 1/2/3 actually sets it to true automatically
+// (discovery's own "channel" test type is still unwired, deliberately left
+// for a future round -- see claude/project-status.md), so today it's
+// purely an owner-set toggle on the TVs admin card: try it once, confirm
+// visually, then flip the toggle.
+function requireChannelCapable(tv) {
+  if (!tv.channel_capable) {
+    throw new Error(`"${tv.name}" isn't marked channel-capable yet -- try "Change source" once you're looking at the screen, then flip "Channel capable" on for it in TSB Platform: Venue Control → TVs.`);
+  }
+}
+
+async function selectTvSlot(tv, slot) {
+  const source = findSourceForSlot(slot);
+  requireChannelCapable(tv);
+  const result = await samsungWs.selectChannel(tv, source.qam_channel);
+  maybeReportToken(tv, result);
+  tvPoller.reportSlot(tv.id, slot);
+  sync.reportTvSlot(tv.id, slot).catch((err) => console.error('[server] failed to push last_known_slot:', err.message));
+  return result;
+}
+
+// Registered BEFORE /api/tvs/:id/slot below -- same route-ordering reason
+// as bulk/power above (Phase 2 precedent). Silently skips any target TV
+// that isn't channel_capable rather than failing the whole batch, same
+// spirit as bulk/power skipping TVs with no IP.
+app.post('/api/tvs/bulk/slot', async (req, res) => {
+  const { slot, zone_id, tv_ids } = req.body || {};
+  if (slot == null) return res.status(400).json({ error: 'Missing "slot".' });
+  let source;
+  try { source = findSourceForSlot(slot); } catch (err) { return res.status(400).json({ error: err.message }); }
+  const config = cache.get('config') || {};
+  let targets = (config.tvs || []).filter((t) => t.enabled !== false && t.ip && t.channel_capable);
+  if (Array.isArray(tv_ids) && tv_ids.length) {
+    const ids = new Set(tv_ids.map(Number));
+    targets = targets.filter((t) => ids.has(Number(t.id)));
+  } else if (zone_id != null) {
+    targets = targets.filter((t) => Number(t.zone_id) === Number(zone_id));
+  }
+  const results = await mapWithConcurrency(targets, 4, async (tv) => {
+    try {
+      const result = await selectTvSlot(tv, slot);
+      return { id: tv.id, name: tv.name, ok: result.ok, slot: Number(slot), method: result.method };
+    } catch (err) {
+      return { id: tv.id, name: tv.name, ok: false, error: err.message };
+    }
+  });
+  res.json({ ok: true, slot: Number(slot), results });
+});
+
+app.post('/api/tvs/:id/slot', async (req, res) => {
+  try {
+    const tv = findTv(req.params.id);
+    const { slot } = req.body || {};
+    if (slot == null) return res.status(400).json({ error: 'Missing "slot".' });
+    const result = await selectTvSlot(tv, slot);
+    res.json({ ok: true, slot: Number(slot), result });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
