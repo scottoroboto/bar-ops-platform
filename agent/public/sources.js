@@ -5,6 +5,7 @@
 let STAFF_PIN = '';
 let SOURCES = [];
 let FAVORITES = [];
+let TVS = [];
 let refreshTimer = null;
 
 function submitPin() {
@@ -17,6 +18,7 @@ function submitPin() {
     SOURCES = sources;
     renderSources();
     loadFavorites();
+    loadTvs();
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(refreshSources, 15000); // matches the agent poller's own 15s cadence
   }).catch(() => {
@@ -49,6 +51,43 @@ async function refreshSources() {
   }
 }
 
+// Read-only, used only to compute blast radius (how many TVs would be
+// affected by re-tuning a given receiver) -- never used to control TVs from
+// this page. Failing quietly here just means the blast-radius line doesn't
+// show; it never blocks channel changes.
+async function loadTvs() {
+  try {
+    TVS = await api('/api/tvs');
+  } catch (e) { /* blast radius just won't show a count */ }
+}
+
+// Mirrors tvs.js's currentSourceInfo(t): a TV's live.slot (the last slot the
+// system actually *commanded* it to, not a verified readback -- Samsung has
+// no "what's the tuner showing" endpoint, §7.2) is the source of truth when
+// present; default_source_slot is the fallback before that's ever been set,
+// labeled unconfirmed so staff don't mistake a guess for a fact.
+function currentSourceInfo(t) {
+  if (t.live && t.live.slot != null) return { slot: Number(t.live.slot), confirmed: true };
+  if (t.default_source_slot != null) return { slot: Number(t.default_source_slot), confirmed: false };
+  return { slot: null, confirmed: false };
+}
+
+function tvsOnSlot(slot) {
+  return TVS.filter((t) => currentSourceInfo(t).slot === Number(slot));
+}
+
+// Blast radius shown before the tap (§6), not after -- this is what stops
+// someone from re-tuning a receiver and only afterward realizing it also
+// feeds four other TVs.
+function blastRadiusHtml(slot) {
+  const tvs = tvsOnSlot(slot);
+  if (!tvs.length) return '';
+  const unconfirmed = tvs.filter((t) => !currentSourceInfo(t).confirmed).length;
+  const names = tvs.map((t) => escapeHtml(t.name)).join(', ');
+  const note = unconfirmed ? ` <span class="muted">(${unconfirmed} unconfirmed)</span>` : '';
+  return `<div class="blast-radius">Changing this affects <span class="count">${tvs.length} TV${tvs.length === 1 ? '' : 's'}</span> right now: ${names}${note}</div>`;
+}
+
 // Phase 6: liveBadge() now branches on kind -- a directv source's live
 // state carries major/minor (a tuned QAM channel); a roku source's carries
 // appId/appName (the running app, or null while sitting on the home
@@ -73,6 +112,7 @@ function sourceControls(s) {
   if (s.kind === 'directv') {
     return `
       <div class="source-controls">
+        <button class="primary" onclick="openChannelPicker(${s.slot})">Channels…</button>
         <input type="text" id="chan_${s.slot}" placeholder="e.g. 206 or 206.1">
         <button class="small" onclick="goToChannel(${s.slot})">Go</button>
         <button class="small" onclick="sendKey(${s.slot}, 'guide')">Guide</button>
@@ -223,5 +263,115 @@ async function submitTuneFav() {
     await refreshSources();
   } catch (e) {
     document.getElementById('tuneFavMsg').innerHTML = `<div class="msg error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Channel picker overlay (screens/02-staff-channel-picker.html). Scoped to
+// one receiver (PICKER_SLOT) at a time -- opened from that receiver's
+// "Channels…" button. Favorites grid sourced from the same /api/favorites
+// data as the on-page favorites strip (no separate/fixed channel guide);
+// live titles are fetched per-favorite via the existing proginfo endpoint
+// and filled in progressively rather than blocking the grid on all of them.
+// ---------------------------------------------------------------------
+let PICKER_SLOT = null;
+let pickerFillToken = 0;
+
+function openChannelPicker(slot) {
+  PICKER_SLOT = slot;
+  const source = SOURCES.find((s) => Number(s.slot) === Number(slot));
+  document.getElementById('pickerTitle').textContent = source ? `${source.label} — slot ${source.slot}` : `Slot ${slot}`;
+  document.getElementById('pickerBlastRadius').innerHTML = blastRadiusHtml(slot);
+  document.getElementById('pickerKeypadInput').value = '';
+  renderPickerFavorites();
+  document.getElementById('channelPicker').classList.add('open');
+  loadTvs(); // refresh in the background so blast radius is current next time it's shown
+}
+
+function closeChannelPicker() {
+  document.getElementById('channelPicker').classList.remove('open');
+  PICKER_SLOT = null;
+  pickerFillToken++; // stop any in-flight progressive fill from this session
+}
+
+function renderPickerFavorites() {
+  const grid = document.getElementById('pickerFavGrid');
+  if (!FAVORITES.length) { grid.innerHTML = '<p class="muted">No favorites saved yet — use the keypad below.</p>'; return; }
+  grid.innerHTML = FAVORITES.map((f, i) => `
+    <button class="channel-tile" style="${f.color ? `border-left-color:${escapeHtml(f.color)};` : ''}" onclick="tuneToFavorite(${i})">
+      <span class="cat">${escapeHtml(f.category)}</span>
+      <span class="name">${escapeHtml(f.name)}</span>
+      ${f.major != null ? `<span class="live-title loading" id="pickerLive_${i}">Loading…</span>` : ''}
+    </button>
+  `).join('');
+  fillPickerLiveTitles();
+}
+
+// Sequential on purpose -- DirecTV SHEF is single-threaded per receiver with
+// a ~350ms minimum gap between calls (Phase 2), so firing every favorite's
+// proginfo call at once wouldn't be faster, it would just queue behind
+// itself while the whole grid sat on "Loading…". One at a time means each
+// tile lights up with its real title as soon as that one call resolves.
+async function fillPickerLiveTitles() {
+  const myToken = ++pickerFillToken;
+  const slot = PICKER_SLOT;
+  for (let i = 0; i < FAVORITES.length; i++) {
+    const f = FAVORITES[i];
+    if (f.major == null) continue;
+    if (myToken !== pickerFillToken) return; // overlay closed or reopened for a different slot
+    const el = document.getElementById(`pickerLive_${i}`);
+    if (!el) continue;
+    try {
+      const info = await api(`/api/sources/${slot}/proginfo?major=${encodeURIComponent(f.major)}${f.minor != null ? `&minor=${encodeURIComponent(f.minor)}` : ''}`);
+      if (myToken !== pickerFillToken) return;
+      const title = (info && (info.title || info.callsign)) || '';
+      if (title) {
+        el.textContent = title;
+        el.classList.remove('loading');
+      } else {
+        el.remove(); // nothing usable came back -- drop the line rather than show a blank/wrong guess
+      }
+    } catch (e) {
+      if (myToken !== pickerFillToken) return;
+      el.remove();
+    }
+  }
+}
+
+async function tuneToFavorite(i) {
+  const f = FAVORITES[i];
+  try {
+    await api(`/api/sources/${PICKER_SLOT}/tune`, { method: 'POST', body: JSON.stringify({ major: f.major, minor: f.minor }) });
+    closeChannelPicker();
+    await refreshSources();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function pickerSendKey(key) {
+  try {
+    await api(`/api/sources/${PICKER_SLOT}/key`, { method: 'POST', body: JSON.stringify({ key }) });
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+function pickerKeypadPress(ch) {
+  const input = document.getElementById('pickerKeypadInput');
+  if (ch === 'clear') { input.value = ''; return; }
+  if (ch === 'back') { input.value = input.value.slice(0, -1); return; }
+  input.value += ch;
+}
+
+async function pickerKeypadTune() {
+  const parsed = parseChannel(document.getElementById('pickerKeypadInput').value);
+  if (!parsed) { alert('Enter a channel like 206 or 206.1'); return; }
+  try {
+    await api(`/api/sources/${PICKER_SLOT}/tune`, { method: 'POST', body: JSON.stringify(parsed) });
+    closeChannelPicker();
+    await refreshSources();
+  } catch (e) {
+    alert(e.message);
   }
 }

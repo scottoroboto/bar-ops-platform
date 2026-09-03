@@ -4,47 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Venue Control Agent — Layouts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="staff-theme.css">
 <style>
-  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #14171c; color: #e8eaed; }
-  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 20px 100px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 15px; margin: 0 0 10px; color: #cfd3da; }
-  a { color: #7fb7ff; }
-  .muted { color: #9aa1ab; font-size: 13px; }
-  .card { background: #1c2027; border-radius: 12px; padding: 16px 18px; margin-top: 16px; }
-  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-  .badge.on { background: rgba(63,191,127,0.18); color: #6be3a4; }
-  .badge.off { background: rgba(229,86,109,0.18); color: #ff8a9a; }
-  .badge.wait { background: rgba(154,161,171,0.18); color: #b6bcc6; }
-  input, select { background: #11141a; border: 1px solid #2c313a; color: #e8eaed; border-radius: 8px; padding: 8px 10px; font-size: 14px; font-family: inherit; }
-  button { background: #2c313a; border: 1px solid #3a404b; color: #e8eaed; border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer; }
-  button:hover { background: #353c47; }
-  button.primary { background: #2b6cb0; border-color: #2b6cb0; }
-  button.primary:hover { background: #3178c2; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  button.small { padding: 5px 10px; font-size: 12.5px; }
-  #pinGate .card { max-width: 340px; margin: 60px auto 0; }
-  #app { display: none; }
-  .msg { padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-top: 10px; }
-  .msg.error { background: rgba(229,86,109,0.15); color: #ff8a9a; }
-  .msg.success { background: rgba(63,191,127,0.15); color: #6be3a4; }
-  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-  .layout-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid #262b33; padding: 14px 0; }
+  /* Layouts-specific bits not shared with sources/tvs. */
+  .layout-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); padding: 14px 0; }
   .layout-row:last-child { border-bottom: none; }
   .layout-name { font-size: 16px; font-weight: 600; }
-  .layout-desc { color: #9aa1ab; font-size: 13px; margin-top: 2px; }
-  .layout-count { color: #9aa1ab; font-size: 12px; margin-top: 2px; }
-  /* §10: "one tap to apply, with a 15-second undo bar rather than a
-     confirmation dialog." Fixed to the bottom so it's reachable without
-     scrolling on an iPad held at arm's length, per §10's own framing. */
-  #undoBar { position: fixed; left: 0; right: 0; bottom: 0; background: #1c2027; border-top: 1px solid #2c313a;
-    padding: 14px 20px; display: none; align-items: center; justify-content: space-between; gap: 12px; }
-  #undoBar.show { display: flex; }
-  #undoText { font-size: 14px; }
-  #undoBar .countdown { color: #9aa1ab; font-size: 12.5px; }
+  .layout-desc { color: var(--muted-strong); font-size: 13px; margin-top: 2px; }
+  .layout-count { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #undoBar .countdown { color: var(--muted-strong); font-size: 12.5px; }
 </style>
 </head>
-<body>
+<body class="staff">
 <div class="wrap" id="pinGate">
   <div class="card">
     <h2>Layouts</h2>
@@ -63,6 +36,8 @@
     <h2 style="margin:0;">Saved layouts</h2>
     <div id="layoutsBox" style="margin-top:10px;"><p class="muted">Loading…</p></div>
   </div>
+
+  <div id="applyProgress"></div>
 </div>
 
 <div id="undoBar">
