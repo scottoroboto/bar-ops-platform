@@ -467,7 +467,7 @@ const { rows: schedules } = await withServiceClient((client) => client.query(
 [req.vcSite.site_id]
 ));
 const config = {
-schema_version: 3,
+schema_version: 4,
 site: {
 location_id: req.vcSite.location_id,
 name: req.vcSite.location_name,
@@ -489,7 +489,7 @@ id: t.id, zone_id: t.zone_id, name: t.name, tag: t.tag, brand: t.brand, model: t
 ip: t.ip, mac: t.mac, control_method: t.control_method, ws_port: t.ws_port, ws_token: t.ws_token,
 st_device_id: t.st_device_id, wol_enabled: t.wol_enabled,
 power_capable: t.power_capable, channel_capable: t.channel_capable, volume_capable: t.volume_capable,
-default_source_slot: t.default_source_slot, enabled: t.enabled,
+default_source_slot: t.default_source_slot, last_known_slot: t.last_known_slot, enabled: t.enabled,
 })),
 schedules: schedules.map((s) => ({
 id: s.id, name: s.name, cron_expr: s.cron_expr, action_type: s.action_type, payload: s.payload, enabled: s.enabled,
@@ -628,6 +628,25 @@ const { rows } = await withServiceClient((client) => client.query(
 `UPDATE vc_tvs SET ws_token = $1, updated_at = now()
    WHERE id = $2 AND site_id = $3 RETURNING id`,
 [ws_token, req.params.id, req.vcSite.site_id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'TV not found for this site.' });
+res.json({ ok: true });
+});
+
+// Phase 4 (docs/venue-control.md §12): the agent pushes the slot a TV was
+// last commanded to select (agent/lib/sync.js's reportTvSlot, called right
+// after agent/server.js's /api/tvs/:id/slot or bulk/slot succeeds) so
+// vc_tvs.last_known_slot stays current for TSB Platform's own admin view.
+// Same "shown once, best-effort" posture as the token push above -- a
+// failed push here doesn't undo the channel-select command that already
+// happened on the TV.
+app.post('/api/venue/agent/tvs/:id/slot', requireAgentAuth(), async (req, res) => {
+const { slot } = req.body || {};
+if (slot == null) return res.status(400).json({ error: 'Missing "slot".' });
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_tvs SET last_known_slot = $1, updated_at = now()
+   WHERE id = $2 AND site_id = $3 RETURNING id`,
+[Number(slot), req.params.id, req.vcSite.site_id]
 ));
 if (!rows[0]) return res.status(404).json({ error: 'TV not found for this site.' });
 res.json({ ok: true });
