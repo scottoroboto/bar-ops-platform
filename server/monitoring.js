@@ -62,10 +62,11 @@ async function requireMonitoringAccess(client, personId) {
 // ---------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------
-async function listSystems(client, { locationId } = {}) {
+async function listSystems(client, { locationId, category } = {}) {
   const clauses = ['ms.active = true'];
   const params = [];
   if (locationId) { params.push(locationId); clauses.push(`ms.location_id = $${params.length}`); }
+  if (category) { params.push(category); clauses.push(`ms.category = $${params.length}`); }
   const { rows } = await client.query(
     `SELECT ms.*, l.name AS location_name,
             (SELECT status FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_status,
@@ -407,10 +408,75 @@ async function pollUnifiSystems() {
   }
 }
 
+// ---------------------------------------------------------------------
+// AV Device Health (A9, docs/venue-control-gui-reconciliation.md) — the
+// on-site Venue Control agent already polls every TV/receiver it has a
+// control path for (agent/lib/poller.js, agent/lib/tv-poller.js, each on
+// its own 15-20s cadence) purely to serve the staff UI. This reuses that
+// existing poll data rather than standing up a second poller: the agent
+// batches its current poller state once a minute (agent/lib/health.js)
+// and pushes it here via POST /api/venue/agent/health, which slots each
+// TV/source into monitored_systems (auto-registering it under category
+// 'av' the first time it's seen) and hands the result to the same
+// recordStatus() every other monitored category already uses — so an AV
+// alert opens/closes and notifies exactly like a network switch or a
+// walk-in cooler would, no separate code path.
+//
+// One monitored_systems row per (location, kind, external_ref): kind is
+// 'vc_tv' or 'vc_source', external_ref is that row's vc_tvs.id / the
+// source's slot number (both stable identifiers the agent already has on
+// every poll — matches pollUnifiSystems' external_ref-matching convention
+// above). Auto-registered on first sight rather than requiring someone to
+// pre-add every TV by hand in the Monitoring admin, since Venue Control's
+// own TVs/Sources admin (public/venue-control.html) is already the real
+// inventory of what should exist; the agent reporting it is what makes it
+// "seen" here.
+async function reportAvHealth({ locationId, items }) {
+  if (!locationId) return { ok: false, error: 'Missing location.' };
+  if (!Array.isArray(items) || !items.length) return { ok: true, count: 0 };
+
+  let count = 0;
+  for (const item of items) {
+    const { targetType, targetId, name, status, detail } = item || {};
+    if ((targetType !== 'tv' && targetType !== 'source') || targetId == null || !status) continue;
+    if (!['online', 'offline', 'warning', 'unknown'].includes(status)) continue;
+
+    const kind = targetType === 'tv' ? 'vc_tv' : 'vc_source';
+    const externalRef = String(targetId);
+
+    const systemId = await withServiceClient(async (svc) => {
+      const { rows: existing } = await svc.query(
+        `SELECT id, name FROM monitored_systems
+         WHERE location_id = $1 AND category = 'av' AND kind = $2 AND external_ref = $3`,
+        [locationId, kind, externalRef]
+      );
+      if (existing[0]) {
+        if (name && name !== existing[0].name) {
+          await svc.query('UPDATE monitored_systems SET name = $1 WHERE id = $2', [name, existing[0].id]);
+        }
+        return existing[0].id;
+      }
+      const { rows: inserted } = await svc.query(
+        `INSERT INTO monitored_systems (location_id, category, kind, name, external_ref, sort_order)
+         VALUES ($1, 'av', $2, $3, $4,
+           (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM monitored_systems WHERE location_id = $1))
+         RETURNING id`,
+        [locationId, kind, name || `${targetType} ${externalRef}`, externalRef]
+      );
+      return inserted[0].id;
+    });
+
+    await recordStatus({ systemId, status, detail });
+    count++;
+  }
+  return { ok: true, count };
+}
+
 module.exports = {
   requireMonitoringAccess, listSystems, addSystem, updateSystem, archiveSystem, moveSystem,
   listStatusHistory, listAlerts, recordStatus,
   getNotifySettings, setNotifyChannel,
   listAlertRoutes, addAlertRoute, removeAlertRoute,
   pollUnifiSystems, unifiConfigured,
+  reportAvHealth,
 };

@@ -749,6 +749,27 @@ await withServiceClient((client) => client.query(
 res.json({ ok: true });
 });
 
+// A9 (docs/venue-control-gui-reconciliation.md): the agent's own pollers
+// (agent/lib/poller.js for DirecTV/Roku sources, agent/lib/tv-poller.js
+// for TVs) already know per-device reachability every 15-20s purely to
+// serve the local staff UI -- agent/lib/health.js batches that state once
+// a minute and pushes it here rather than the cloud running a second,
+// redundant poll of gear it can't reach directly anyway (no inbound path
+// to the agent's LAN, same §11 reasoning as everywhere else in this file).
+// monitoring.reportAvHealth does the actual registry-upsert + recordStatus
+// work; this route is just the agent-authenticated entry point, same shape
+// as heartbeat/discovery/tvs-slot above.
+app.post('/api/venue/agent/health', requireAgentAuth(), async (req, res) => {
+const items = Array.isArray(req.body.items) ? req.body.items : [];
+try {
+const result = await monitoring.reportAvHealth({ locationId: req.vcSite.location_id, items });
+res.json(result);
+} catch (err) {
+console.error('[venue-control] health push failed', err);
+res.status(500).json({ error: 'Health push failed.' });
+}
+});
+
 // ---------------- Venue Control — Discovery & Diagnostics (Phase 1) ----------------
 // docs/venue-control.md §12, Phase 1: "The scanner, classification, test
 // operations, adoption... Everything downstream depends on what this
@@ -2041,7 +2062,11 @@ app.get('/api/monitoring/systems', auth.requireSession('light'), async (req, res
       const hasAccess = await monitoring.requireMonitoringAccess(client, req.person.id);
       if (!hasAccess) return { error: 'Systems Monitoring isn’t turned on for your account yet — ask your manager.' };
     }
-    return monitoring.listSystems(client, {});
+    // locationId/category are optional filters -- e.g. Venue Control's
+    // Device Health tab (public/venue-control.html) passes both to scope
+    // the read to the currently-selected location's 'av' systems only.
+    // RLS already limits a non-owner to their own location regardless.
+    return monitoring.listSystems(client, { locationId: req.query.locationId || undefined, category: req.query.category || undefined });
   });
   if (result && result.error) return res.status(403).json(result);
   res.json(result);
