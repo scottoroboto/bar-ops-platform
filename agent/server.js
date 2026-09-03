@@ -11,6 +11,8 @@ const discovery = require('./lib/discovery');
 const poller = require('./lib/poller');
 const tvPoller = require('./lib/tv-poller');
 const scheduler = require('./lib/scheduler');
+const layouts = require('./lib/layouts');
+const activity = require('./lib/activity');
 const directv = require('./lib/drivers/directv');
 const samsungWs = require('./lib/drivers/samsung-ws');
 
@@ -45,6 +47,7 @@ app.get('/api/status', (req, res) => {
 // on the LAN -- see the warning in .env.example. Set a real PIN before
 // running discovery for real.
 function requireAdminPin(req, res, next) {
+  req.vcActor = 'admin'; // Phase 5 (lib/activity.js): who to blame in the audit log for this request
   if (!config.ADMIN_PIN) return next();
   const pin = req.get('x-admin-pin') || req.query.pin;
   if (pin !== config.ADMIN_PIN) return res.status(401).json({ error: 'Invalid admin PIN.' });
@@ -61,6 +64,11 @@ app.use('/api/admin', requireAdminPin);
 // neither PIN is set in .env, this is a no-op, same documented gap as
 // requireAdminPin -- see the warning in .env.example.
 function requireStaffPin(req, res, next) {
+// Phase 5 (lib/activity.js): who to blame in the audit log for this
+// request. Set before the PIN check itself so a matched admin PIN (which
+// also satisfies this gate, per the comment above) is correctly tagged
+// "admin" rather than "staff" -- see the ok check below.
+req.vcActor = (config.ADMIN_PIN && (req.get('x-staff-pin') || req.query.pin) === config.ADMIN_PIN) ? 'admin' : 'staff';
 if (!config.STAFF_PIN && !config.ADMIN_PIN) return next();
 const pin = req.get('x-staff-pin') || req.query.pin;
 const ok = (config.STAFF_PIN && pin === config.STAFF_PIN) || (config.ADMIN_PIN && pin === config.ADMIN_PIN);
@@ -71,6 +79,7 @@ app.use('/api/sources', requireStaffPin);
 app.use('/api/favorites', requireStaffPin);
 app.use('/api/tvs', requireStaffPin);
 app.use('/api/zones', requireStaffPin);
+app.use('/api/layouts', requireStaffPin);
 
 // ---------------- Discovery & Diagnostics (Phase 1, docs/venue-control.md §9) ----------------
 // Owner/admin only per §9's own opening line -- gated by the same admin PIN
@@ -81,6 +90,14 @@ app.use('/api/zones', requireStaffPin);
 // though it isn't nested under /api/admin/ in the URL (the spec's own path
 // spelling is kept as-is rather than moved under /api/admin for tidiness).
 app.use('/api/discovery', requireAdminPin);
+
+// §8.2: "Admin-scoped routes (/api/discovery/*, /api/backup/*, /api/
+// restore) require the admin PIN." /api/backups (list, for the restore
+// picker) isn't in that literal route list but carries the same
+// sensitivity, so it's gated the same way.
+app.use('/api/backup', requireAdminPin);
+app.use('/api/backups', requireAdminPin);
+app.use('/api/restore', requireAdminPin);
 
 app.post('/api/discovery/scan', async (req, res) => {
   try {
@@ -192,6 +209,7 @@ app.post('/api/sources/bulk/tune', async (req, res) => {
       const source = findSource(slot);
       await directv.tune(source.ip, source.port || 8080, major, minor);
       const live = await poller.pollNow(slot);
+      activity.record('source.tune', { actor: req.vcActor, targetType: 'source', targetId: slot, detail: { major, minor } });
       return { slot, ok: true, live };
     } catch (err) {
       return { slot, ok: false, error: err.message };
@@ -207,6 +225,7 @@ app.post('/api/sources/:slot/tune', async (req, res) => {
     if (!major) return res.status(400).json({ error: 'Missing "major".' });
     await directv.tune(source.ip, source.port || 8080, major, minor);
     const live = await poller.pollNow(source.slot);
+    activity.record('source.tune', { actor: req.vcActor, targetType: 'source', targetId: source.slot, detail: { major, minor } });
     res.json({ ok: true, live });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -328,6 +347,7 @@ app.post('/api/tvs/bulk/power', async (req, res) => {
       const result = await samsungWs.setPower(tv, state);
       maybeReportToken(tv, result);
       const live = await tvPoller.pollNow(tv.id).catch(() => null);
+      activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, state }, result: result.ok ? 'ok' : 'failed' });
       return { id: tv.id, name: tv.name, ok: result.ok, state: result.state, method: result.method, live };
     } catch (err) {
       return { id: tv.id, name: tv.name, ok: false, error: err.message };
@@ -344,6 +364,7 @@ app.post('/api/tvs/:id/power', async (req, res) => {
     const result = await samsungWs.setPower(tv, state);
     maybeReportToken(tv, result);
     const live = await tvPoller.pollNow(tv.id);
+    activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, state }, result: result.ok ? 'ok' : 'failed' });
     res.json({ ok: true, result, live });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -415,6 +436,7 @@ app.post('/api/tvs/bulk/slot', async (req, res) => {
   const results = await mapWithConcurrency(targets, 4, async (tv) => {
     try {
       const result = await selectTvSlot(tv, slot);
+      activity.record('tv.slot', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, slot: Number(slot) }, result: result.ok ? 'ok' : 'failed' });
       return { id: tv.id, name: tv.name, ok: result.ok, slot: Number(slot), method: result.method };
     } catch (err) {
       return { id: tv.id, name: tv.name, ok: false, error: err.message };
@@ -429,7 +451,102 @@ app.post('/api/tvs/:id/slot', async (req, res) => {
     const { slot } = req.body || {};
     if (slot == null) return res.status(400).json({ error: 'Missing "slot".' });
     const result = await selectTvSlot(tv, slot);
+    activity.record('tv.slot', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, slot: Number(slot) }, result: result.ok ? 'ok' : 'failed' });
     res.json({ ok: true, slot: Number(slot), result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------- Layouts (Phase 5, docs/venue-control.md §5/§10/§8.2) ----------------
+// Staff-facing (gated by requireStaffPin above, same as sources/tvs) --
+// "one tap to apply, with a 15-second undo bar rather than a confirmation
+// dialog" (§10). All execution logic lives in lib/layouts.js, shared with
+// lib/scheduler.js's apply_layout action; this route is just a thin
+// wrapper that also hands the client an in-memory undo snapshot to hold
+// onto for the 15s window.
+app.get('/api/layouts', (req, res) => {
+  res.json(layouts.listLayouts());
+});
+
+app.post('/api/layouts/:id/apply', async (req, res) => {
+  try {
+    const result = await layouts.apply(req.params.id);
+    const ok = result.results.filter((r) => r.ok).length;
+    activity.record('layout.apply', { actor: req.vcActor, targetType: 'layout', targetId: result.layout_id, detail: { name: result.name, ok, total: result.results.length } });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// The undo half of the 15-second bar -- the client POSTs back exactly the
+// `undo` array apply() handed it, unmodified. No layout lookup, nothing
+// persisted; this is a pure replay of a raw items list. Not logged to
+// activity under its own name -- the resulting per-item tv.power/tv.slot/
+// source.tune calls it triggers aren't recorded either (undo intentionally
+// isn't re-run through those individual routes), so the log shows the
+// apply and lets a human infer the undo from a following "layout.undo"
+// entry recorded here instead.
+app.post('/api/layouts/replay', async (req, res) => {
+  try {
+    const { items, label } = req.body || {};
+    const result = await layouts.replay(items);
+    activity.record('layout.undo', { actor: req.vcActor, detail: { label: label || null, item_count: Array.isArray(items) ? items.length : 0 } });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Admin-only (gated by requireAdminPin via app.use('/api/admin', ...)
+// above) -- "capture current state" reads live device state the agent
+// already has in memory (lib/layouts.js's captureCurrentState()) and
+// pushes it to the cloud, replacing that layout's items wholesale. See the
+// big comment on the cloud's Layouts section (server/index.js) for why
+// this lives here and not on TSB Platform.
+app.post('/api/admin/layouts/:id/capture', async (req, res) => {
+  try {
+    const items = layouts.captureCurrentState();
+    if (!items.length) return res.status(400).json({ error: 'Nothing to capture yet -- no source or TV has a live reading. Wait for the next poll cycle and try again.' });
+    const pushed = await sync.pushLayoutItems(req.params.id, items);
+    res.json({ ok: true, item_count: items.length, layout_id: pushed.layout_id });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------- Backup & Restore (Phase 5, docs/venue-control.md §6/§8.2) ----------------
+// Admin-only (requireAdminPin, applied above via app.use('/api/backup', ...)
+// / '/api/backups' / '/api/restore'). Thin proxies to the cloud's
+// agent-facing routes -- the agent holds no unique state to send (§6), so
+// there's nothing to compute locally; this exists so §6's disaster-
+// recovery story ("plug in a replacement, log in, and restore... in
+// minutes") works entirely from the on-site box, without anyone needing to
+// find TSB Platform first.
+app.post('/api/backup/now', async (req, res) => {
+  try {
+    const result = await sync.takeBackupNow();
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/backups', async (req, res) => {
+  try {
+    res.json(await sync.listBackups());
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/restore', async (req, res) => {
+  try {
+    const { backup_id } = req.body || {};
+    if (!backup_id) return res.status(400).json({ error: 'Missing "backup_id".' });
+    const result = await sync.restoreBackup(backup_id);
+    res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -441,7 +558,8 @@ app.listen(config.PORT, () => {
   poller.start();
   tvPoller.start();
   scheduler.start();
+  activity.start();
 });
 
-process.on('SIGTERM', () => { sync.stop(); poller.stop(); tvPoller.stop(); scheduler.stop(); process.exit(0); });
-process.on('SIGINT', () => { sync.stop(); poller.stop(); tvPoller.stop(); scheduler.stop(); process.exit(0); });
+process.on('SIGTERM', () => { sync.stop(); poller.stop(); tvPoller.stop(); scheduler.stop(); activity.stop(); process.exit(0); });
+process.on('SIGINT', () => { sync.stop(); poller.stop(); tvPoller.stop(); scheduler.stop(); activity.stop(); process.exit(0); });
