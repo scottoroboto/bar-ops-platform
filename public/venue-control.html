@@ -32,6 +32,7 @@
       <button class="vc-tab" data-panel="favorites" onclick="showVcPanel('favorites')">Favorites</button>
       <button class="vc-tab" data-panel="zones" onclick="showVcPanel('zones')">Zones</button>
       <button class="vc-tab" data-panel="tvs" onclick="showVcPanel('tvs')">TVs</button>
+      <button class="vc-tab" data-panel="health" onclick="showVcPanel('health')">Device Health</button>
       <button class="vc-tab" data-panel="schedules" onclick="showVcPanel('schedules')">Schedules</button>
       <button class="vc-tab" data-panel="layouts" onclick="showVcPanel('layouts')">Layouts</button>
       <button class="vc-tab" data-panel="backups" onclick="showVcPanel('backups')">Backups</button>
@@ -145,6 +146,14 @@
     </label>
     <button class="secondary" onclick="addTv()">Add TV</button>
     <div id="tvMsg"></div>
+  </div>
+  </section>
+
+  <section class="vc-panel" data-panel="health">
+  <div class="card" id="healthCard">
+    <h2>Device Health</h2>
+    <p class="muted">TVs and receivers report in through the on-site agent's own pollers — problems first, each with what it means for the room right now. A device with no control method set up yet (see the TVs tab) never appears here; there's nothing to monitor until it does.</p>
+    <div id="healthList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
   </div>
   </section>
 

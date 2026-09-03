@@ -214,6 +214,7 @@ function onSourcesLocationChange() {
   loadFavoritesAdmin(locationId);
   loadZonesAdmin(locationId);
   loadTvsAdmin(locationId);
+  loadHealthAdmin(locationId);
   loadLayoutsAdmin(locationId);
   loadSchedulesAdmin(locationId);
   loadBackupsAdmin(locationId);
@@ -1038,6 +1039,74 @@ async function restoreBackupAdmin(id) {
   } catch (e) {
     showBackupMsg(e.message, 'error');
   }
+}
+
+// ---- Device Health (A9, docs/venue-control-gui-reconciliation.md) --
+// read-only: the on-site agent samples its own existing TV/receiver
+// pollers once a minute and reports up through POST /api/venue/agent/
+// health (agent/lib/health.js) -> server/monitoring.js's reportAvHealth(),
+// landing in the same monitored_systems/system_status/system_alerts
+// tables every other monitored category (network/hvac/refrigeration/etc)
+// already uses. This panel just reads that back scoped to this location's
+// 'av' category -- there's no separate AV monitoring store, per the A9
+// spec's "data source is the platform's existing monitoring tables, not a
+// new store." Problems first, each stating what it means for the room
+// right now (there's no remote power-cycle path to the agent's LAN, so
+// the "action" is always "go check it," not a button here).
+let HEALTH_SYSTEMS = [];
+
+async function loadHealthAdmin(locationId) {
+  const el = document.getElementById('healthList');
+  try {
+    HEALTH_SYSTEMS = await api(`/api/monitoring/systems?locationId=${locationId}&category=av`);
+    renderHealthList();
+  } catch (e) {
+    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function healthConsequence(system) {
+  return system.kind === 'vc_tv'
+    ? 'Won’t respond to power or channel commands until it’s back online — check its power and network connection at the TV.'
+    : 'Its channel can’t be changed remotely until it’s back online — check power and network at the headend.';
+}
+
+function healthBadgeClass(status) {
+  if (status === 'online') return 'on';
+  if (status === 'warning') return 'stale';
+  return 'danger'; // offline / unknown
+}
+
+function renderHealthRow(s, isProblem) {
+  const kindLabel = s.kind === 'vc_tv' ? 'TV' : 'Source';
+  const statusText = s.last_status || 'unknown';
+  const since = s.last_checked_at ? new Date(s.last_checked_at).toLocaleString() : '—';
+  return `
+    <div class="list-row">
+      <div class="name">${escapeHtml(s.name)} <span class="badge off">${kindLabel}</span>
+        <span class="badge ${healthBadgeClass(statusText)}">${escapeHtml(statusText)}</span>
+      </div>
+      <p class="muted" style="margin:4px 0 0;">${isProblem ? healthConsequence(s) + ' ' : ''}Last checked ${since}.</p>
+    </div>`;
+}
+
+function renderHealthList() {
+  const el = document.getElementById('healthList');
+  if (!HEALTH_SYSTEMS.length) {
+    el.innerHTML = '<p class="muted">Nothing reported yet — the on-site agent starts reporting TV/receiver health about 20 seconds after it starts, then once a minute.</p>';
+    return;
+  }
+  const problems = HEALTH_SYSTEMS.filter((s) => s.last_status && s.last_status !== 'online');
+  const healthy = HEALTH_SYSTEMS.filter((s) => !s.last_status || s.last_status === 'online');
+
+  el.innerHTML = `
+    ${problems.length
+      ? `<h3 style="font-size:13px;color:var(--danger);margin:0 0 6px;">Problems (${problems.length})</h3>${problems.map((s) => renderHealthRow(s, true)).join('')}`
+      : '<p class="msg success">No problems reported.</p>'}
+    ${healthy.length
+      ? `<h3 style="font-size:13px;color:var(--muted);margin:16px 0 6px;">Healthy (${healthy.length})</h3>${healthy.map((s) => renderHealthRow(s, false)).join('')}`
+      : ''}
+  `;
 }
 
 // ---- Activity log (owner-only, Phase 5, docs/venue-control.md §11: "All
