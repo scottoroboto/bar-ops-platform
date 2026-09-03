@@ -14,6 +14,7 @@ const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
 const activity = require('./lib/activity');
 const directv = require('./lib/drivers/directv');
+const roku = require('./lib/drivers/roku');
 const samsungWs = require('./lib/drivers/samsung-ws');
 
 const app = express();
@@ -159,13 +160,23 @@ app.post('/api/discovery/adopt', async (req, res) => {
 // refreshed every 30s by lib/sync.js) and talks to receivers through
 // lib/drivers/directv.js; live tuned/mode state comes from lib/poller.js's
 // in-memory cache rather than a fresh SHEF call on every page load.
+// Phase 6: generalized from directv-only to any source kind with a real
+// driver (directv, roku) -- static/spare are idle slots with nothing to
+// control and are rejected here the same way a missing device used to be.
+// Callers that need one specific kind (tune/proginfo are DirecTV-only;
+// apps/launch are Roku-only) layer requireKind() on top of this.
 function findSource(slotParam) {
   const slot = Number(slotParam);
   const config = cache.get('config') || {};
   const source = (config.sources || []).find((s) => Number(s.slot) === slot);
   if (!source) throw new Error(`No source at slot ${slotParam}.`);
-  if (source.kind !== 'directv') throw new Error(`Source at slot ${slotParam} is a "${source.kind}", not a DirecTV receiver -- nothing to tune yet (see build order Phase 6 for Roku).`);
+  if (source.kind !== 'directv' && source.kind !== 'roku') throw new Error(`Source at slot ${slotParam} is a "${source.kind}" -- nothing to control (static/spare slots have no driver).`);
   if (!source.ip) throw new Error(`Source at slot ${slotParam} has no IP address configured yet.`);
+  return source;
+}
+
+function requireKind(source, kind, verb) {
+  if (source.kind !== kind) throw new Error(`Source at slot ${source.slot} is a "${source.kind}", not a ${kind === 'directv' ? 'DirecTV receiver' : 'Roku'} -- can't ${verb} it.`);
   return source;
 }
 
@@ -206,7 +217,7 @@ app.post('/api/sources/bulk/tune', async (req, res) => {
   if (!major) return res.status(400).json({ error: 'Missing "major".' });
   const results = await Promise.all(slots.map(async (slot) => {
     try {
-      const source = findSource(slot);
+      const source = requireKind(findSource(slot), 'directv', 'tune');
       await directv.tune(source.ip, source.port || 8080, major, minor);
       const live = await poller.pollNow(slot);
       activity.record('source.tune', { actor: req.vcActor, targetType: 'source', targetId: slot, detail: { major, minor } });
@@ -220,7 +231,7 @@ app.post('/api/sources/bulk/tune', async (req, res) => {
 
 app.post('/api/sources/:slot/tune', async (req, res) => {
   try {
-    const source = findSource(req.params.slot);
+    const source = requireKind(findSource(req.params.slot), 'directv', 'tune');
     const { major, minor } = req.body || {};
     if (!major) return res.status(400).json({ error: 'Missing "major".' });
     await directv.tune(source.ip, source.port || 8080, major, minor);
@@ -232,12 +243,24 @@ app.post('/api/sources/:slot/tune', async (req, res) => {
   }
 });
 
+// Phase 6: /key now dispatches per kind -- DirecTV's remote key codes
+// ("guide", "info", "up"/"down"/...) and Roku's ECP keys ("Home", "Select",
+// "Up"/"Down"/..., "Back") are different vocabularies driven by different
+// devices, but both are "send this one remote button" from the staff UI's
+// point of view, so they share this one route rather than forking staff.js
+// per kind.
 app.post('/api/sources/:slot/key', async (req, res) => {
   try {
     const source = findSource(req.params.slot);
     const { key, hold } = req.body || {};
-    if (!key) return res.status(400).json({ error: 'Missing "key" -- e.g. "guide", "info", "select", "up", "down", "left", "right".' });
-    await directv.processKey(source.ip, source.port || 8080, key, hold);
+    if (!key) return res.status(400).json({ error: 'Missing "key".' });
+    if (source.kind === 'directv') {
+      await directv.processKey(source.ip, source.port || 8080, key, hold);
+    } else {
+      await roku.keypress(source.ip, source.port || 8060, key);
+      await poller.pollNow(source.slot).catch(() => {}); // a key like Home changes the active app -- refresh, but don't fail the request if the re-read hiccups
+    }
+    activity.record('source.key', { actor: req.vcActor, targetType: 'source', targetId: source.slot, detail: { key } });
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -247,13 +270,39 @@ app.post('/api/sources/:slot/key', async (req, res) => {
 // Reads program info for any channel without tuning to it (§2/§7.1) -- the
 // favorites grid uses this to show "ESPN -- Chiefs vs. Bills" instead of
 // just "ESPN", sourced from whichever receiver is asked, not the one it's
-// currently tuned to.
+// currently tuned to. DirecTV-only -- Roku has no channel/program concept.
 app.get('/api/sources/:slot/proginfo', async (req, res) => {
   try {
-    const source = findSource(req.params.slot);
+    const source = requireKind(findSource(req.params.slot), 'directv', 'read program info for');
     if (!req.query.major) return res.status(400).json({ error: 'Missing "major" query param.' });
     const info = await directv.getProgInfo(source.ip, source.port || 8080, req.query.major, req.query.minor);
     res.json(info);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------- Roku app control (Phase 6, docs/venue-control.md §7.3) ----------------
+// Staff-facing, same PIN gate as the rest of /api/sources.
+app.get('/api/sources/:slot/apps', async (req, res) => {
+  try {
+    const source = requireKind(findSource(req.params.slot), 'roku', 'list apps on');
+    const apps = await roku.getApps(source.ip, source.port || 8060);
+    res.json({ ok: true, apps });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/sources/:slot/launch', async (req, res) => {
+  try {
+    const source = requireKind(findSource(req.params.slot), 'roku', 'launch an app on');
+    const { appId } = req.body || {};
+    if (!appId) return res.status(400).json({ error: 'Missing "appId".' });
+    await roku.launch(source.ip, source.port || 8060, appId);
+    const live = await poller.pollNow(source.slot);
+    activity.record('source.launch', { actor: req.vcActor, targetType: 'source', targetId: source.slot, detail: { appId } });
+    res.json({ ok: true, live });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
