@@ -403,6 +403,218 @@ next();
 };
 }
 
+// docs/venue-control.md §11: "All destructive admin actions write to
+// vc_activity with actor and origin." Phase 5 (§12: "...activity log").
+// Takes an already-connected client so callers can fold the write into the
+// same transaction as the action itself -- every call site below already
+// has one open (withServiceClient). Used both by admin-session routes
+// (origin: 'cloud', actor: the owner's name/email) and by the agent-facing
+// activity batch route further down (origin: 'local', actor: whatever the
+// agent tagged the local action with -- see agent/lib/activity.js).
+async function recordActivity(client, siteId, { actor, origin, action, targetType, targetId, detail, result }) {
+await client.query(
+`INSERT INTO vc_activity (site_id, actor, origin, action, target_type, target_id, detail, result)
+   VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'{}'::JSONB),COALESCE($8,'ok'))`,
+[siteId, actor || null, origin || 'local', action, targetType || null, targetId || null, detail ? JSON.stringify(detail) : null, result || null]
+);
+}
+
+// ---------------- Venue Control — backup/restore helpers (Phase 5) ----------------
+// docs/venue-control.md §6: "checksum is SHA-256 over canonicalized payload
+// JSON, so a corrupt or truncated snapshot is rejected rather than
+// restored." Sorted object keys make the same logical payload hash the
+// same way regardless of the order Postgres happened to return columns in.
+function canonicalJson(value) {
+if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+if (value && typeof value === 'object') {
+const keys = Object.keys(value).sort();
+return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
+}
+return JSON.stringify(value === undefined ? null : value);
+}
+
+// Builds a full snapshot straight from Postgres -- §6: "The agent holds no
+// unique state... lives in Supabase." Because Supabase is already the sole
+// source of truth for every table in here, a backup never needs the agent
+// to send its own state up; the agent-facing POST /api/venue/agent/backup
+// route further down just pings this on a schedule. Raw DB rows (with
+// their live ids) are kept in the payload deliberately, not the trimmed
+// public shape GET /api/venue/agent/config sends -- performRestore below
+// needs those original ids to remap cross-references (tv.zone_id,
+// layout_items.target_id, schedule payloads) after a restore reassigns
+// fresh ones.
+async function buildBackupPayload(client, siteId) {
+const { rows: siteRows } = await client.query(
+`SELECT vs.location_id, vs.timezone, l.name
+   FROM vc_sites vs JOIN locations l ON l.id = vs.location_id WHERE vs.id = $1`,
+[siteId]
+);
+if (!siteRows[0]) throw Object.assign(new Error('No Venue Control site found for that id.'), { status: 404 });
+const { rows: zones } = await client.query('SELECT * FROM vc_zones WHERE site_id = $1 ORDER BY sort_order, name', [siteId]);
+const { rows: sources } = await client.query('SELECT * FROM vc_sources WHERE site_id = $1 ORDER BY slot', [siteId]);
+const { rows: tvs } = await client.query('SELECT * FROM vc_tvs WHERE site_id = $1 ORDER BY sort_order, name', [siteId]);
+// Site-scoped favorites only -- shared favorites (site_id IS NULL) belong
+// to every site at once, so no single site's backup/restore ever touches
+// them (see performRestore's own comment on this same point).
+const { rows: favorites } = await client.query('SELECT * FROM vc_favorites WHERE site_id = $1 ORDER BY category, sort_order, name', [siteId]);
+const { rows: layouts } = await client.query('SELECT * FROM vc_layouts WHERE site_id = $1 ORDER BY sort_order, name', [siteId]);
+const { rows: layoutItems } = layouts.length
+? await client.query('SELECT * FROM vc_layout_items WHERE layout_id = ANY($1::bigint[]) ORDER BY layout_id, step_order', [layouts.map((l) => l.id)])
+: { rows: [] };
+const { rows: schedules } = await client.query('SELECT * FROM vc_schedules WHERE site_id = $1 ORDER BY name', [siteId]);
+return {
+schema_version: 1,
+site: { location_id: siteRows[0].location_id, name: siteRows[0].name, timezone: siteRows[0].timezone },
+zones, sources, tvs, favorites, layouts, layout_items: layoutItems, schedules,
+};
+}
+
+async function insertBackup(client, siteId, kind, label, createdBy) {
+const payload = await buildBackupPayload(client, siteId);
+const checksum = crypto.createHash('sha256').update(canonicalJson(payload)).digest('hex');
+const itemCounts = {
+zones: payload.zones.length, sources: payload.sources.length, tvs: payload.tvs.length,
+favorites: payload.favorites.length, layouts: payload.layouts.length, schedules: payload.schedules.length,
+};
+const { rows } = await client.query(
+`INSERT INTO vc_backups (site_id, kind, label, payload, checksum, item_counts, created_by)
+   VALUES ($1,$2,$3,$4,$5,$6,$7)
+   RETURNING id, site_id, kind, label, payload, checksum, item_counts, created_by, created_at`,
+[siteId, kind, label || null, JSON.stringify(payload), checksum, JSON.stringify(itemCounts), createdBy || null]
+);
+// §6: "Retention: keep 30 auto, all manual, all pre_restore."
+if (kind === 'auto') {
+await client.query(
+`DELETE FROM vc_backups WHERE site_id = $1 AND kind = 'auto' AND id NOT IN (
+     SELECT id FROM vc_backups WHERE site_id = $1 AND kind = 'auto' ORDER BY created_at DESC LIMIT 30
+   )`,
+[siteId]
+);
+}
+return rows[0];
+}
+
+// Remaps a schedule's JSONB payload after a restore reassigns fresh ids to
+// zones/tvs/layouts -- a tvs_power schedule's zone_id/tv_ids and an
+// apply_layout schedule's layout_id all point at the OLD ids captured in
+// the backup, and would silently target nothing (or the wrong thing) post-
+// restore without this. source_tune's slot/slots are untouched -- slots
+// are stable numbers, not database ids.
+function remapSchedulePayload(payload, { zoneIdMap, tvIdMap, layoutIdMap }) {
+const p = { ...(payload || {}) };
+if (p.zone_id != null) p.zone_id = zoneIdMap.get(p.zone_id) ?? null;
+if (Array.isArray(p.tv_ids)) p.tv_ids = p.tv_ids.map((id) => tvIdMap.get(id)).filter((id) => id != null);
+if (p.layout_id != null) p.layout_id = layoutIdMap.get(p.layout_id) ?? null;
+return p;
+}
+
+// Replaces zones/sources/tvs/favorites/layouts/layout_items/schedules for
+// one site with what's in a backup payload, inside the caller's own
+// transaction. §6: "Matching is by natural key (slot for sources, mac for
+// TVs) so IDs staying stable isn't required" -- rather than upserting row
+// by row against those natural keys (awkward here: vc_sources also has a
+// UNIQUE(site_id, qam_channel) constraint that a naive upsert can
+// transiently violate if channel assignments were reshuffled between the
+// backup and now), this does a full delete-then-reinsert for the site and
+// rebuilds old-id -> new-id maps as it goes, which every downstream
+// cross-reference (tv.zone_id, layout_items.target_id, schedule payloads)
+// is remapped through. Delete order respects the one real FK among these
+// tables (vc_tvs.zone_id -> vc_zones, ON DELETE SET NULL) plus vc_layouts
+// -> vc_layout_items's ON DELETE CASCADE. Activity log and discovery
+// history are never touched here, per §6's own words -- callers add
+// exactly one recordActivity entry for the restore action itself.
+async function performRestore(client, siteId, payload) {
+await client.query('DELETE FROM vc_tvs WHERE site_id = $1', [siteId]);
+await client.query('DELETE FROM vc_zones WHERE site_id = $1', [siteId]);
+await client.query('DELETE FROM vc_sources WHERE site_id = $1', [siteId]);
+await client.query('DELETE FROM vc_favorites WHERE site_id = $1', [siteId]); // site-scoped only; shared favorites (site_id IS NULL) are untouched
+await client.query('DELETE FROM vc_layouts WHERE site_id = $1', [siteId]); // cascades vc_layout_items
+await client.query('DELETE FROM vc_schedules WHERE site_id = $1', [siteId]);
+
+const zoneIdMap = new Map();
+for (const z of payload.zones || []) {
+const { rows } = await client.query(
+'INSERT INTO vc_zones (site_id, name, sort_order) VALUES ($1,$2,$3) RETURNING id',
+[siteId, z.name, z.sort_order || 0]
+);
+zoneIdMap.set(z.id, rows[0].id);
+}
+
+const sourceIdMap = new Map();
+for (const s of payload.sources || []) {
+const { rows } = await client.query(
+`INSERT INTO vc_sources (site_id, slot, qam_channel, label, kind, ip, port, mac, receiver_id, access_card_id, serial_num, sw_version, enabled, sort_order, notes)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+[siteId, s.slot, s.qam_channel, s.label, s.kind, s.ip, s.port, s.mac, s.receiver_id, s.access_card_id, s.serial_num, s.sw_version, s.enabled, s.sort_order, s.notes]
+);
+sourceIdMap.set(s.id, rows[0].id);
+}
+
+const tvIdMap = new Map();
+for (const t of payload.tvs || []) {
+const newZoneId = t.zone_id != null ? (zoneIdMap.get(t.zone_id) ?? null) : null;
+const { rows } = await client.query(
+`INSERT INTO vc_tvs (site_id, zone_id, name, tag, brand, model, ip, mac, control_method, ws_port, ws_token, st_device_id,
+     wol_enabled, power_capable, channel_capable, volume_capable, default_source_slot, last_known_slot, last_known_power,
+     enabled, sort_order, notes)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
+[siteId, newZoneId, t.name, t.tag, t.brand, t.model, t.ip, t.mac, t.control_method, t.ws_port, t.ws_token, t.st_device_id,
+ t.wol_enabled, t.power_capable, t.channel_capable, t.volume_capable, t.default_source_slot, t.last_known_slot, t.last_known_power,
+ t.enabled, t.sort_order, t.notes]
+);
+tvIdMap.set(t.id, rows[0].id);
+}
+
+let favoriteCount = 0;
+for (const f of payload.favorites || []) {
+if (f.site_id == null) continue; // shared favorites are never part of a per-site restore
+await client.query(
+`INSERT INTO vc_favorites (site_id, name, major, minor, category, color, sort_order, enabled)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+[siteId, f.name, f.major, f.minor, f.category, f.color, f.sort_order, f.enabled]
+);
+favoriteCount++;
+}
+
+const layoutIdMap = new Map();
+for (const l of payload.layouts || []) {
+const { rows } = await client.query(
+'INSERT INTO vc_layouts (site_id, name, description, sort_order) VALUES ($1,$2,$3,$4) RETURNING id',
+[siteId, l.name, l.description, l.sort_order || 0]
+);
+layoutIdMap.set(l.id, rows[0].id);
+}
+
+for (const it of payload.layout_items || []) {
+const newLayoutId = layoutIdMap.get(it.layout_id);
+if (!newLayoutId) continue; // the layout this item belonged to wasn't restored (shouldn't happen, but never fail the whole restore over one orphaned item)
+const newTargetId = it.target_type === 'source' ? sourceIdMap.get(it.target_id) : it.target_type === 'tv' ? tvIdMap.get(it.target_id) : null;
+if (!newTargetId) continue; // the source/tv this item pointed at isn't in the restored set
+await client.query(
+'INSERT INTO vc_layout_items (layout_id, target_type, target_id, action, step_order) VALUES ($1,$2,$3,$4,$5)',
+[newLayoutId, it.target_type, newTargetId, JSON.stringify(it.action), it.step_order || 0]
+);
+}
+
+for (const s of payload.schedules || []) {
+const remappedPayload = remapSchedulePayload(s.payload, { zoneIdMap, tvIdMap, layoutIdMap });
+await client.query(
+`INSERT INTO vc_schedules (site_id, name, cron_expr, action_type, payload, enabled, last_run_at, last_result)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+[siteId, s.name, s.cron_expr, s.action_type, JSON.stringify(remappedPayload), s.enabled, s.last_run_at, s.last_result]
+);
+}
+
+return {
+zones: (payload.zones || []).length,
+sources: (payload.sources || []).length,
+tvs: (payload.tvs || []).length,
+favorites: favoriteCount,
+layouts: (payload.layouts || []).length,
+schedules: (payload.schedules || []).length,
+};
+}
+
 // Agent calls this on every boot. Keeps exactly one vc_agents row current
 // per site (updates the most-recently-seen row if one exists) rather than
 // growing a new row every restart -- a site normally has one agent box.
@@ -466,8 +678,24 @@ const { rows: schedules } = await withServiceClient((client) => client.query(
 'SELECT * FROM vc_schedules WHERE site_id = $1 AND enabled = true ORDER BY name',
 [req.vcSite.site_id]
 ));
+// Phase 5 (docs/venue-control.md §12): layouts + their items, so
+// lib/layouts.js (staff "apply" and the scheduler's apply_layout action)
+// can execute a layout without the agent ever talking to Supabase
+// directly -- same cached-mirror shape as everything else in this config.
+// Unlike sources/tvs/schedules there's no `enabled` flag on layouts to
+// filter by; every layout for the site is always current here.
+const { rows: layouts } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_layouts WHERE site_id = $1 ORDER BY sort_order, name',
+[req.vcSite.site_id]
+));
+const { rows: layoutItems } = layouts.length
+? await withServiceClient((client) => client.query(
+  'SELECT * FROM vc_layout_items WHERE layout_id = ANY($1::bigint[]) ORDER BY layout_id, step_order',
+  [layouts.map((l) => l.id)]
+))
+: { rows: [] };
 const config = {
-schema_version: 4,
+schema_version: 5,
 site: {
 location_id: req.vcSite.location_id,
 name: req.vcSite.location_name,
@@ -475,7 +703,13 @@ timezone: req.vcSite.timezone,
 scan_ranges: req.vcSite.scan_ranges,
 },
 sources: sources.map((s) => ({
-slot: s.slot, qam_channel: s.qam_channel, label: s.label, kind: s.kind,
+// id added in Phase 5 -- vc_layout_items.target_id (target_type "source")
+// points at a source's actual row id, not its slot (§5's own example:
+// { "target_type": "source", "target_id": 4, ... }), so lib/layouts.js
+// needs it to resolve a layout item back to a slot/qam_channel. Every
+// route through Phase 4 keyed sources purely off "slot" instead, which is
+// why this was never sent down before now.
+id: s.id, slot: s.slot, qam_channel: s.qam_channel, label: s.label, kind: s.kind,
 ip: s.ip, port: s.port, mac: s.mac, receiver_id: s.receiver_id,
 access_card_id: s.access_card_id, serial_num: s.serial_num, sw_version: s.sw_version,
 enabled: s.enabled,
@@ -493,6 +727,10 @@ default_source_slot: t.default_source_slot, last_known_slot: t.last_known_slot, 
 })),
 schedules: schedules.map((s) => ({
 id: s.id, name: s.name, cron_expr: s.cron_expr, action_type: s.action_type, payload: s.payload, enabled: s.enabled,
+})),
+layouts: layouts.map((l) => ({ id: l.id, name: l.name, description: l.description, sort_order: l.sort_order })),
+layout_items: layoutItems.map((it) => ({
+id: it.id, layout_id: it.layout_id, target_type: it.target_type, target_id: it.target_id, action: it.action, step_order: it.step_order,
 })),
 };
 const etag = crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
@@ -728,20 +966,28 @@ res.status(err.status || 400).json({ error: err.message });
 
 app.post('/api/venue-control/sources/:id/archive', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { rows } = await withServiceClient((client) => client.query(
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query(
 'UPDATE vc_sources SET enabled = false, updated_at = now() WHERE id = $1 RETURNING *',
 [req.params.id]
-));
+);
+if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'source.archive', targetType: 'source', targetId: rows[0].id, detail: { slot: rows[0].slot, label: rows[0].label } });
+return rows;
+});
 if (!rows[0]) return res.status(404).json({ error: 'Source not found.' });
 res.json({ ok: true, source: rows[0] });
 });
 
 app.post('/api/venue-control/sources/:id/restore', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { rows } = await withServiceClient((client) => client.query(
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query(
 'UPDATE vc_sources SET enabled = true, updated_at = now() WHERE id = $1 RETURNING *',
 [req.params.id]
-));
+);
+if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'source.restore', targetType: 'source', targetId: rows[0].id, detail: { slot: rows[0].slot, label: rows[0].label } });
+return rows;
+});
 if (!rows[0]) return res.status(404).json({ error: 'Source not found.' });
 res.json({ ok: true, source: rows[0] });
 });
@@ -802,20 +1048,30 @@ res.json({ ok: true, favorite: rows[0] });
 
 app.post('/api/venue-control/favorites/:id/archive', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { rows } = await withServiceClient((client) => client.query(
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query(
 'UPDATE vc_favorites SET enabled = false WHERE id = $1 RETURNING *',
 [req.params.id]
-));
+);
+// site_id is nullable here (shared favorites) -- nothing to log against
+// if it's a global favorite with no single owning site.
+if (rows[0] && rows[0].site_id) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'favorite.archive', targetType: 'favorite', targetId: rows[0].id, detail: { name: rows[0].name } });
+return rows;
+});
 if (!rows[0]) return res.status(404).json({ error: 'Favorite not found.' });
 res.json({ ok: true, favorite: rows[0] });
 });
 
 app.post('/api/venue-control/favorites/:id/restore', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { rows } = await withServiceClient((client) => client.query(
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query(
 'UPDATE vc_favorites SET enabled = true WHERE id = $1 RETURNING *',
 [req.params.id]
-));
+);
+if (rows[0] && rows[0].site_id) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'favorite.restore', targetType: 'favorite', targetId: rows[0].id, detail: { name: rows[0].name } });
+return rows;
+});
 if (!rows[0]) return res.status(404).json({ error: 'Favorite not found.' });
 res.json({ ok: true, favorite: rows[0] });
 });
@@ -910,7 +1166,11 @@ res.status(400).json({ error: err.message });
 
 app.post('/api/venue-control/zones/:id/delete', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { rows } = await withServiceClient((client) => client.query('DELETE FROM vc_zones WHERE id = $1 RETURNING id', [req.params.id]));
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query('DELETE FROM vc_zones WHERE id = $1 RETURNING id, site_id, name', [req.params.id]);
+if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'zone.delete', targetType: 'zone', targetId: rows[0].id, detail: { name: rows[0].name } });
+return rows;
+});
 if (!rows[0]) return res.status(404).json({ error: 'Zone not found.' });
 res.json({ ok: true });
 });
@@ -989,20 +1249,28 @@ res.status(400).json({ error: err.message });
 
 app.post('/api/venue-control/tvs/:id/archive', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { rows } = await withServiceClient((client) => client.query(
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query(
 'UPDATE vc_tvs SET enabled = false, updated_at = now() WHERE id = $1 RETURNING *',
 [req.params.id]
-));
+);
+if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'tv.archive', targetType: 'tv', targetId: rows[0].id, detail: { name: rows[0].name } });
+return rows;
+});
 if (!rows[0]) return res.status(404).json({ error: 'TV not found.' });
 res.json({ ok: true, tv: rows[0] });
 });
 
 app.post('/api/venue-control/tvs/:id/restore', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { rows } = await withServiceClient((client) => client.query(
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query(
 'UPDATE vc_tvs SET enabled = true, updated_at = now() WHERE id = $1 RETURNING *',
 [req.params.id]
-));
+);
+if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'tv.restore', targetType: 'tv', targetId: rows[0].id, detail: { name: rows[0].name } });
+return rows;
+});
 if (!rows[0]) return res.status(404).json({ error: 'TV not found.' });
 res.json({ ok: true, tv: rows[0] });
 });
@@ -1072,9 +1340,306 @@ res.status(400).json({ error: err.message });
 
 app.post('/api/venue-control/schedules/:id/delete', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { rows } = await withServiceClient((client) => client.query('DELETE FROM vc_schedules WHERE id = $1 RETURNING id', [req.params.id]));
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query('DELETE FROM vc_schedules WHERE id = $1 RETURNING id, site_id, name', [req.params.id]);
+if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'schedule.delete', targetType: 'schedule', targetId: rows[0].id, detail: { name: rows[0].name } });
+return rows;
+});
 if (!rows[0]) return res.status(404).json({ error: 'Schedule not found.' });
 res.json({ ok: true });
+});
+
+// ---------------- Venue Control — Layouts (Phase 5) ----------------
+// docs/venue-control.md §5: "A layout captures the whole room in one
+// record -- what each receiver is tuned to *and* what each TV is showing."
+// §12 Phase 5: "Whole-room presets with capture-current-state..."
+//
+// Deliberate deviation from §8.1's idealized route list: there is no cloud
+// POST .../layouts/:id/capture here. The cloud never holds live device
+// state -- only the on-site agent polls DirecTV/Samsung directly (§3) --
+// and the agent can't be reached synchronously from the cloud at all by
+// design (§11: "Never expose the agent to the internet," no inbound path
+// exists). So "capture current state" is an agent-local, admin-PIN-gated
+// action (agent/server.js's POST /api/admin/layouts/:id/capture) that
+// pushes the captured items up through POST /api/venue/agent/layouts/:id/
+// items further down this file. This card manages layout shells
+// (name/description/order) and can view captured items read-only; the
+// actual capture happens on-site, same shape as Phase 4's channel_capable
+// being an on-site-verified toggle rather than something the cloud can
+// determine on its own.
+app.get('/api/venue-control/sites/:locationId/layouts', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows: layouts } = await withServiceClient((client) => client.query(
+`SELECT l.* FROM vc_layouts l JOIN vc_sites vs ON vs.id = l.site_id
+  WHERE vs.location_id = $1
+  ORDER BY l.sort_order, l.name`,
+[req.params.locationId]
+));
+if (!layouts.length) return res.json([]);
+const { rows: items } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_layout_items WHERE layout_id = ANY($1::bigint[]) ORDER BY layout_id, step_order',
+[layouts.map((l) => l.id)]
+));
+const itemsByLayout = new Map();
+for (const it of items) {
+if (!itemsByLayout.has(it.layout_id)) itemsByLayout.set(it.layout_id, []);
+itemsByLayout.get(it.layout_id).push(it);
+}
+res.json(layouts.map((l) => ({ ...l, items: itemsByLayout.get(l.id) || [] })));
+});
+
+app.post('/api/venue-control/sites/:locationId/layouts', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { name, description, sortOrder } = req.body || {};
+if (!(name || '').trim()) return res.status(400).json({ error: 'Name is required.' });
+try {
+const layout = await withServiceClient(async (client) => {
+const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]);
+if (!siteRows[0]) throw Object.assign(new Error('Turn Venue Control on for this location before adding layouts.'), { status: 404 });
+const { rows } = await client.query(
+`INSERT INTO vc_layouts (site_id, name, description, sort_order)
+   VALUES ($1,$2,$3,COALESCE($4,0)) RETURNING *`,
+[siteRows[0].id, name.trim(), description || null, sortOrder]
+);
+return { ...rows[0], items: [] };
+});
+res.json({ ok: true, layout });
+} catch (err) {
+if (err.code === '23505') return res.status(400).json({ error: 'A layout with that name already exists for this site.' });
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/layouts/:id/update', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { name, description, sortOrder } = req.body || {};
+try {
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_layouts SET
+   name = COALESCE($1, name), description = COALESCE($2, description), sort_order = COALESCE($3, sort_order)
+   WHERE id = $4 RETURNING *`,
+[name ? name.trim() : null, description, sortOrder, req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Layout not found.' });
+res.json({ ok: true, layout: rows[0] });
+} catch (err) {
+if (err.code === '23505') return res.status(400).json({ error: 'A layout with that name already exists for this site.' });
+res.status(400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/layouts/:id/delete', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient(async (client) => {
+// ON DELETE CASCADE on vc_layout_items.layout_id takes care of its items.
+const { rows } = await client.query('DELETE FROM vc_layouts WHERE id = $1 RETURNING id, site_id, name', [req.params.id]);
+if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'layout.delete', targetType: 'layout', targetId: rows[0].id, detail: { name: rows[0].name } });
+return rows;
+});
+if (!rows[0]) return res.status(404).json({ error: 'Layout not found.' });
+res.json({ ok: true });
+});
+
+// Agent-authenticated -- pushed by the on-site agent after an admin-PIN-
+// gated "Capture current state" (agent/server.js's POST /api/admin/
+// layouts/:id/capture). Replaces the layout's items wholesale (delete +
+// reinsert in one transaction) rather than diffing, since a capture is
+// always "this is the room right now," not an incremental edit. Verifies
+// the layout actually belongs to the calling agent's site first -- every
+// agent-facing route that touches a specific row does this same
+// site-ownership check (see the token/slot routes above).
+app.post('/api/venue/agent/layouts/:id/items', requireAgentAuth(), async (req, res) => {
+const { items } = req.body || {};
+if (!Array.isArray(items)) return res.status(400).json({ error: 'Missing "items" array.' });
+for (const it of items) {
+if (!['source', 'tv'].includes(it.target_type)) return res.status(400).json({ error: `Invalid target_type "${it.target_type}" -- expected "source" or "tv".` });
+if (it.target_id == null) return res.status(400).json({ error: 'Every item needs a "target_id".' });
+if (!it.action || typeof it.action !== 'object') return res.status(400).json({ error: 'Every item needs an "action" object.' });
+}
+try {
+const layout = await withServiceClient(async (client) => {
+const { rows: layoutRows } = await client.query(
+'SELECT id, site_id, name FROM vc_layouts WHERE id = $1 AND site_id = $2',
+[req.params.id, req.vcSite.site_id]
+);
+if (!layoutRows[0]) throw Object.assign(new Error('No layout with that id for this site.'), { status: 404 });
+await client.query('DELETE FROM vc_layout_items WHERE layout_id = $1', [layoutRows[0].id]);
+for (let i = 0; i < items.length; i++) {
+const it = items[i];
+await client.query(
+`INSERT INTO vc_layout_items (layout_id, target_type, target_id, action, step_order)
+   VALUES ($1,$2,$3,$4,$5)`,
+[layoutRows[0].id, it.target_type, it.target_id, JSON.stringify(it.action), it.step_order ?? i]
+);
+}
+await recordActivity(client, layoutRows[0].site_id, { actor: 'agent', origin: 'local', action: 'layout.capture', targetType: 'layout', targetId: layoutRows[0].id, detail: { name: layoutRows[0].name, item_count: items.length } });
+return layoutRows[0];
+});
+res.json({ ok: true, layout_id: layout.id, item_count: items.length });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+// ---------------- Venue Control — Backups & Restore (Phase 5) ----------------
+// docs/venue-control.md §6: "an agent box dies, you plug in a replacement,
+// log in, and restore by site_id in minutes." See buildBackupPayload/
+// insertBackup/performRestore above for the mechanics.
+app.get('/api/venue-control/sites/:locationId/backups', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT b.id, b.kind, b.label, b.item_counts, b.created_by, b.created_at
+   FROM vc_backups b JOIN vc_sites vs ON vs.id = b.site_id
+   WHERE vs.location_id = $1
+   ORDER BY b.created_at DESC`,
+[req.params.locationId]
+));
+res.json(rows);
+});
+
+app.post('/api/venue-control/sites/:locationId/backups', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { label } = req.body || {};
+try {
+const backup = await withServiceClient(async (client) => {
+const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]);
+if (!siteRows[0]) throw Object.assign(new Error('Turn Venue Control on for this location before taking a backup.'), { status: 404 });
+const backup = await insertBackup(client, siteRows[0].id, 'manual', label || null, req.person.name || req.person.email);
+await recordActivity(client, siteRows[0].id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'backup.create', targetType: 'backup', targetId: backup.id, detail: { kind: 'manual', item_counts: backup.item_counts } });
+return backup;
+});
+res.json({ ok: true, backup: { ...backup, payload: undefined } });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+// Full payload, for download. Deliberately not nested under :locationId,
+// matching §8.1's own route shape ("GET /api/venue/backups/:id"). Owner
+// role is enough scoping here, same as every other admin route in this
+// single-tenant app -- there's no per-location ACL layered on top of it.
+app.get('/api/venue-control/backups/:id', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query('SELECT * FROM vc_backups WHERE id = $1', [req.params.id]));
+if (!rows[0]) return res.status(404).json({ error: 'Backup not found.' });
+res.json(rows[0]);
+});
+
+app.post('/api/venue-control/sites/:locationId/restore', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { backupId } = req.body || {};
+if (!backupId) return res.status(400).json({ error: 'Missing "backupId".' });
+try {
+const result = await withServiceClient(async (client) => {
+const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]);
+if (!siteRows[0]) throw Object.assign(new Error('No Venue Control site for this location.'), { status: 404 });
+const siteId = siteRows[0].id;
+const { rows: backupRows } = await client.query('SELECT * FROM vc_backups WHERE id = $1 AND site_id = $2', [backupId, siteId]);
+if (!backupRows[0]) throw Object.assign(new Error('No backup with that id for this site.'), { status: 404 });
+const backup = backupRows[0];
+const recomputed = crypto.createHash('sha256').update(canonicalJson(backup.payload)).digest('hex');
+if (recomputed !== backup.checksum) throw Object.assign(new Error(`Backup #${backup.id} failed its checksum check -- refusing to restore a corrupt snapshot.`), { status: 400 });
+// §6: "A pre_restore snapshot is taken automatically before any
+// restore, so a restore is itself reversible."
+const preRestore = await insertBackup(client, siteId, 'pre_restore', `Before restoring backup #${backup.id}`, req.person.name || req.person.email);
+const counts = await performRestore(client, siteId, backup.payload);
+await recordActivity(client, siteId, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'restore', targetType: 'backup', targetId: backup.id, detail: { restored: counts, pre_restore_backup_id: preRestore.id } });
+return { restored: counts, pre_restore_backup_id: preRestore.id };
+});
+res.json({ ok: true, ...result });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+// Agent-facing (§8.1: "POST /api/venue/agent/backup -> nightly snapshot").
+// Takes no body -- see buildBackupPayload's comment above for why: Supabase
+// already holds every table a snapshot needs, so the agent's role here is
+// just "tell me when," not "here's my state." Called once a day by
+// lib/sync.js, and on demand by the agent-local POST /api/backup/now
+// (admin-PIN gated) so §6's disaster-recovery story works from the on-site
+// box alone, without needing TSB Platform reachable at all.
+app.post('/api/venue/agent/backup', requireAgentAuth(), async (req, res) => {
+try {
+const backup = await withServiceClient(async (client) => {
+const backup = await insertBackup(client, req.vcSite.site_id, 'auto', null, 'agent');
+await recordActivity(client, req.vcSite.site_id, { actor: 'agent', origin: 'local', action: 'backup.create', targetType: 'backup', targetId: backup.id, detail: { kind: 'auto', item_counts: backup.item_counts } });
+return backup;
+});
+res.json({ ok: true, backup: { ...backup, payload: undefined } });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+// List for the agent-local admin page's restore picker -- payload left out
+// to keep this light, same as the owner-facing list above.
+app.get('/api/venue/agent/backups', requireAgentAuth(), async (req, res) => {
+const { rows } = await withServiceClient((client) => client.query(
+'SELECT id, kind, label, item_counts, created_by, created_at FROM vc_backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 60',
+[req.vcSite.site_id]
+));
+res.json(rows);
+});
+
+app.post('/api/venue/agent/restore', requireAgentAuth(), async (req, res) => {
+const { backup_id } = req.body || {};
+if (!backup_id) return res.status(400).json({ error: 'Missing "backup_id".' });
+try {
+const result = await withServiceClient(async (client) => {
+const { rows: backupRows } = await client.query('SELECT * FROM vc_backups WHERE id = $1 AND site_id = $2', [backup_id, req.vcSite.site_id]);
+if (!backupRows[0]) throw Object.assign(new Error('No backup with that id for this site.'), { status: 404 });
+const backup = backupRows[0];
+const recomputed = crypto.createHash('sha256').update(canonicalJson(backup.payload)).digest('hex');
+if (recomputed !== backup.checksum) throw Object.assign(new Error(`Backup #${backup.id} failed its checksum check -- refusing to restore a corrupt snapshot.`), { status: 400 });
+const preRestore = await insertBackup(client, req.vcSite.site_id, 'pre_restore', `Before restoring backup #${backup.id}`, 'agent');
+const counts = await performRestore(client, req.vcSite.site_id, backup.payload);
+await recordActivity(client, req.vcSite.site_id, { actor: 'agent', origin: 'local', action: 'restore', targetType: 'backup', targetId: backup.id, detail: { restored: counts, pre_restore_backup_id: preRestore.id } });
+return { restored: counts, pre_restore_backup_id: preRestore.id };
+});
+res.json({ ok: true, ...result });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+// ---------------- Venue Control — Activity log (Phase 5) ----------------
+// docs/venue-control.md §11: "All destructive admin actions write to
+// vc_activity with actor and origin." recordActivity() above is what
+// writes rows; this is the read side.
+app.get('/api/venue-control/sites/:locationId/activity', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT a.* FROM vc_activity a JOIN vc_sites vs ON vs.id = a.site_id
+   WHERE vs.location_id = $1
+   ORDER BY a.ts DESC LIMIT $2`,
+[req.params.locationId, limit]
+));
+res.json(rows);
+});
+
+// Agent-facing batch push. §8.1 describes a general "POST /api/venue/agent/
+// results -> command outcomes, activity batches" route; this is that same
+// idea narrowed to just activity, matching the established pattern of
+// small purpose-built routes over one generic catch-all (see
+// reportScheduleResult/reportTvToken/reportTvSlot in lib/sync.js -- none of
+// which ever needed the general commands/results queue either). Clamped
+// batch size guards against a runaway local queue flooding the table in
+// one call; see agent/lib/activity.js for the queue/flush side.
+app.post('/api/venue/agent/activity', requireAgentAuth(), async (req, res) => {
+const { entries } = req.body || {};
+if (!Array.isArray(entries) || !entries.length) return res.status(400).json({ error: 'Missing "entries" array.' });
+if (entries.length > 200) return res.status(400).json({ error: 'Too many entries in one batch (max 200).' });
+await withServiceClient(async (client) => {
+for (const e of entries) {
+await recordActivity(client, req.vcSite.site_id, {
+actor: e.actor, origin: e.origin || 'local', action: e.action,
+targetType: e.target_type, targetId: e.target_id, detail: e.detail, result: e.result,
+});
+}
+});
+res.json({ ok: true, count: entries.length });
 });
 
 // ---------------- Employees (owner/manager) ----------------
