@@ -71,6 +71,24 @@ async function heartbeat(status = 'online') {
   cache.set('lastHeartbeatOk', true);
 }
 
+// Pushed by lib/scheduler.js after firing a cron row, and by server.js's
+// TV routes when a power/volume command captures a fresh WS pairing token
+// -- both are small, one-off agent->cloud writes, not worth building the
+// general commands/results queue noted in §3 for just these two cases.
+async function reportScheduleResult(scheduleId, resultText) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/schedules/${scheduleId}/result`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ result: resultText }),
+  });
+  if (!res.ok) throw new Error(`schedule result push failed: ${res.status} ${await res.text()}`);
+}
+
+async function reportTvToken(tvId, wsToken) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/tvs/${tvId}/token`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ ws_token: wsToken }),
+  });
+  if (!res.ok) throw new Error(`tv token push failed: ${res.status} ${await res.text()}`);
+}
+
 let timer = null;
 
 function start() {
@@ -105,4 +123,4 @@ function stop() {
   timer = null;
 }
 
-module.exports = { register, pullConfig, heartbeat, start, stop };
+module.exports = { register, pullConfig, heartbeat, start, stop, reportScheduleResult, reportTvToken };
