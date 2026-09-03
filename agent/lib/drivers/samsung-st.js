@@ -57,10 +57,34 @@ async function getSwitchState(deviceId) {
   return data && data.switch && data.switch.value; // 'on' | 'off'
 }
 
+// audioMute status readback -- this is what makes mute/unmute a real
+// discrete operation over SmartThings instead of a blind toggle, the same
+// way getSwitchState (above) could for power. 'muted' | 'unmuted' | null
+// (capability not reported, e.g. this device doesn't expose audioMute).
+async function getMuteState(deviceId) {
+  requireConfigured();
+  if (!deviceId) throw new Error('No SmartThings device id configured for this TV.');
+  const res = await fetchWithTimeout(`${BASE_URL}/devices/${encodeURIComponent(deviceId)}/components/main/capabilities/audioMute/status`, {
+    headers: { Authorization: `Bearer ${SMARTTHINGS_TOKEN}` },
+  });
+  if (!res.ok) throw new Error(`SmartThings audioMute status -> HTTP ${res.status}`);
+  const data = await res.json();
+  return (data && data.mute && data.mute.value) || null; // 'muted' | 'unmuted'
+}
+
 function switchOn(deviceId) { return sendCommand(deviceId, 'switch', 'on'); }
 function switchOff(deviceId) { return sendCommand(deviceId, 'switch', 'off'); }
 function volumeUp(deviceId) { return sendCommand(deviceId, 'audioVolume', 'volumeUp'); }
 function volumeDown(deviceId) { return sendCommand(deviceId, 'audioVolume', 'volumeDown'); }
-function setMute(deviceId) { return sendCommand(deviceId, 'audioMute', 'mute'); }
+// The audioMute capability has discrete mute/unmute commands (not just a
+// toggle) -- setMute() below only ever sent 'mute' regardless of which way
+// the caller wanted to go, which was a real bug in samsung-ws.js's volume
+// dispatch, not a SmartThings limitation. Kept as an alias for the one
+// existing caller; new code should call mute()/unmute() directly.
+function mute(deviceId) { return sendCommand(deviceId, 'audioMute', 'mute'); }
+function unmute(deviceId) { return sendCommand(deviceId, 'audioMute', 'unmute'); }
+function setMute(deviceId) { return mute(deviceId); }
 
-module.exports = { configured, getSwitchState, switchOn, switchOff, volumeUp, volumeDown, setMute };
+module.exports = {
+  configured, getSwitchState, getMuteState, switchOn, switchOff, volumeUp, volumeDown, mute, unmute, setMute,
+};

@@ -268,9 +268,10 @@ async function setPower(tv, desiredState) {
 }
 
 async function setVolume(tv, op) {
-  const keyMap = { up: 'KEY_VOLUP', down: 'KEY_VOLDOWN', mute: 'KEY_MUTE' };
+  if (op === 'mute' || op === 'unmute') return setMute(tv, op === 'mute');
+  const keyMap = { up: 'KEY_VOLUP', down: 'KEY_VOLDOWN' };
   const key = keyMap[op];
-  if (!key) throw new Error(`Unknown volume op "${op}" -- expected "up", "down", or "mute".`);
+  if (!key) throw new Error(`Unknown volume op "${op}" -- expected "up", "down", "mute", or "unmute".`);
 
   if (tv.control_method === 'samsung_ws_token' || tv.control_method === 'samsung_ws_plain') {
     const res = await sendKey(tv, key);
@@ -278,11 +279,70 @@ async function setVolume(tv, op) {
   }
   if (samsungSt.configured() && tv.st_device_id) {
     if (op === 'up') await samsungSt.volumeUp(tv.st_device_id);
-    else if (op === 'down') await samsungSt.volumeDown(tv.st_device_id);
-    else await samsungSt.setMute(tv.st_device_id);
+    else await samsungSt.volumeDown(tv.st_device_id);
     return { ok: true, method: 'smartthings' };
   }
   throw new Error(`No volume control path available for this TV (control_method="${tv.control_method}"${samsungSt.configured() ? ', and no SmartThings device id set' : ', SmartThings not configured'}).`);
 }
 
-module.exports = { identify, getState, getPowerState, sendKey, sendKeySequence, setPower, setVolume, selectChannel, keysForQamChannel };
+// ---------------------------------------------------------------- discrete mute (§6: no single MUTE toggle)
+//
+// The honest version of this feature depends entirely on whether the TV
+// exposes a readable mute state:
+//
+//   - SmartThings' audioMute capability has real discrete mute/unmute
+//     commands *and* a status readback (samsung-st.js's getMuteState), so
+//     when a TV has st_device_id configured this reads state first and only
+//     sends a command when a change is actually needed -- a real discrete
+//     operation, exactly like setPower() above.
+//
+//   - The local WS remote-control protocol has no such thing. KEY_MUTE is a
+//     single toggle key with no KEY_UNMUTE and no "is it muted right now"
+//     query anywhere in the API. There is no honest way to make this fully
+//     discrete over WS alone -- so this falls back to a last-known-state
+//     cache (this process's memory only, cleared on agent restart) and only
+//     sends KEY_MUTE when that cache disagrees with the desired state.
+//     `confirmed: false` in the result means exactly what it says: we did
+//     our best, but nothing actually read the TV back to prove it. Callers
+//     (agent/server.js, tvs.js) should surface that honestly rather than
+//     implying certainty a toggle-only remote can't provide.
+const wsMuteCache = new Map(); // tv id -> boolean (true = believed muted)
+
+async function setMute(tv, desiredMuted) {
+  if (samsungSt.configured() && tv.st_device_id) {
+    try {
+      const before = await samsungSt.getMuteState(tv.st_device_id); // 'muted' | 'unmuted' | null
+      const beforeMuted = before === 'muted' ? true : before === 'unmuted' ? false : null;
+      if (beforeMuted === desiredMuted) {
+        return { ok: true, muted: desiredMuted, changed: false, confirmed: true, method: 'none' };
+      }
+      if (desiredMuted) await samsungSt.mute(tv.st_device_id);
+      else await samsungSt.unmute(tv.st_device_id);
+      const after = await samsungSt.getMuteState(tv.st_device_id);
+      const afterMuted = after === 'muted' ? true : after === 'unmuted' ? false : desiredMuted;
+      return { ok: afterMuted === desiredMuted, muted: afterMuted, changed: afterMuted !== beforeMuted, confirmed: after != null, method: 'smartthings' };
+    } catch (err) {
+      // Fall through to the WS toggle path below rather than failing
+      // outright -- e.g. this device's SmartThings integration doesn't
+      // report audioMute even though it's configured for power.
+    }
+  }
+
+  if (tv.control_method !== 'samsung_ws_token' && tv.control_method !== 'samsung_ws_plain') {
+    throw new Error(`No mute control path available for this TV (control_method="${tv.control_method}"${samsungSt.configured() ? ', and SmartThings has no usable audioMute status for it' : ', SmartThings not configured'}).`);
+  }
+  const cached = wsMuteCache.has(tv.id) ? wsMuteCache.get(tv.id) : null;
+  if (cached === desiredMuted) {
+    return { ok: true, muted: desiredMuted, changed: false, confirmed: false, method: 'none', note: 'Using last-known state -- this TV has no way to read mute state back, so this could be wrong if it was muted from its own physical remote.' };
+  }
+  const res = await sendKey(tv, 'KEY_MUTE');
+  wsMuteCache.set(tv.id, desiredMuted);
+  return {
+    ok: true, muted: desiredMuted, changed: true, confirmed: false, method: 'ws', token: res.token,
+    note: cached === null
+      ? 'This TV\'s remote can only toggle mute, not set it directly, and starting state was unknown -- sent one toggle assuming it was unmuted.'
+      : undefined,
+  };
+}
+
+module.exports = { identify, getState, getPowerState, sendKey, sendKeySequence, setPower, setVolume, setMute, selectChannel, keysForQamChannel };
