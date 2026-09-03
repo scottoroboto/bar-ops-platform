@@ -4,49 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Venue Control Agent — Discovery</title>
-<style>
-  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #14171c; color: #e8eaed; }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 20px 60px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 15px; margin: 0 0 10px; color: #cfd3da; }
-  a { color: #7fb7ff; }
-  .muted { color: #9aa1ab; font-size: 13px; }
-  .card { background: #1c2027; border-radius: 12px; padding: 16px 18px; margin-top: 16px; }
-  .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #262b33; font-size: 14px; }
-  .row:last-child { border-bottom: none; }
-  .row .k { color: #9aa1ab; }
-  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-  .badge.on, .badge.high { background: rgba(63,191,127,0.18); color: #6be3a4; }
-  .badge.off { background: rgba(229,86,109,0.18); color: #ff8a9a; }
-  .badge.medium { background: rgba(230,180,70,0.18); color: #f0c869; }
-  .badge.low { background: rgba(154,161,171,0.18); color: #b6bcc6; }
-  input, select, textarea { background: #11141a; border: 1px solid #2c313a; color: #e8eaed; border-radius: 8px; padding: 8px 10px; font-size: 14px; font-family: inherit; }
-  textarea { width: 100%; box-sizing: border-box; min-height: 54px; resize: vertical; }
-  button { background: #2c313a; border: 1px solid #3a404b; color: #e8eaed; border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer; }
-  button:hover { background: #353c47; }
-  button.primary { background: #2b6cb0; border-color: #2b6cb0; }
-  button.primary:hover { background: #3178c2; }
-  button.danger { background: #7a2c3a; border-color: #7a2c3a; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
-  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #262b33; vertical-align: top; }
-  th { color: #9aa1ab; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
-  .actions-cell { white-space: nowrap; }
-  .actions-cell button { margin-right: 4px; margin-bottom: 4px; }
-  #pinGate .card { max-width: 360px; margin: 60px auto 0; }
-  #app { display: none; }
-  .msg { padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-top: 10px; }
-  .msg.error { background: rgba(229,86,109,0.15); color: #ff8a9a; }
-  .msg.success { background: rgba(63,191,127,0.15); color: #6be3a4; }
-  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-  .field label { font-size: 12px; color: #9aa1ab; }
-  .field-row { display: flex; gap: 10px; flex-wrap: wrap; }
-  dialog { background: #1c2027; color: #e8eaed; border: 1px solid #2c313a; border-radius: 12px; padding: 18px; max-width: 380px; }
-  dialog::backdrop { background: rgba(0,0,0,0.5); }
-</style>
+<link rel="stylesheet" href="admin-theme.css">
 </head>
-<body>
+<body class="admin">
 <div class="wrap" id="pinGate">
   <div class="card">
     <h2>Discovery &amp; Diagnostics</h2>

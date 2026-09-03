@@ -14,7 +14,7 @@ function submitPin() {
   // still success), so a clean response here is proof the PIN was accepted.
   api('/api/sources').then((sources) => {
     document.getElementById('pinGate').style.display = 'none';
-    document.getElementById('app').style.display = '';
+    document.getElementById('app').style.display = 'block';
     SOURCES = sources;
     renderSources();
     loadFavorites();

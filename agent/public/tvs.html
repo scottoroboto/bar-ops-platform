@@ -27,6 +27,8 @@
     <div class="zone-header">
       <h2 style="margin:0;">All TVs <span class="muted" id="refreshedAt"></span></h2>
       <div class="zone-actions">
+        <button class="small" onclick="setAllZonesCollapsed(true, allZoneKeys())">Collapse all</button>
+        <button class="small" onclick="setAllZonesCollapsed(false)">Expand all</button>
         <button class="small" onclick="bulkPower('on')">All on</button>
         <button class="small hold-danger" data-zone="" data-hold-action="off"><span class="hold-fill"></span><span class="hold-label">Hold: All off</span></button>
       </div>

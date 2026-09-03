@@ -13,7 +13,7 @@ function submitPin() {
   STAFF_PIN = document.getElementById('pinInput').value;
   api('/api/layouts').then((layouts) => {
     document.getElementById('pinGate').style.display = 'none';
-    document.getElementById('app').style.display = '';
+    document.getElementById('app').style.display = 'block';
     LAYOUTS = layouts;
     renderLayouts();
     loadNames(); // non-blocking -- only needed to label items by name in the apply progress list

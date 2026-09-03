@@ -1,0 +1,106 @@
+/* Agent-local admin/diagnostic pages (Discovery, Admin/backups) — the TSB Platform
+   near-black/blue admin visual system, per docs/venue-control-gui-reconciliation.md §4:
+   "re-skin agent/public/discovery.html/.js in the TSB-admin dark-blue visual system so
+   it looks like it belongs to the same product" (Scotto's chosen option A — Discovery
+   stays served locally by the agent, just restyled to match). Extended here to
+   agent/public/admin.html too, since it's the same category of tool (owner/admin-PIN
+   gated setup & disaster-recovery, not staff-facing) and previously shared Discovery's
+   own ad-hoc inline palette — leaving it unstyled would have looked inconsistent.
+
+   Deliberately distinct from staff-theme.css (warm amber-on-charcoal, for the
+   tap-to-control Sources/TVs/Layouts pages) — this is the other half of the two-system
+   split the GUI handoff calls for. Values are copied directly from the cloud's own
+   public/styles.css + public/venue-control-admin.css so this reads as the same product,
+   even though the agent can't literally load those files (separate server, no shared
+   static hosting between the on-site box and Render). */
+
+:root {
+  --bg: #0f1115;
+  --card: #171a21;
+  --card-border: #262b36;
+  --text: #eef0f4;
+  --muted: #9aa3b2;
+  --accent: #4f8dfd;
+  --accent-text: #ffffff;
+  --danger: #e5566d;
+  --success: #3fbf7f;
+  --warn: #e0a83e;
+  --radius: 12px;
+}
+
+* { box-sizing: border-box; }
+
+body.admin {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.admin .wrap { max-width: 960px; margin: 0 auto; padding: 24px 20px 60px; }
+.admin h1 { font-size: 20px; margin: 0 0 4px; }
+.admin h2 { font-size: 15px; margin: 0 0 10px; color: var(--text); }
+.admin a { color: var(--accent); text-decoration: none; }
+.admin a:hover { text-decoration: underline; }
+.admin .muted { color: var(--muted); font-size: 13px; }
+
+.admin .card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 16px 18px; margin-top: 16px; }
+
+.admin .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--card-border); font-size: 14px; }
+.admin .row:last-child { border-bottom: none; }
+.admin .row .k { color: var(--muted); }
+
+.admin .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.admin .badge.on, .admin .badge.high { background: rgba(63,191,127,0.18); color: #6be3a4; }
+.admin .badge.off { background: rgba(229,86,109,0.18); color: #ff8a9a; }
+.admin .badge.wait, .admin .badge.low { background: rgba(154,163,178,0.15); color: var(--muted); }
+.admin .badge.medium { background: rgba(224,168,62,0.18); color: #f0c265; }
+
+.admin input, .admin select, .admin textarea {
+  background: #0c0e13; border: 1px solid var(--card-border); color: var(--text);
+  border-radius: 8px; padding: 8px 10px; font-size: 14px; font-family: inherit;
+}
+.admin textarea { width: 100%; box-sizing: border-box; min-height: 54px; resize: vertical; }
+
+.admin button {
+  background: var(--card); border: 1px solid var(--card-border); color: var(--text);
+  border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer;
+}
+.admin button:hover { background: #1e222b; }
+.admin button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.admin button.primary:hover { background: #3d7de0; }
+.admin button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.admin button.danger:hover { background: #d1435a; }
+.admin button:disabled { opacity: 0.5; cursor: not-allowed; }
+.admin button.small { padding: 5px 10px; font-size: 12.5px; }
+
+.admin #pinGate .card { max-width: 360px; margin: 60px auto 0; }
+.admin #app { display: none; }
+
+.admin .msg { padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-top: 10px; }
+.admin .msg.error { background: rgba(229,86,109,0.15); color: #ff8a9a; }
+.admin .msg.success { background: rgba(63,191,127,0.15); color: #6be3a4; }
+
+.admin .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.admin .field label { font-size: 12px; color: var(--muted); }
+.admin .field-row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.admin table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+.admin th, .admin td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--card-border); vertical-align: top; }
+.admin th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+.admin .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.admin .actions-cell { white-space: nowrap; display: flex; gap: 6px; flex-wrap: wrap; }
+
+.admin dialog { background: var(--card); color: var(--text); border: 1px solid var(--card-border); border-radius: 12px; padding: 18px; max-width: 380px; }
+.admin dialog::backdrop { background: rgba(0,0,0,0.5); }
+
+/* Phone-narrow layout (docs/venue-control-gui-reconciliation.md §3/§5). Discovery's
+   results table (IP/MAC/Vendor/Ports/Classify/Adopted/Actions) and the Admin page's
+   backups table can't usefully reflow into a phone-width column -- let each scroll
+   horizontally inside its own card rather than forcing the whole page wider than the
+   viewport (the far more common failure mode for a table on a narrow screen). */
+@media (max-width: 640px) {
+  .admin .wrap { padding: 16px 12px 50px; }
+  #resultsBox, #backupsBox { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  #resultsBox table, #backupsBox table { width: auto; min-width: 620px; }
+}

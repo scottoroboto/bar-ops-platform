@@ -11,7 +11,7 @@ function submitPin() {
   STAFF_PIN = document.getElementById('pinInput').value;
   api('/api/tvs').then((tvs) => {
     document.getElementById('pinGate').style.display = 'none';
-    document.getElementById('app').style.display = '';
+    document.getElementById('app').style.display = 'block';
     TVS = tvs;
     loadZonesThenRender();
     loadSources();
@@ -82,6 +82,55 @@ function liveBadge(live) {
   if (live.power === 'on') return '<span class="badge on">on</span>';
   if (live.power === 'standby') return '<span class="badge wait">standby</span>';
   return '<span class="badge off">unreachable</span>';
+}
+
+// Zone-collapse (docs/venue-control-gui-reconciliation.md §3/§5: "no zone-collapse or
+// adaptive grid density... required for 67-TV sites"). Collapsed state lives only in
+// memory for this page load -- a refresh (F5) re-expands everything, which is fine
+// since it's a viewing convenience, not a saved preference. Kept as a Set of zone keys
+// ('unassigned' or a numeric zone id as a string) rather than resetting on every 20s
+// poll refresh, so toggling a zone open doesn't get clobbered by the next refreshTvs().
+let collapsedZones = new Set();
+
+function toggleZoneCollapse(key) {
+  if (collapsedZones.has(key)) collapsedZones.delete(key);
+  else collapsedZones.add(key);
+  renderTvs();
+}
+
+function setAllZonesCollapsed(collapsed, keys) {
+  if (collapsed) keys.forEach((k) => collapsedZones.add(k));
+  else collapsedZones.clear();
+  renderTvs();
+}
+
+function allZoneKeys() {
+  const keys = new Set();
+  for (const tv of TVS) keys.add(tv.zone_id == null ? 'unassigned' : String(tv.zone_id));
+  return Array.from(keys);
+}
+
+// Per-zone counts shown next to the zone name at all times (even collapsed), so a
+// screen full of zones stays scannable without expanding every one to see what's on.
+function zoneCounts(tvs) {
+  let on = 0, off = 0, unreachable = 0;
+  for (const t of tvs) {
+    const p = t.live && t.live.power;
+    if (t.live && !t.live.ok && p === 'unreachable') unreachable++;
+    else if (p === 'on') on++;
+    else if (p === 'standby') off++;
+    else if (p === undefined || p === null) { /* not polled yet -- not counted either way */ }
+    else unreachable++;
+  }
+  return { total: tvs.length, on, off, unreachable };
+}
+
+function zoneCountHtml(counts) {
+  const parts = [`${counts.total} TV${counts.total === 1 ? '' : 's'}`];
+  if (counts.on) parts.push(`<span class="n-on">${counts.on} on</span>`);
+  if (counts.off) parts.push(`<span class="n-off">${counts.off} off</span>`);
+  if (counts.unreachable) parts.push(`<span class="n-unreachable">${counts.unreachable} unreachable</span>`);
+  return `<span class="zone-count">${parts.join(' · ')}</span>`;
 }
 
 // Press-and-hold for destructive multi-TV off actions (§6: "ALL TVs OFF is
@@ -159,34 +208,44 @@ function renderTvs() {
     // was actually turning off every TV in the building. Fixed here by never
     // collapsing 'unassigned' down to an empty/null scope.
     const name = key === 'unassigned' ? 'Unassigned' : zoneName(Number(key));
+    const collapsed = collapsedZones.has(key);
+    const counts = zoneCounts(tvs);
     return `
       <div class="zone-header">
-        <h2 style="margin:0;">${escapeHtml(name)}</h2>
+        <div class="zone-title">
+          <button class="zone-toggle${collapsed ? ' collapsed' : ''}" onclick="toggleZoneCollapse('${key}')" title="${collapsed ? 'Expand' : 'Collapse'} ${escapeHtml(name)}"><span class="chev">&#9660;</span></button>
+          <h2 style="margin:0;">${escapeHtml(name)}</h2>
+          ${zoneCountHtml(counts)}
+        </div>
         <div class="zone-actions">
           <button class="small" onclick="bulkPower('on', '${key}')">Zone on</button>
           <button class="small hold-danger" data-zone="${key}" data-hold-action="off"><span class="hold-fill"></span><span class="hold-label">Hold: Zone off</span></button>
         </div>
       </div>
-      ${tvs.map((t) => `
-        <div class="tv-row">
-          <div class="tv-top">
-            <div class="tv-name">${escapeHtml(t.name)}${t.tag ? ` <span class="muted">(${escapeHtml(t.tag)})</span>` : ''}</div>
-            ${liveBadge(t.live)}
-          </div>
-          ${t.control_method === 'unknown' || t.control_method === 'none' ? `<p class="muted">Control method not set up yet -- see TSB Platform: Venue Control &rarr; TVs.</p>` : `
-          <div class="tv-controls">
-            <button class="small on" onclick="power(${t.id}, 'on')">On</button>
-            <button class="small off" onclick="power(${t.id}, 'off')">Off</button>
-            ${t.volume_capable !== false ? `
-            <button class="small" onclick="volume(${t.id}, 'down')">Vol &minus;</button>
-            <button class="small" onclick="volume(${t.id}, 'up')">Vol +</button>
-            <button class="small" onclick="volume(${t.id}, 'mute')">Mute</button>
-            <button class="small" onclick="volume(${t.id}, 'unmute')">Unmute</button>
-            <span class="muted" id="muteNote_${t.id}"></span>` : ''}
-          </div>
-          ${t.channel_capable ? renderSourceRow(t) : ''}`}
+      <div class="zone-body${collapsed ? ' collapsed' : ''}">
+        <div class="tv-grid">
+          ${tvs.map((t) => `
+            <div class="tv-tile">
+              <div class="tv-top">
+                <div class="tv-name">${escapeHtml(t.name)}${t.tag ? ` <span class="muted">(${escapeHtml(t.tag)})</span>` : ''}</div>
+                ${liveBadge(t.live)}
+              </div>
+              ${t.control_method === 'unknown' || t.control_method === 'none' ? `<p class="muted">Control method not set up yet -- see TSB Platform: Venue Control &rarr; TVs.</p>` : `
+              <div class="tv-controls">
+                <button class="small on" onclick="power(${t.id}, 'on')">On</button>
+                <button class="small off" onclick="power(${t.id}, 'off')">Off</button>
+                ${t.volume_capable !== false ? `
+                <button class="small" onclick="volume(${t.id}, 'down')">Vol &minus;</button>
+                <button class="small" onclick="volume(${t.id}, 'up')">Vol +</button>
+                <button class="small" onclick="volume(${t.id}, 'mute')">Mute</button>
+                <button class="small" onclick="volume(${t.id}, 'unmute')">Unmute</button>
+                <span class="muted" id="muteNote_${t.id}"></span>` : ''}
+              </div>
+              ${t.channel_capable ? renderSourceRow(t) : ''}`}
+            </div>
+          `).join('')}
         </div>
-      `).join('')}
+      </div>
     `;
   }).join('');
 }

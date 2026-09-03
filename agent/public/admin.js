@@ -12,7 +12,7 @@ function submitPin() {
   // "latest run" check, there's no plausible 404 case to special-case here.
   api('/api/backups').then(() => {
     document.getElementById('pinGate').style.display = 'none';
-    document.getElementById('app').style.display = '';
+    document.getElementById('app').style.display = 'block';
     loadLayoutsForCapture();
     loadBackups();
   }).catch(() => {

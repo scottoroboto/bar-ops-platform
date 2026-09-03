@@ -12,14 +12,14 @@ function submitPin() {
   // GET /api/discovery/runs/latest is harmless and cheap to use as a check.
   api('/api/discovery/runs/latest').then(() => {
     document.getElementById('pinGate').style.display = 'none';
-    document.getElementById('app').style.display = '';
+    document.getElementById('app').style.display = 'block';
     loadLatestRun();
   }).catch((e) => {
     // A 404 ("no run yet") still means the PIN was accepted — anything
     // else (401) means it wasn't.
     if (String(e.message).startsWith('404')) {
       document.getElementById('pinGate').style.display = 'none';
-      document.getElementById('app').style.display = '';
+      document.getElementById('app').style.display = 'block';
       return;
     }
     document.getElementById('pinMsg').innerHTML = `<div class="msg error">Incorrect PIN.</div>`;

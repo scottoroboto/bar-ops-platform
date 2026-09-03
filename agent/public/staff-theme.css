@@ -151,12 +151,34 @@ body.staff {
 .staff .fav-btn .cat { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .staff .fav-btn .live-title { font-size: 11.5px; color: var(--muted-strong); font-weight: 400; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.staff .source-row, .staff .tv-row { border-bottom: 1px solid var(--border); padding: 14px 0; }
-.staff .source-row:last-child, .staff .tv-row:last-child { border-bottom: none; }
+.staff .source-row { border-bottom: 1px solid var(--border); padding: 14px 0; }
+.staff .source-row:last-child { border-bottom: none; }
 .staff .source-top, .staff .tv-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
 .staff .source-name, .staff .tv-name { font-size: 16px; font-weight: 600; }
 .staff .source-controls, .staff .tv-controls { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
 .staff .source-controls input[type=text] { width: 100px; }
+
+/* Zone-collapse + adaptive grid (docs/venue-control-gui-reconciliation.md §3: "no
+   zone-collapse or adaptive grid density -- nothing was built to keep 67 TVs legible
+   on one screen"). Each zone's TVs render into a responsive grid instead of a stacked
+   list, and a zone's own summary counts stay visible even while its body is collapsed,
+   so a screen full of zones is still scannable without expanding every one. */
+.staff .zone-toggle {
+  background: none; border: none; color: var(--muted-strong); font-size: 14px;
+  min-height: 0; padding: 4px 6px; margin: 0; cursor: pointer; line-height: 1;
+}
+.staff .zone-toggle:hover { background: #2b241a; border-radius: 6px; }
+.staff .zone-toggle .chev { display: inline-block; transition: transform 0.15s ease; }
+.staff .zone-toggle.collapsed .chev { transform: rotate(-90deg); }
+.staff .zone-title { display: flex; align-items: center; gap: 6px; }
+.staff .zone-count { font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
+.staff .zone-count .n-on { color: var(--on-fg); }
+.staff .zone-count .n-off { color: var(--muted-strong); }
+.staff .zone-count .n-unreachable { color: var(--blue-fg); }
+.staff .zone-body.collapsed { display: none; }
+
+.staff .tv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin-top: 8px; }
+.staff .tv-tile { background: var(--card-alt); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
 
 .staff #pinGate .card { max-width: 360px; margin: 60px auto 0; }
 .staff #app { display: none; }
@@ -215,6 +237,21 @@ body.staff {
 .staff .failure-banner { margin-top: 10px; padding: 12px 14px; background: var(--off-bg); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .staff .failure-banner .text { color: #FFD9D2; font-size: 13.5px; }
 .staff .failure-banner .actions { display: flex; gap: 8px; }
+
+/* Phone-narrow layout (docs/venue-control-gui-reconciliation.md §3/§5: "no phone-narrow
+   layout anywhere in the current UI"). These pages were built iPad-first (§0: "landscape-
+   primary"); a phone held upright needs less padding and single-column grids rather than
+   tiles fighting for room, but everything (button min-heights, press-and-hold, blast
+   radius) stays exactly the same -- this is layout only, no behavior change. */
+@media (max-width: 480px) {
+  .staff .wrap { padding: 14px 12px 70px; }
+  .staff .card { padding: 14px 14px; }
+  .staff .tv-grid { grid-template-columns: 1fr; }
+  .staff .channel-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+  .staff .keypad { max-width: 100%; }
+  .staff .overlay-body { padding: 14px 14px 32px; }
+  .staff .overlay-header { padding: 14px 14px; }
+}
 
 /* Undo bar (already used by layouts.js -- re-themed here, structure unchanged). */
 .staff #undoBar {
