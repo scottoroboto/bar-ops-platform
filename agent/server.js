@@ -8,6 +8,8 @@ const config = require('./config');
 const cache = require('./lib/cache');
 const sync = require('./lib/sync');
 const discovery = require('./lib/discovery');
+const poller = require('./lib/poller');
+const directv = require('./lib/drivers/directv');
 
 const app = express();
 app.use(express.json());
@@ -46,6 +48,24 @@ function requireAdminPin(req, res, next) {
   next();
 }
 app.use('/api/admin', requireAdminPin);
+
+// Staff PIN gate for day-to-day control routes (docs/venue-control.md §11:
+// "Staff PIN for control routes; separate admin PIN for discovery, backup,
+// restore, and configuration"). An admin PIN also satisfies this gate --
+// the owner already has to remember that one, no reason to make them keep a
+// second PIN in their head too -- but a staff PIN does NOT satisfy the
+// admin gate above (staff shouldn't be able to run a network scan). If
+// neither PIN is set in .env, this is a no-op, same documented gap as
+// requireAdminPin -- see the warning in .env.example.
+function requireStaffPin(req, res, next) {
+if (!config.STAFF_PIN && !config.ADMIN_PIN) return next();
+const pin = req.get('x-staff-pin') || req.query.pin;
+const ok = (config.STAFF_PIN && pin === config.STAFF_PIN) || (config.ADMIN_PIN && pin === config.ADMIN_PIN);
+if (!ok) return res.status(401).json({ error: 'Invalid or missing staff PIN.' });
+next();
+}
+app.use('/api/sources', requireStaffPin);
+app.use('/api/favorites', requireStaffPin);
 
 // ---------------- Discovery & Diagnostics (Phase 1, docs/venue-control.md §9) ----------------
 // Owner/admin only per §9's own opening line -- gated by the same admin PIN
@@ -111,10 +131,107 @@ app.post('/api/discovery/adopt', async (req, res) => {
   }
 });
 
+// ---------------- Source control (Phase 2, docs/venue-control.md §7.1/§8.2) ----------------
+// Staff-facing -- gated by requireStaffPin above, not requireAdminPin.
+// Reads receiver metadata from the synced site config (cache.get('config'),
+// refreshed every 30s by lib/sync.js) and talks to receivers through
+// lib/drivers/directv.js; live tuned/mode state comes from lib/poller.js's
+// in-memory cache rather than a fresh SHEF call on every page load.
+function findSource(slotParam) {
+  const slot = Number(slotParam);
+  const config = cache.get('config') || {};
+  const source = (config.sources || []).find((s) => Number(s.slot) === slot);
+  if (!source) throw new Error(`No source at slot ${slotParam}.`);
+  if (source.kind !== 'directv') throw new Error(`Source at slot ${slotParam} is a "${source.kind}", not a DirecTV receiver -- nothing to tune yet (see build order Phase 6 for Roku).`);
+  if (!source.ip) throw new Error(`Source at slot ${slotParam} has no IP address configured yet.`);
+  return source;
+}
+
+app.get('/api/sources', (req, res) => {
+  const config = cache.get('config') || {};
+  const liveBySlot = new Map(poller.getAllState().map((s) => [s.slot, s]));
+  res.json((config.sources || []).map((s) => ({
+    slot: s.slot, qam_channel: s.qam_channel, label: s.label, kind: s.kind,
+    ip: s.ip, port: s.port,
+    live: liveBySlot.get(Number(s.slot)) || null,
+  })));
+});
+
+// Registered BEFORE /api/sources/:slot/tune below -- Express matches routes
+// in registration order, and ":slot" would otherwise happily match the
+// literal string "bulk" and swallow every call to this route first.
+// Fans out fully in parallel across receivers (§7.1: "different receivers
+// are independent and can be driven in parallel... total time approx one
+// receiver's latency") -- each individual receiver still goes through its
+// own serialized queue inside the driver, so a bulk tune can't itself
+// trigger the burst-hang problem the 350ms gap exists to avoid.
+app.post('/api/sources/bulk/tune', async (req, res) => {
+  const { slots, major, minor } = req.body || {};
+  if (!Array.isArray(slots) || !slots.length) return res.status(400).json({ error: 'Missing "slots" array.' });
+  if (!major) return res.status(400).json({ error: 'Missing "major".' });
+  const results = await Promise.all(slots.map(async (slot) => {
+    try {
+      const source = findSource(slot);
+      await directv.tune(source.ip, source.port || 8080, major, minor);
+      const live = await poller.pollNow(slot);
+      return { slot, ok: true, live };
+    } catch (err) {
+      return { slot, ok: false, error: err.message };
+    }
+  }));
+  res.json({ ok: true, results });
+});
+
+app.post('/api/sources/:slot/tune', async (req, res) => {
+  try {
+    const source = findSource(req.params.slot);
+    const { major, minor } = req.body || {};
+    if (!major) return res.status(400).json({ error: 'Missing "major".' });
+    await directv.tune(source.ip, source.port || 8080, major, minor);
+    const live = await poller.pollNow(source.slot);
+    res.json({ ok: true, live });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/sources/:slot/key', async (req, res) => {
+  try {
+    const source = findSource(req.params.slot);
+    const { key, hold } = req.body || {};
+    if (!key) return res.status(400).json({ error: 'Missing "key" -- e.g. "guide", "info", "select", "up", "down", "left", "right".' });
+    await directv.processKey(source.ip, source.port || 8080, key, hold);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Reads program info for any channel without tuning to it (§2/§7.1) -- the
+// favorites grid uses this to show "ESPN -- Chiefs vs. Bills" instead of
+// just "ESPN", sourced from whichever receiver is asked, not the one it's
+// currently tuned to.
+app.get('/api/sources/:slot/proginfo', async (req, res) => {
+  try {
+    const source = findSource(req.params.slot);
+    if (!req.query.major) return res.status(400).json({ error: 'Missing "major" query param.' });
+    const info = await directv.getProgInfo(source.ip, source.port || 8080, req.query.major, req.query.minor);
+    res.json(info);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/favorites', (req, res) => {
+  const config = cache.get('config') || {};
+  res.json(config.favorites || []);
+});
+
 app.listen(config.PORT, () => {
   console.log(`[server] Venue Control agent listening on :${config.PORT}`);
   sync.start();
+  poller.start();
 });
 
-process.on('SIGTERM', () => { sync.stop(); process.exit(0); });
-process.on('SIGINT', () => { sync.stop(); process.exit(0); });
+process.on('SIGTERM', () => { sync.stop(); poller.stop(); process.exit(0); });
+process.on('SIGINT', () => { sync.stop(); poller.stop(); process.exit(0); });

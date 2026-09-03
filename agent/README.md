@@ -1,13 +1,14 @@
 # Venue Control agent — setup checklist
 
 This is the on-site piece of Venue Control (the "TV" app). It runs on one
-always-on box at the bar — not on Render, not in the cloud — and is what
-will eventually talk to the DirecTV receivers and TVs. It doesn't control
-any of them yet — that starts in Phase 2+. What it can do now: prove this
-box and TSB Platform can find each other and stay in sync (Phase 0), and
+always-on box at the bar — not on Render, not in the cloud — and talks
+directly to the DirecTV receivers on the headend. What it can do now: prove
+this box and TSB Platform can find each other and stay in sync (Phase 0),
 scan its own network to find and catalog what's out there (Phase 1,
-Discovery & Diagnostics — see step 8 below). See `docs/venue-control.md` in
-the main repo for the full plan.
+Discovery & Diagnostics — see step 8 below), and actually change channels
+on the receivers (Phase 2, Source control — see step 9 below). TV power/
+selection and whole-room layouts are still ahead. See
+`docs/venue-control.md` in the main repo for the full plan.
 
 ## 1. Pick the box
 
@@ -57,9 +58,12 @@ cp .env.example .env
 
 Open `.env` in a text editor and paste the token in as `AGENT_TOKEN`.
 Leave `CLOUD_URL` as-is unless TSB Platform's own address ever changes.
-Also pick a PIN and set it as `ADMIN_PIN` — this is what protects the
-Discovery & Diagnostics scan (step 8 below) from anyone else on the bar's
-network; leaving it blank leaves that page unprotected.
+Also pick two PINs: `ADMIN_PIN` protects the Discovery & Diagnostics scan
+(step 8 below) from anyone else on the bar's network, and `STAFF_PIN`
+protects the day-to-day Sources tab (step 9 below) that actually changes
+channels. Leaving either blank leaves that page unprotected — an admin PIN
+also works on the staff-gated routes, but a staff PIN does not unlock the
+admin ones.
 
 ## 6. Install and run
 
@@ -119,6 +123,30 @@ confirmation click.
 7. If **Scan now** or an adopt ever shows "not synced", the box had no
    internet at that moment — the scan result is still saved locally; click
    **Retry sync** once the connection's back, then adopt from it.
+
+## 9. Change channels (Phase 2)
+
+Once at least one receiver has been added as a source — either adopted from
+a Discovery scan (step 8) or added directly in TSB Platform under **Venue
+Control → Sources** for this location — the box can actually tune it.
+
+1. On the box (or any device on the same LAN), open
+   `http://<the box's LAN IP>:8088/sources.html`.
+2. Enter the staff PIN from step 5 (an admin PIN also works here).
+3. Each receiver shows what it's currently tuned to — the agent polls every
+   15 seconds in the background, so this stays current without reloading.
+   "not polled yet" just means the first poll hasn't landed yet (within
+   15s of startup); "unreachable" means the receiver didn't answer the last
+   poll — check it's powered on and still has the IP address on file.
+4. Type a channel (e.g. `206` or a satellite channel like `206.1`) into a
+   receiver's box and click **Go**, or use **Guide**/**Info** to send those
+   remote buttons instead.
+5. If any favorites are set up (TSB Platform → Venue Control → Favorites),
+   they show as buttons above the receiver list — click one, pick which
+   receiver(s) to send it to, and it tunes all of them in parallel.
+
+Nothing here needs the internet once the config has synced at least once —
+tuning talks straight from this box to the receivers on the LAN.
 
 ## Keeping it running
 
