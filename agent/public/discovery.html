@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Venue Control Agent — Discovery</title>
+<style>
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #14171c; color: #e8eaed; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 10px; color: #cfd3da; }
+  a { color: #7fb7ff; }
+  .muted { color: #9aa1ab; font-size: 13px; }
+  .card { background: #1c2027; border-radius: 12px; padding: 16px 18px; margin-top: 16px; }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #262b33; font-size: 14px; }
+  .row:last-child { border-bottom: none; }
+  .row .k { color: #9aa1ab; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge.on, .badge.high { background: rgba(63,191,127,0.18); color: #6be3a4; }
+  .badge.off { background: rgba(229,86,109,0.18); color: #ff8a9a; }
+  .badge.medium { background: rgba(230,180,70,0.18); color: #f0c869; }
+  .badge.low { background: rgba(154,161,171,0.18); color: #b6bcc6; }
+  input, select, textarea { background: #11141a; border: 1px solid #2c313a; color: #e8eaed; border-radius: 8px; padding: 8px 10px; font-size: 14px; font-family: inherit; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 54px; resize: vertical; }
+  button { background: #2c313a; border: 1px solid #3a404b; color: #e8eaed; border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer; }
+  button:hover { background: #353c47; }
+  button.primary { background: #2b6cb0; border-color: #2b6cb0; }
+  button.primary:hover { background: #3178c2; }
+  button.danger { background: #7a2c3a; border-color: #7a2c3a; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #262b33; vertical-align: top; }
+  th { color: #9aa1ab; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .actions-cell { white-space: nowrap; }
+  .actions-cell button { margin-right: 4px; margin-bottom: 4px; }
+  #pinGate .card { max-width: 360px; margin: 60px auto 0; }
+  #app { display: none; }
+  .msg { padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-top: 10px; }
+  .msg.error { background: rgba(229,86,109,0.15); color: #ff8a9a; }
+  .msg.success { background: rgba(63,191,127,0.15); color: #6be3a4; }
+  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  .field label { font-size: 12px; color: #9aa1ab; }
+  .field-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  dialog { background: #1c2027; color: #e8eaed; border: 1px solid #2c313a; border-radius: 12px; padding: 18px; max-width: 380px; }
+  dialog::backdrop { background: rgba(0,0,0,0.5); }
+</style>
+</head>
+<body>
+<div class="wrap" id="pinGate">
+  <div class="card">
+    <h2>Discovery &amp; Diagnostics</h2>
+    <p class="muted">Owner/admin only — enter the agent's admin PIN to continue.</p>
+    <div class="field"><input type="password" id="pinInput" placeholder="Admin PIN" autocomplete="off"></div>
+    <button class="primary" onclick="submitPin()">Continue</button>
+    <div id="pinMsg"></div>
+  </div>
+</div>
+
+<div class="wrap" id="app">
+  <h1>Discovery &amp; Diagnostics</h1>
+  <p class="muted">Phase 1 — scans this box's own LAN, classifies what answers, and lets you adopt devices into TSB Platform. Nothing here changes device state except the explicitly-marked tests below. <a href="/">&larr; Agent status</a></p>
+
+  <div class="card">
+    <h2>Scan</h2>
+    <div class="field">
+      <label for="rangesInput">CIDR ranges (comma-separated — leave blank to use this site's configured scan_ranges)</label>
+      <textarea id="rangesInput" placeholder="192.168.1.0/24"></textarea>
+    </div>
+    <div class="field-row">
+      <label class="muted"><input type="checkbox" id="deepCheck"> Deep scan (slower, wider timeouts)</label>
+      <button class="primary" id="scanBtn" onclick="startScan()">Scan now</button>
+    </div>
+    <div id="scanMsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Results <span id="runMeta" class="muted"></span></h2>
+    <div id="resultsBox"><p class="muted">No scan run yet.</p></div>
+  </div>
+</div>
+
+<dialog id="adoptDialog">
+  <h2 style="margin-top:0;">Adopt device</h2>
+  <div class="field"><label>Adopt as</label>
+    <select id="adoptAs" onchange="renderAdoptFields()">
+      <option value="tv">TV</option>
+      <option value="source">Source (receiver/Roku/spare)</option>
+    </select>
+  </div>
+  <div id="adoptFields"></div>
+  <div id="adoptMsg"></div>
+  <div class="field-row" style="margin-top:10px;">
+    <button onclick="document.getElementById('adoptDialog').close()">Cancel</button>
+    <button class="primary" onclick="submitAdopt()">Adopt</button>
+  </div>
+</dialog>
+
+<script src="discovery.js"></script>
+</body>
+</html>
