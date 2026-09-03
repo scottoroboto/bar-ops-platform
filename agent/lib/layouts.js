@@ -17,6 +17,7 @@
 // (see server/index.js's Phase 5 comment on that map()).
 const cache = require('./cache');
 const directv = require('./drivers/directv');
+const roku = require('./drivers/roku');
 const samsungWs = require('./drivers/samsung-ws');
 const poller = require('./poller');
 const tvPoller = require('./tv-poller');
@@ -74,15 +75,31 @@ async function runOneItem(item) {
   if (item.target_type === 'source') {
     const source = (config.sources || []).find((s) => Number(s.id) === Number(item.target_id));
     if (!source) return { ok: false, target_type: 'source', target_id: item.target_id, error: 'Source no longer exists.' };
-    if (item.action.op !== 'tune') return { ok: false, target_type: 'source', target_id: item.target_id, error: `Unsupported source action "${item.action.op}".` };
-    if (source.kind !== 'directv' || !source.ip) return { ok: false, target_type: 'source', target_id: item.target_id, label: source.label, error: `Source "${source.label}" isn't a configured DirecTV receiver.` };
-    try {
-      await directv.tune(source.ip, source.port || 8080, item.action.major, item.action.minor);
-      await poller.pollNow(source.slot);
-      return { ok: true, target_type: 'source', target_id: item.target_id, slot: source.slot, label: source.label };
-    } catch (err) {
-      return { ok: false, target_type: 'source', target_id: item.target_id, label: source.label, error: err.message };
+    // Phase 6: 'tune' (DirecTV) and 'launch' (Roku) are the two source
+    // actions a layout can hold -- same op names snapshotBefore()/
+    // captureCurrentState() below produce, and the same ones the cloud
+    // admin UI's layout-item editor and staff capture write.
+    if (item.action.op === 'tune') {
+      if (source.kind !== 'directv' || !source.ip) return { ok: false, target_type: 'source', target_id: item.target_id, label: source.label, error: `Source "${source.label}" isn't a configured DirecTV receiver.` };
+      try {
+        await directv.tune(source.ip, source.port || 8080, item.action.major, item.action.minor);
+        await poller.pollNow(source.slot);
+        return { ok: true, target_type: 'source', target_id: item.target_id, slot: source.slot, label: source.label };
+      } catch (err) {
+        return { ok: false, target_type: 'source', target_id: item.target_id, label: source.label, error: err.message };
+      }
     }
+    if (item.action.op === 'launch') {
+      if (source.kind !== 'roku' || !source.ip) return { ok: false, target_type: 'source', target_id: item.target_id, label: source.label, error: `Source "${source.label}" isn't a configured Roku.` };
+      try {
+        await roku.launch(source.ip, source.port || 8060, item.action.app_id);
+        await poller.pollNow(source.slot);
+        return { ok: true, target_type: 'source', target_id: item.target_id, slot: source.slot, label: source.label };
+      } catch (err) {
+        return { ok: false, target_type: 'source', target_id: item.target_id, label: source.label, error: err.message };
+      }
+    }
+    return { ok: false, target_type: 'source', target_id: item.target_id, error: `Unsupported source action "${item.action.op}".` };
   }
   if (item.target_type === 'tv') {
     const tv = (config.tvs || []).find((t) => Number(t.id) === Number(item.target_id));
@@ -156,8 +173,12 @@ function snapshotBefore(items) {
     } else if (item.target_type === 'source') {
       const source = (config.sources || []).find((s) => Number(s.id) === Number(item.target_id));
       const live = source ? poller.getState(source.slot) : null;
-      if (!live || live.major == null) continue;
-      snap.push({ target_type: 'source', target_id: item.target_id, action: { op: 'tune', major: live.major, minor: live.minor }, step_order: step });
+      if (!source || !live) continue;
+      if (source.kind === 'directv' && live.major != null) {
+        snap.push({ target_type: 'source', target_id: item.target_id, action: { op: 'tune', major: live.major, minor: live.minor }, step_order: step });
+      } else if (source.kind === 'roku' && live.appId != null) {
+        snap.push({ target_type: 'source', target_id: item.target_id, action: { op: 'launch', app_id: live.appId }, step_order: step });
+      }
     }
   }
   return snap;
@@ -190,8 +211,12 @@ function captureCurrentState() {
   let step = 0;
   for (const source of config.sources || []) {
     const live = poller.getState(source.slot);
-    if (!live || live.major == null) continue;
-    items.push({ target_type: 'source', target_id: source.id, action: { op: 'tune', major: live.major, minor: live.minor }, step_order: step++ });
+    if (!live) continue;
+    if (source.kind === 'directv' && live.major != null) {
+      items.push({ target_type: 'source', target_id: source.id, action: { op: 'tune', major: live.major, minor: live.minor }, step_order: step++ });
+    } else if (source.kind === 'roku' && live.appId != null) {
+      items.push({ target_type: 'source', target_id: source.id, action: { op: 'launch', app_id: live.appId }, step_order: step++ });
+    }
   }
   for (const tv of config.tvs || []) {
     const live = tvPoller.getState(tv.id);

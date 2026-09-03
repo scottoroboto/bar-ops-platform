@@ -19,6 +19,7 @@
 // identically to a human tapping it.
 const cache = require('./cache');
 const directv = require('./drivers/directv');
+const roku = require('./drivers/roku');
 const samsungWs = require('./drivers/samsung-ws');
 const poller = require('./poller');
 const tvPoller = require('./tv-poller');
@@ -164,6 +165,32 @@ async function runSourceTune(payload) {
   return `${ok}/${results.length} source(s) tuned to ${payload.major}${payload.minor ? `.${payload.minor}` : ''}`;
 }
 
+// Phase 6: schedules a Roku app launch the same way source_tune schedules a
+// DirecTV retune -- e.g. "launch the ESPN app on the patio Roku every
+// Saturday at 10:45" alongside the existing "retune receiver 3 to the news
+// channel" example. Same slots-or-slot shape as runSourceTune for bulk vs.
+// single-target schedules.
+async function runSourceLaunch(payload) {
+  const slots = Array.isArray(payload.slots) ? payload.slots : payload.slot != null ? [payload.slot] : [];
+  if (!slots.length) throw new Error('source_launch payload needs "slot" or "slots".');
+  if (!payload.app_id) throw new Error('source_launch payload needs "app_id".');
+  const sources = currentSources();
+  const results = await Promise.all(slots.map(async (slot) => {
+    const source = sources.find((s) => Number(s.slot) === Number(slot));
+    if (!source) return { slot, ok: false, error: `No source at slot ${slot}.` };
+    if (source.kind !== 'roku' || !source.ip) return { slot, ok: false, error: `Source at slot ${slot} isn't a configured Roku.` };
+    try {
+      await roku.launch(source.ip, source.port || 8060, payload.app_id);
+      await poller.pollNow(slot);
+      return { slot, ok: true };
+    } catch (err) {
+      return { slot, ok: false, error: err.message };
+    }
+  }));
+  const ok = results.filter((r) => r.ok).length;
+  return `${ok}/${results.length} Roku(s) launched app ${payload.app_id}`;
+}
+
 async function runApplyLayout(payload) {
   if (payload.layout_id == null) throw new Error('apply_layout payload needs "layout_id".');
   const { name, results } = await layouts.apply(payload.layout_id);
@@ -177,6 +204,7 @@ async function runSchedule(schedule) {
   try {
     if (schedule.action_type === 'tvs_power') resultText = await runTvsPower(payload);
     else if (schedule.action_type === 'source_tune') resultText = await runSourceTune(payload);
+    else if (schedule.action_type === 'source_launch') resultText = await runSourceLaunch(payload);
     else if (schedule.action_type === 'apply_layout') resultText = await runApplyLayout(payload);
     else resultText = `Unknown action_type "${schedule.action_type}" -- nothing run.`;
   } catch (err) {

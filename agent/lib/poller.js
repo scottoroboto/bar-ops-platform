@@ -11,42 +11,61 @@
 // config is refreshed every 30s independently, so a source added/removed
 // in TSB Platform shows up here within one config-poll cycle with no
 // restart needed.
+//
+// Phase 6 (docs/venue-control.md §12): broadened from directv-only to also
+// poll roku-kind sources. The two report different shapes -- major/minor
+// for a tuned QAM channel vs. appId/appName for a running app -- so the
+// cached record carries `kind` and both sets of fields (null for whichever
+// doesn't apply) rather than two separate maps; every caller already reads
+// state by slot regardless of kind, so one map keeps that true for Roku too.
+// static/spare sources are still never polled -- there's nothing to ask.
 const cache = require('./cache');
 const directv = require('./drivers/directv');
+const roku = require('./drivers/roku');
 
 const POLL_INTERVAL_MS = 15 * 1000;
 const STAGGER_STEP_MS = 400; // spreads receivers across the poll window instead of firing them all at once
 
-const state = new Map(); // slot (number) -> { slot, major, minor, active, updatedAt, ok, error }
+const state = new Map(); // slot (number) -> { slot, kind, major, minor, appId, appName, active, updatedAt, ok, error }
 
 function currentSources() {
   const config = cache.get('config') || {};
-  return (config.sources || []).filter((s) => s.kind === 'directv' && s.enabled !== false && s.ip);
+  return (config.sources || []).filter((s) => (s.kind === 'directv' || s.kind === 'roku') && s.enabled !== false && s.ip);
 }
 
 async function pollOne(source) {
   const slot = Number(source.slot);
+  const kind = source.kind;
   try {
-    const s = await directv.getState(source.ip, source.port || 8080);
-    state.set(slot, {
-      slot,
-      major: s.major,
-      minor: s.minor,
-      active: s.active,
-      updatedAt: new Date().toISOString(),
-      ok: true,
-      error: null,
-    });
+    if (kind === 'directv') {
+      const s = await directv.getState(source.ip, source.port || 8080);
+      state.set(slot, {
+        slot, kind,
+        major: s.major, minor: s.minor, active: s.active,
+        appId: null, appName: null,
+        updatedAt: new Date().toISOString(), ok: true, error: null,
+      });
+    } else if (kind === 'roku') {
+      const s = await roku.getState(source.ip, source.port || 8060);
+      state.set(slot, {
+        slot, kind,
+        major: null, minor: null, active: s.on,
+        appId: s.appId, appName: s.appName,
+        updatedAt: new Date().toISOString(), ok: true, error: null,
+      });
+    }
   } catch (err) {
-    // Keep the last-known channel on a failed poll rather than blanking it
-    // -- a receiver that's briefly unreachable shouldn't make the UI forget
+    // Keep the last-known channel/app on a failed poll rather than blanking
+    // it -- a device that's briefly unreachable shouldn't make the UI forget
     // what it was last known to be showing. `ok: false` is what actually
     // signals the problem to the UI.
     const prev = state.get(slot);
     state.set(slot, {
-      slot,
+      slot, kind,
       major: prev ? prev.major : null,
       minor: prev ? prev.minor : null,
+      appId: prev ? prev.appId : null,
+      appName: prev ? prev.appName : null,
       active: null,
       updatedAt: new Date().toISOString(),
       ok: false,
@@ -71,11 +90,11 @@ function getAllState() {
 }
 
 // Forces an immediate re-read of one source, bypassing the 15s cadence --
-// called right after a tune/key command so the staff UI reflects the new
-// channel within a couple seconds instead of waiting for the next tick.
+// called right after a tune/key/launch command so the staff UI reflects the
+// change within a couple seconds instead of waiting for the next tick.
 async function pollNow(slot) {
   const source = currentSources().find((s) => Number(s.slot) === Number(slot));
-  if (!source) throw new Error(`No enabled DirecTV source at slot ${slot}.`);
+  if (!source) throw new Error(`No enabled DirecTV or Roku source at slot ${slot}.`);
   await pollOne(source);
   return getState(slot);
 }
