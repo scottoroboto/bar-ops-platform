@@ -10,6 +10,7 @@ const sync = require('./lib/sync');
 const discovery = require('./lib/discovery');
 const poller = require('./lib/poller');
 const tvPoller = require('./lib/tv-poller');
+const health = require('./lib/health');
 const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
 const activity = require('./lib/activity');
@@ -606,9 +607,10 @@ app.listen(config.PORT, () => {
   sync.start();
   poller.start();
   tvPoller.start();
+  health.start();
   scheduler.start();
   activity.start();
 });
 
-process.on('SIGTERM', () => { sync.stop(); poller.stop(); tvPoller.stop(); scheduler.stop(); activity.stop(); process.exit(0); });
-process.on('SIGINT', () => { sync.stop(); poller.stop(); tvPoller.stop(); scheduler.stop(); activity.stop(); process.exit(0); });
+process.on('SIGTERM', () => { sync.stop(); poller.stop(); tvPoller.stop(); health.stop(); scheduler.stop(); activity.stop(); process.exit(0); });
+process.on('SIGINT', () => { sync.stop(); poller.stop(); tvPoller.stop(); health.stop(); scheduler.stop(); activity.stop(); process.exit(0); });
