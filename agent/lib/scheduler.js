@@ -12,16 +12,18 @@
 // dependencies", already stretched once for `ws` -- not stretching it
 // again for something this small).
 //
-// action_type "apply_layout" is accepted (matches the vc_schedules CHECK
-// constraint) but not executed yet -- whole-room layouts are Phase 5.
-// Firing one records last_result explaining that rather than silently
-// doing nothing.
+// action_type "apply_layout" (Phase 5, docs/venue-control.md §12) runs the
+// layout's items through lib/layouts.js -- the same execution path the
+// staff Layouts tab's tap-to-apply and the admin capture/undo routes use,
+// so a scheduled "Sunday NFL layout at 09:50" (§5's own example) behaves
+// identically to a human tapping it.
 const cache = require('./cache');
 const directv = require('./drivers/directv');
 const samsungWs = require('./drivers/samsung-ws');
 const poller = require('./poller');
 const tvPoller = require('./tv-poller');
 const sync = require('./sync');
+const layouts = require('./layouts');
 
 const TICK_MS = 30 * 1000; // sub-minute so a minute is never skipped even with a little jitter
 const BULK_TV_CONCURRENCY = 4; // docs/venue-control.md §7.2: "Bulk operations run with concurrency 4"
@@ -162,13 +164,20 @@ async function runSourceTune(payload) {
   return `${ok}/${results.length} source(s) tuned to ${payload.major}${payload.minor ? `.${payload.minor}` : ''}`;
 }
 
+async function runApplyLayout(payload) {
+  if (payload.layout_id == null) throw new Error('apply_layout payload needs "layout_id".');
+  const { name, results } = await layouts.apply(payload.layout_id);
+  const ok = results.filter((r) => r.ok).length;
+  return `layout "${name}" applied: ${ok}/${results.length} item(s) succeeded`;
+}
+
 async function runSchedule(schedule) {
   const payload = schedule.payload || {};
   let resultText;
   try {
     if (schedule.action_type === 'tvs_power') resultText = await runTvsPower(payload);
     else if (schedule.action_type === 'source_tune') resultText = await runSourceTune(payload);
-    else if (schedule.action_type === 'apply_layout') resultText = 'apply_layout is not implemented yet (Phase 5) -- schedule fired but did nothing.';
+    else if (schedule.action_type === 'apply_layout') resultText = await runApplyLayout(payload);
     else resultText = `Unknown action_type "${schedule.action_type}" -- nothing run.`;
   } catch (err) {
     resultText = `Failed: ${err.message}`;
