@@ -13,28 +13,52 @@ const POLL_INTERVAL_MS = 20 * 1000;
 const STAGGER_STEP_MS = 300;
 const POLLABLE_METHODS = new Set(['samsung_ws_token', 'samsung_ws_plain', 'samsung_legacy', 'smartthings']);
 
-const state = new Map(); // tv id (number) -> { id, power, updatedAt, ok, error }
+const state = new Map(); // tv id (number) -> { id, power, updatedAt, ok, error, slot, slotUpdatedAt }
 
 function currentTvs() {
   const config = cache.get('config') || {};
   return (config.tvs || []).filter((t) => t.enabled !== false && t.ip && POLLABLE_METHODS.has(t.control_method));
 }
 
+// Power is actively polled (below); slot/channel has no equivalent readback
+// -- Samsung exposes no "what's the tuner showing" endpoint -- so slot is
+// purely "last commanded", set by reportSlot() right after a §7.2 channel-
+// select command succeeds. Every power poll must preserve whatever slot
+// value is already cached rather than overwriting it with nothing. On the
+// very first poll after an agent restart there's no in-memory slot yet, so
+// fall back to vc_tvs.last_known_slot (synced down in the site config) --
+// a best-effort "probably still showing this" rather than leaving it blank
+// until the next real command.
 async function pollOne(tv) {
   const id = Number(tv.id);
+  const prev = state.get(id);
+  const fallbackSlot = tv.last_known_slot != null ? Number(tv.last_known_slot) : null;
+  const slot = prev ? prev.slot : fallbackSlot;
+  const slotUpdatedAt = prev ? prev.slotUpdatedAt : null;
   try {
     const power = await samsungWs.getPowerState(tv);
-    state.set(id, { id, power, updatedAt: new Date().toISOString(), ok: true, error: null });
+    state.set(id, { id, power, updatedAt: new Date().toISOString(), ok: true, error: null, slot, slotUpdatedAt });
   } catch (err) {
-    const prev = state.get(id);
     state.set(id, {
       id,
       power: prev ? prev.power : 'unreachable',
       updatedAt: new Date().toISOString(),
       ok: false,
       error: err.message,
+      slot,
+      slotUpdatedAt,
     });
   }
+}
+
+// Called right after a successful §7.2 channel-select command (agent/
+// server.js's /api/tvs/:id/slot and bulk/slot). Merges into whatever power
+// state is already cached rather than replacing it, since a channel-select
+// command says nothing about power state.
+function reportSlot(id, slot) {
+  const key = Number(id);
+  const prev = state.get(key) || { id: key, power: 'unreachable', updatedAt: null, ok: false, error: null, slot: null, slotUpdatedAt: null };
+  state.set(key, { ...prev, slot: Number(slot), slotUpdatedAt: new Date().toISOString() });
 }
 
 async function pollAll() {
@@ -78,4 +102,4 @@ function stop() {
   timer = null;
 }
 
-module.exports = { start, stop, getState, getAllState, pollNow };
+module.exports = { start, stop, getState, getAllState, pollNow, reportSlot };

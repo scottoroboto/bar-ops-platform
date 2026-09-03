@@ -89,6 +89,18 @@ async function reportTvToken(tvId, wsToken) {
   if (!res.ok) throw new Error(`tv token push failed: ${res.status} ${await res.text()}`);
 }
 
+// Phase 4 (docs/venue-control.md §12): pushes the slot a TV was last
+// commanded to select, so vc_tvs.last_known_slot stays current for TSB
+// Platform's own admin view and for lib/tv-poller.js's restart-continuity
+// fallback (see that file). Best-effort like reportTvToken -- a failed push
+// here doesn't undo the channel-select command that already happened.
+async function reportTvSlot(tvId, slot) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/tvs/${tvId}/slot`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ slot }),
+  });
+  if (!res.ok) throw new Error(`tv slot push failed: ${res.status} ${await res.text()}`);
+}
+
 let timer = null;
 
 function start() {
@@ -123,4 +135,4 @@ function stop() {
   timer = null;
 }
 
-module.exports = { register, pullConfig, heartbeat, start, stop, reportScheduleResult, reportTvToken };
+module.exports = { register, pullConfig, heartbeat, start, stop, reportScheduleResult, reportTvToken, reportTvSlot };
