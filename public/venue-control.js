@@ -580,9 +580,15 @@ function renderTvsList() {
           <select id="editTvControlMethod" style="margin-top:8px;">
             ${CONTROL_METHODS.map((m) => `<option value="${m}" ${t.control_method === m ? 'selected' : ''}>${m}</option>`).join('')}
           </select>
+          <label for="editTvDefaultSlot" style="margin-top:8px;">Default source slot (optional)</label>
+          <input id="editTvDefaultSlot" type="number" value="${t.default_source_slot != null ? t.default_source_slot : ''}" placeholder="e.g. 10">
           <label class="toggle-row" style="gap:8px; margin-top:8px;"><span class="label">Wake-on-LAN enabled</span>
             <span class="switch"><input type="checkbox" id="editTvWol" ${t.wol_enabled ? 'checked' : ''}><span class="slider"></span></span>
           </label>
+          <label class="toggle-row" style="gap:8px;"><span class="label">Channel capable (can select a source, Phase 4)</span>
+            <span class="switch"><input type="checkbox" id="editTvChannelCapable" ${t.channel_capable ? 'checked' : ''}><span class="slider"></span></span>
+          </label>
+          <p class="muted" style="margin:-4px 0 0;">Channel selection sends key codes exactly like the remote and can't be verified automatically (docs/venue-control.md §7.2) -- try "Change source" on the agent's TVs tab once, confirm visually, then turn this on.</p>
           <label class="toggle-row" style="gap:8px;"><span class="label">Force re-pair (clear saved token)</span>
             <span class="switch"><input type="checkbox" id="editTvResetToken"><span class="slider"></span></span>
           </label>
@@ -595,7 +601,7 @@ function renderTvsList() {
     return `
       <div class="list-row">
         <div class="name">${escapeHtml(t.name)} <span class="badge ${t.enabled ? 'on' : 'off'}">${t.enabled ? 'active' : 'archived'}</span>
-          <div class="sub">${escapeHtml(zoneName(t.zone_id))} · ${escapeHtml(t.control_method)}${t.ip ? ' · ' + escapeHtml(t.ip) : ''}${t.wol_enabled ? ' · WoL' : ''}</div>
+          <div class="sub">${escapeHtml(zoneName(t.zone_id))} · ${escapeHtml(t.control_method)}${t.ip ? ' · ' + escapeHtml(t.ip) : ''}${t.wol_enabled ? ' · WoL' : ''}${t.channel_capable ? ' · channel-capable' : ''}${t.default_source_slot != null ? ` · default slot ${t.default_source_slot}` : ''}</div>
         </div>
         <div class="stack-actions" style="margin-top:0;">
           <button class="small ghost" onclick="startEditTv('${t.id}')">Edit</button>
@@ -616,13 +622,19 @@ async function saveEditTv(id) {
   const ip = document.getElementById('editTvIp').value.trim();
   const mac = document.getElementById('editTvMac').value.trim();
   const controlMethod = document.getElementById('editTvControlMethod').value;
+  const defaultSourceSlotRaw = document.getElementById('editTvDefaultSlot').value;
   const wolEnabled = document.getElementById('editTvWol').checked;
+  const channelCapable = document.getElementById('editTvChannelCapable').checked;
   const resetToken = document.getElementById('editTvResetToken').checked;
   if (!name) { showTvMsg('Name is required.', 'error'); return; }
   try {
     await withStepUp(() => api(`/api/venue-control/tvs/${id}/update`, {
       method: 'POST',
-      body: { name, zoneId: zoneId || null, ip: ip || null, mac: mac || null, controlMethod, wolEnabled, resetToken },
+      body: {
+        name, zoneId: zoneId || null, ip: ip || null, mac: mac || null, controlMethod,
+        defaultSourceSlot: defaultSourceSlotRaw === '' ? null : Number(defaultSourceSlotRaw),
+        wolEnabled, channelCapable, resetToken,
+      },
     }));
     editingTvId = null;
     showTvMsg('TV updated.', 'success');
