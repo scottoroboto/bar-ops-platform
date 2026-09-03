@@ -2,10 +2,12 @@
 
 This is the on-site piece of Venue Control (the "TV" app). It runs on one
 always-on box at the bar — not on Render, not in the cloud — and is what
-will eventually talk to the DirecTV receivers and TVs. Right now (Phase 0)
-it doesn't control anything yet; the only goal is proving this box and TSB
-Platform can find each other and stay in sync. See `docs/venue-control.md`
-in the main repo for the full plan.
+will eventually talk to the DirecTV receivers and TVs. It doesn't control
+any of them yet — that starts in Phase 2+. What it can do now: prove this
+box and TSB Platform can find each other and stay in sync (Phase 0), and
+scan its own network to find and catalog what's out there (Phase 1,
+Discovery & Diagnostics — see step 8 below). See `docs/venue-control.md` in
+the main repo for the full plan.
 
 ## 1. Pick the box
 
@@ -55,6 +57,9 @@ cp .env.example .env
 
 Open `.env` in a text editor and paste the token in as `AGENT_TOKEN`.
 Leave `CLOUD_URL` as-is unless TSB Platform's own address ever changes.
+Also pick a PIN and set it as `ADMIN_PIN` — this is what protects the
+Discovery & Diagnostics scan (step 8 below) from anyone else on the bar's
+network; leaving it blank leaves that page unprotected.
 
 ## 6. Install and run
 
@@ -80,9 +85,40 @@ You should see something like:
   flip from "not registered yet" to "online" within about 30 seconds.
 
 If both of those show green, Phase 0 is proven end to end — the box is
-reachable, the cloud can see it, and they're staying in sync. Nothing about
-TVs or receivers happens yet; that starts once Phase 1 (Discovery &
-Diagnostics) is built and run from this same box.
+reachable, the cloud can see it, and they're staying in sync.
+
+## 8. Run Discovery & Diagnostics (Phase 1)
+
+This is the network scan that finds the DirecTV receivers and TVs and
+figures out how each one can be controlled. It's read-only — nothing is
+powered on/off, nothing is tuned, nothing changes — until you deliberately
+run one of the "Test" actions marked disruptive, and even those require a
+confirmation click.
+
+1. On the box (or any device on the same LAN), open
+   `http://<the box's LAN IP>:8088/discovery.html`.
+2. Enter the admin PIN from step 5.
+3. Click **Scan now**. Leave the ranges box blank to scan whatever subnet(s)
+   this location is configured with, or type one or more CIDR ranges (e.g.
+   `192.168.1.0/24`) separated by commas — useful for checking whether the
+   TVs actually sit on a separate network from the receivers. A full /24
+   can take up to about a minute.
+4. Each device that answers shows its IP, MAC, guessed vendor, open ports,
+   and a classification with a confidence level (high/medium/low — high
+   means it definitively identified itself, low means only a MAC-vendor
+   guess). This is normal to run more than once; nothing is remembered as
+   "real" until you adopt it.
+5. Use **Test** on a row to double-check a specific device before adopting
+   it — `identity` and `power_state` are safe/read-only, `wol` sends an
+   actual wake packet, and the rest (`round_trip`, `pair`, `power_cycle`,
+   `channel`) aren't built yet (they need the DirecTV/Samsung drivers that
+   land in Phase 2/3/6) and will just say so.
+6. Once you've confirmed a device is what you think it is, click **Adopt**,
+   fill in a real name/zone/slot, and submit. It's now a real row in TSB
+   Platform — same data a later phase's Sources/TVs admin pages will manage.
+7. If **Scan now** or an adopt ever shows "not synced", the box had no
+   internet at that moment — the scan result is still saved locally; click
+   **Retry sync** once the connection's back, then adopt from it.
 
 ## Keeping it running
 
