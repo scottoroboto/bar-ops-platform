@@ -17,13 +17,17 @@
       channels, turning TVs on and off, and applying whole-room presets — from
       this iPad or from here remotely.</p>
     <p class="muted">Discovery &amp; Diagnostics (Phase 1), DirecTV source
-      control (Phase 2), TV power with schedules (Phase 3), and TV source
-      (channel) selection (Phase 4) are built and live on the on-site agent
-      box. Whole-room layouts are still ahead — see
+      control (Phase 2), TV power with schedules (Phase 3), TV source
+      (channel) selection (Phase 4), and whole-room layouts with backup/
+      restore and an activity log (Phase 5) are built and live. See
       <code>docs/venue-control.md</code> in the repo for the full plan. The
-      cards below manage the receiver/TV inventory, zones, favorites, and
-      schedules; day-to-day control happens on the agent's own Sources/TVs
-      tabs at the bar, not here.</p>
+      cards below manage the receiver/TV inventory, zones, favorites,
+      layouts, schedules, backups, and the activity log; day-to-day control
+      happens on the agent's own Sources/TVs/Layouts tabs at the bar, not
+      here. Capturing a layout's current-state items and taking/restoring a
+      backup from the bar itself both happen on the agent's own Admin page
+      too, so a new box can be brought back up without needing this page —
+      see docs/venue-control.md §6.</p>
   </div>
 
   <div class="card" id="sitesCard" style="display:none;">
@@ -139,7 +143,7 @@
     <select id="newSchedAction" onchange="onSchedActionChange()">
       <option value="tvs_power">tvs_power — turn TVs on/off</option>
       <option value="source_tune">source_tune — retune a receiver</option>
-      <option value="apply_layout">apply_layout — not runnable yet (Phase 5)</option>
+      <option value="apply_layout">apply_layout — apply a whole-room preset</option>
     </select>
     <div id="schedPayloadTvsPower">
       <label for="newSchedTvState">State</label>
@@ -154,8 +158,39 @@
       <input id="newSchedMajor" type="number" placeholder="major, e.g. 206">
       <input id="newSchedMinor" type="number" placeholder="minor (optional)" style="margin-top:8px;">
     </div>
+    <div id="schedPayloadApplyLayout" style="display:none;">
+      <label for="newSchedLayout">Layout</label>
+      <select id="newSchedLayout"></select>
+    </div>
     <button class="secondary" onclick="addSchedule()">Add schedule</button>
     <div id="schedMsg"></div>
+  </div>
+
+  <div class="card" id="layoutsCard" style="display:none;">
+    <h2>Layouts</h2>
+    <p class="muted">Whole-room presets — what every source is tuned to and what every TV is showing, applied in one tap from the agent's Layouts tab. Add the layout here, then capture its actual items from the bar itself (agent Admin page → Capture current state) once the room looks right.</p>
+    <div id="layoutsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+
+    <label for="newLayoutName">Add a layout — name</label>
+    <input id="newLayoutName" placeholder="e.g. Sunday NFL">
+    <label for="newLayoutDesc">Description (optional)</label>
+    <input id="newLayoutDesc" placeholder="e.g. Every TV on the RedZone feed">
+    <button class="secondary" onclick="addLayout()">Add layout</button>
+    <div id="layoutMsg"></div>
+  </div>
+
+  <div class="card" id="backupsCard" style="display:none;">
+    <h2>Backups &amp; restore</h2>
+    <p class="muted">docs/venue-control.md §6: everything here — zones, sources, TVs, favorites, layouts, schedules — lives in the cloud, so a dead agent box loses nothing. A safety snapshot is taken automatically right before any restore, so restoring is itself reversible.</p>
+    <button class="secondary" onclick="takeBackupAdmin()">Take backup now</button>
+    <div id="backupMsg"></div>
+    <div id="backupsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+  </div>
+
+  <div class="card" id="activityCard" style="display:none;">
+    <h2>Activity log</h2>
+    <p class="muted">Who did what, from where — every archive/delete/restore made here, plus the real day-to-day actions (TV power, source selection, layout apply) taken from the agent's own Sources/TVs/Layouts tabs.</p>
+    <div id="activityList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
   </div>
 </div>
 

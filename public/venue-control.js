@@ -49,6 +49,9 @@ function showMsg(text, kind) {
     document.getElementById('zonesCard').style.display = '';
     document.getElementById('tvsCard').style.display = '';
     document.getElementById('schedulesCard').style.display = '';
+    document.getElementById('layoutsCard').style.display = '';
+    document.getElementById('backupsCard').style.display = '';
+    document.getElementById('activityCard').style.display = '';
     await loadSites();
   }
 })();
@@ -186,7 +189,10 @@ function onSourcesLocationChange() {
   loadFavoritesAdmin(locationId);
   loadZonesAdmin(locationId);
   loadTvsAdmin(locationId);
+  loadLayoutsAdmin(locationId);
   loadSchedulesAdmin(locationId);
+  loadBackupsAdmin(locationId);
+  loadActivityAdmin(locationId);
 }
 
 function showSourceMsg(text, kind) {
@@ -698,6 +704,7 @@ function onSchedActionChange() {
   const action = document.getElementById('newSchedAction').value;
   document.getElementById('schedPayloadTvsPower').style.display = action === 'tvs_power' ? '' : 'none';
   document.getElementById('schedPayloadSourceTune').style.display = action === 'source_tune' ? '' : 'none';
+  document.getElementById('schedPayloadApplyLayout').style.display = action === 'apply_layout' ? '' : 'none';
 }
 
 async function loadSchedulesAdmin(locationId) {
@@ -709,10 +716,16 @@ async function loadSchedulesAdmin(locationId) {
   }
 }
 
+function layoutName(layoutId) {
+  const l = (LAYOUTS_ADMIN || []).find((ll) => String(ll.id) === String(layoutId));
+  return l ? l.name : `layout #${layoutId}`;
+}
+
 function describeSchedulePayload(s) {
   if (s.action_type === 'tvs_power') return `${s.payload.state} · ${s.payload.zone_id ? zoneName(s.payload.zone_id) : 'all zones'}`;
   if (s.action_type === 'source_tune') return `slot ${s.payload.slot} &rarr; ${s.payload.major}${s.payload.minor != null ? '.' + s.payload.minor : ''}`;
-  return 'not runnable yet (Phase 5)';
+  if (s.action_type === 'apply_layout') return s.payload.layout_id != null ? `apply "${escapeHtml(layoutName(s.payload.layout_id))}"` : 'no layout set';
+  return s.action_type;
 }
 
 function renderSchedulesList() {
@@ -770,6 +783,10 @@ async function addSchedule() {
     const minorRaw = document.getElementById('newSchedMinor').value;
     if (!slot || !major) { showSchedMsg('Slot and channel are required for source_tune.', 'error'); return; }
     payload = { slot, major, minor: minorRaw ? Number(minorRaw) : null };
+  } else if (actionType === 'apply_layout') {
+    const layoutId = document.getElementById('newSchedLayout').value;
+    if (!layoutId) { showSchedMsg('Add a layout first.', 'error'); return; }
+    payload = { layout_id: Number(layoutId) };
   }
   try {
     await withStepUp(() => api(`/api/venue-control/sites/${locationId}/schedules`, {
@@ -782,5 +799,228 @@ async function addSchedule() {
     await loadSchedulesAdmin(locationId);
   } catch (e) {
     showSchedMsg(e.message, 'error');
+  }
+}
+
+// ---- Layouts admin (owner-only, Phase 5, docs/venue-control.md §12:
+// "Whole-room presets with capture-current-state..."). This card manages
+// layout shells only (name/description/order) and shows how many items
+// each one currently has -- there's no "capture" button here on purpose.
+// The cloud never has live device state (only the on-site agent polls
+// DirecTV/Samsung directly), so capturing what a layout should actually
+// contain happens on the agent's own admin page, at the bar, looking at
+// the room. See server/index.js's Layouts section for the fuller version
+// of this same reasoning.
+let LAYOUTS_ADMIN = [];
+let editingLayoutId = null;
+
+function showLayoutMsg(text, kind) {
+  document.getElementById('layoutMsg').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+}
+
+async function loadLayoutsAdmin(locationId) {
+  try {
+    LAYOUTS_ADMIN = await api(`/api/venue-control/sites/${locationId}/layouts`);
+    renderLayoutsList();
+    populateLayoutSelect();
+  } catch (e) {
+    document.getElementById('layoutsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function populateLayoutSelect() {
+  const select = document.getElementById('newSchedLayout');
+  if (!select) return;
+  const prevValue = select.value;
+  select.innerHTML = LAYOUTS_ADMIN.length
+    ? LAYOUTS_ADMIN.map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('')
+    : '<option value="">Add a layout first</option>';
+  if (LAYOUTS_ADMIN.some((l) => String(l.id) === prevValue)) select.value = prevValue;
+}
+
+function describeLayoutItem(it) {
+  if (it.target_type === 'source') return `source #${it.target_id}: ${it.action.op === 'tune' ? `tune ${it.action.major}${it.action.minor != null ? '.' + it.action.minor : ''}` : it.action.op}`;
+  return `TV #${it.target_id}: ${it.action.op === 'power' ? `power ${it.action.state}` : it.action.op === 'select_slot' ? `source slot ${it.action.slot}` : it.action.op}`;
+}
+
+function renderLayoutsList() {
+  const el = document.getElementById('layoutsList');
+  if (!LAYOUTS_ADMIN.length) { el.innerHTML = '<p class="muted">No layouts yet.</p>'; return; }
+  el.innerHTML = LAYOUTS_ADMIN.map((l) => {
+    if (l.id === editingLayoutId) {
+      return `
+        <div class="list-row" style="flex-direction:column; align-items:stretch;">
+          <input id="editLayoutName" value="${escapeHtml(l.name)}" placeholder="Name">
+          <input id="editLayoutDesc" value="${escapeHtml(l.description || '')}" placeholder="Description (optional)" style="margin-top:8px;">
+          <div class="stack-actions">
+            <button class="ghost small" onclick="cancelEditLayout()">Cancel</button>
+            <button class="primary small" style="margin-top:0;" onclick="saveEditLayout('${l.id}')">Save</button>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="list-row">
+        <div class="name">${escapeHtml(l.name)}
+          <div class="sub">${l.description ? escapeHtml(l.description) + ' · ' : ''}${l.items.length} item${l.items.length === 1 ? '' : 's'}</div>
+          ${l.items.length ? `<div class="sub">${l.items.map(describeLayoutItem).map(escapeHtml).join(' · ')}</div>` : '<div class="sub">Not captured yet -- see the agent\'s Admin page at the bar.</div>'}
+        </div>
+        <div class="stack-actions" style="margin-top:0;">
+          <button class="small ghost" onclick="startEditLayout('${l.id}')">Edit</button>
+          <button class="small ghost" onclick="deleteLayout('${l.id}')">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function startEditLayout(id) { editingLayoutId = id; renderLayoutsList(); }
+function cancelEditLayout() { editingLayoutId = null; renderLayoutsList(); }
+
+async function saveEditLayout(id) {
+  const name = document.getElementById('editLayoutName').value.trim();
+  const description = document.getElementById('editLayoutDesc').value.trim();
+  if (!name) { showLayoutMsg('Name is required.', 'error'); return; }
+  try {
+    await withStepUp(() => api(`/api/venue-control/layouts/${id}/update`, { method: 'POST', body: { name, description: description || null } }));
+    editingLayoutId = null;
+    showLayoutMsg('Layout updated.', 'success');
+    await loadLayoutsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showLayoutMsg(e.message, 'error');
+  }
+}
+
+async function deleteLayout(id) {
+  if (!confirm('Delete this layout? Any schedule set to apply it will stop working.')) return;
+  try {
+    await withStepUp(() => api(`/api/venue-control/layouts/${id}/delete`, { method: 'POST' }));
+    showLayoutMsg('Layout deleted.', 'success');
+    await loadLayoutsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showLayoutMsg(e.message, 'error');
+  }
+}
+
+async function addLayout() {
+  const locationId = document.getElementById('sourcesLocationSelect').value;
+  const name = document.getElementById('newLayoutName').value.trim();
+  const description = document.getElementById('newLayoutDesc').value.trim();
+  if (!locationId) { showLayoutMsg('Turn Venue Control on for a location first.', 'error'); return; }
+  if (!name) { showLayoutMsg('Name is required.', 'error'); return; }
+  try {
+    await withStepUp(() => api(`/api/venue-control/sites/${locationId}/layouts`, { method: 'POST', body: { name, description: description || null } }));
+    document.getElementById('newLayoutName').value = '';
+    document.getElementById('newLayoutDesc').value = '';
+    showLayoutMsg('Layout added -- capture its items from the agent\'s Admin page at the bar.', 'success');
+    await loadLayoutsAdmin(locationId);
+  } catch (e) {
+    showLayoutMsg(e.message, 'error');
+  }
+}
+
+// ---- Backups & restore admin (owner-only, Phase 5, docs/venue-control.md
+// §6). Restore is the one genuinely destructive action on this whole page
+// that isn't reversible via a simple "restore"/"undo" toggle the way
+// archive is -- it gets a real confirm(), not the agent-side Layouts tab's
+// 15s-undo-bar treatment (that pattern is for a staff member's quick tap,
+// not a full-site data replace).
+let BACKUPS_ADMIN = [];
+
+function showBackupMsg(text, kind) {
+  document.getElementById('backupMsg').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+}
+
+async function loadBackupsAdmin(locationId) {
+  try {
+    BACKUPS_ADMIN = await api(`/api/venue-control/sites/${locationId}/backups`);
+    renderBackupsList();
+  } catch (e) {
+    document.getElementById('backupsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function itemCountsText(counts) {
+  if (!counts) return '';
+  return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
+}
+
+function renderBackupsList() {
+  const el = document.getElementById('backupsList');
+  if (!BACKUPS_ADMIN.length) { el.innerHTML = '<p class="muted">No backups yet.</p>'; return; }
+  el.innerHTML = BACKUPS_ADMIN.map((b) => `
+    <div class="list-row">
+      <div class="name">${new Date(b.created_at).toLocaleString()} <span class="badge ${b.kind === 'manual' ? 'on' : 'off'}">${escapeHtml(b.kind)}</span>
+        <div class="sub">${b.label ? escapeHtml(b.label) + ' · ' : ''}${escapeHtml(itemCountsText(b.item_counts))}${b.created_by ? ' · by ' + escapeHtml(b.created_by) : ''}</div>
+      </div>
+      <div class="stack-actions" style="margin-top:0;">
+        <button class="small ghost" onclick="downloadBackup('${b.id}')">Download</button>
+        <button class="small ghost" onclick="restoreBackupAdmin('${b.id}')">Restore</button>
+      </div>
+    </div>`).join('');
+}
+
+async function takeBackupAdmin() {
+  const locationId = document.getElementById('sourcesLocationSelect').value;
+  if (!locationId) { showBackupMsg('Turn Venue Control on for a location first.', 'error'); return; }
+  try {
+    const { backup } = await withStepUp(() => api(`/api/venue-control/sites/${locationId}/backups`, { method: 'POST' }));
+    showBackupMsg(`Backup #${backup.id} taken (${itemCountsText(backup.item_counts)}).`, 'success');
+    await loadBackupsAdmin(locationId);
+  } catch (e) {
+    showBackupMsg(e.message, 'error');
+  }
+}
+
+async function downloadBackup(id) {
+  try {
+    const backup = await api(`/api/venue-control/backups/${id}`);
+    const blob = new Blob([JSON.stringify(backup.payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `venue-control-backup-${id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    showBackupMsg(e.message, 'error');
+  }
+}
+
+async function restoreBackupAdmin(id) {
+  if (!confirm(`Restore backup #${id}? This replaces every zone, source, TV, favorite, layout, and schedule at this location with what's in that backup. A safety snapshot of the current state is taken automatically first, so this itself can be undone by restoring that snapshot.`)) return;
+  const locationId = document.getElementById('sourcesLocationSelect').value;
+  try {
+    const result = await withStepUp(() => api(`/api/venue-control/sites/${locationId}/restore`, { method: 'POST', body: { backupId: id } }));
+    showBackupMsg(`Restored (${itemCountsText(result.restored)}). Safety snapshot #${result.pre_restore_backup_id} was taken first.`, 'success');
+    onSourcesLocationChange(); // everything on the page just changed under it
+  } catch (e) {
+    showBackupMsg(e.message, 'error');
+  }
+}
+
+// ---- Activity log (owner-only, Phase 5, docs/venue-control.md §11: "All
+// destructive admin actions write to vc_activity with actor and origin.")
+// Read-only -- there's nothing to manage here, just recent history.
+async function loadActivityAdmin(locationId) {
+  const el = document.getElementById('activityList');
+  try {
+    const entries = await api(`/api/venue-control/sites/${locationId}/activity?limit=100`);
+    if (!entries.length) { el.innerHTML = '<p class="muted">Nothing logged yet.</p>'; return; }
+    el.innerHTML = `
+      <table>
+        <thead><tr><th>When</th><th>Actor</th><th>Origin</th><th>Action</th><th>Target</th><th>Result</th></tr></thead>
+        <tbody>
+          ${entries.map((a) => `
+            <tr>
+              <td>${new Date(a.ts).toLocaleString()}</td>
+              <td>${escapeHtml(a.actor || '—')}</td>
+              <td>${escapeHtml(a.origin)}</td>
+              <td>${escapeHtml(a.action)}</td>
+              <td>${a.target_type ? `${escapeHtml(a.target_type)} #${a.target_id}` : '—'}</td>
+              <td>${a.result === 'ok' ? '<span class="badge on">ok</span>' : `<span class="badge off">${escapeHtml(a.result)}</span>`}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
 }
