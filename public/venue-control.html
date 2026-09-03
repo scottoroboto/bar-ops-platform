@@ -13,14 +13,16 @@
   <div class="card">
     <h1>Venue Control</h1>
     <p class="muted" id="deviceNote"></p>
-    <p>This will control the DirecTV receivers and TVs on the headend — changing
+    <p>This controls the DirecTV receivers and TVs on the headend — changing
       channels, turning TVs on and off, and applying whole-room presets — from
       this iPad or from here remotely.</p>
-    <p class="muted">Not built yet. The design spec lives in
-      <code>docs/venue-control.md</code> in the repo. First up is a
-      discovery/diagnostics pass at the bar to map out exactly which TVs speak
-      which control protocol — nothing here will do anything until that's
-      done and an on-site control box is running.</p>
+    <p class="muted">Discovery &amp; Diagnostics (Phase 1) and DirecTV source
+      control (Phase 2) are built and live on the on-site agent box. TV power/
+      selection and whole-room layouts are still ahead — see
+      <code>docs/venue-control.md</code> in the repo for the full plan. The
+      cards below manage the receiver inventory and favorites list; day-to-day
+      channel changes happen on the agent's own Sources tab at the bar, not
+      here.</p>
   </div>
 
   <div class="card" id="sitesCard" style="display:none;">
@@ -29,6 +31,57 @@
       Venue Control off just doesn't have a site set up yet — nothing else
       about it changes.</p>
     <div id="sitesList"><p class="muted">Loading…</p></div>
+  </div>
+
+  <div class="card" id="sourcesCard" style="display:none;">
+    <h2>Sources</h2>
+    <p class="muted">The receiver inventory that feeds the QAM plant — slot and QAM channel must be unique per location. Day-to-day channel changes happen on the agent's own Sources tab at the bar, not here.</p>
+    <label for="sourcesLocationSelect">Location</label>
+    <select id="sourcesLocationSelect" onchange="onSourcesLocationChange()"></select>
+    <div id="sourcesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+
+    <label for="newSourceSlot">Add a source — slot</label>
+    <input id="newSourceSlot" type="number" placeholder="e.g. 10">
+    <label for="newSourceQam">QAM channel</label>
+    <input id="newSourceQam" placeholder="e.g. 14.1">
+    <label for="newSourceLabel">Label</label>
+    <input id="newSourceLabel" placeholder="e.g. DirecTV 14">
+    <label for="newSourceKind">Kind</label>
+    <select id="newSourceKind">
+      <option value="directv">directv</option>
+      <option value="roku">roku</option>
+      <option value="static">static</option>
+      <option value="spare">spare</option>
+    </select>
+    <label for="newSourceIp">IP address</label>
+    <input id="newSourceIp" placeholder="e.g. 192.168.1.90">
+    <label for="newSourceReceiverId">Receiver ID (optional)</label>
+    <input id="newSourceReceiverId" placeholder="e.g. 0368 0879 2810">
+    <label for="newSourceCard">Access card # (optional)</label>
+    <input id="newSourceCard" placeholder="e.g. 0027-6187-7865">
+    <button class="secondary" onclick="addSource()">Add source</button>
+    <div id="sourceMsg"></div>
+  </div>
+
+  <div class="card" id="favoritesCard" style="display:none;">
+    <h2>Favorites</h2>
+    <p class="muted">Quick-tune buttons that show up on the agent's Sources tab. "Shared" favorites appear at every location; otherwise a favorite belongs to the location selected above.</p>
+    <div id="favoritesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+
+    <label for="newFavName">Add a favorite — name</label>
+    <input id="newFavName" placeholder="e.g. ESPN">
+    <label for="newFavMajor">Channel</label>
+    <input id="newFavMajor" type="number" placeholder="major, e.g. 206">
+    <input id="newFavMinor" type="number" placeholder="minor (optional, satellite only)" style="margin-top:8px;">
+    <label for="newFavCategory">Category</label>
+    <input id="newFavCategory" placeholder="e.g. Sports" value="Sports">
+    <label for="newFavColor">Color (optional)</label>
+    <input id="newFavColor" placeholder="e.g. #2b6cb0">
+    <label class="toggle-row" style="gap:8px;"><span class="label">Shared across all locations</span>
+      <span class="switch"><input type="checkbox" id="newFavShared"><span class="slider"></span></span>
+    </label>
+    <button class="secondary" onclick="addFavorite()">Add favorite</button>
+    <div id="favMsg"></div>
   </div>
 </div>
 
