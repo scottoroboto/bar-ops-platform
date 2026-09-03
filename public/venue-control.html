@@ -16,13 +16,14 @@
     <p>This controls the DirecTV receivers and TVs on the headend — changing
       channels, turning TVs on and off, and applying whole-room presets — from
       this iPad or from here remotely.</p>
-    <p class="muted">Discovery &amp; Diagnostics (Phase 1) and DirecTV source
-      control (Phase 2) are built and live on the on-site agent box. TV power/
-      selection and whole-room layouts are still ahead — see
+    <p class="muted">Discovery &amp; Diagnostics (Phase 1), DirecTV source
+      control (Phase 2), and TV power with schedules (Phase 3) are built and
+      live on the on-site agent box. TV source (channel) selection and
+      whole-room layouts are still ahead — see
       <code>docs/venue-control.md</code> in the repo for the full plan. The
-      cards below manage the receiver inventory and favorites list; day-to-day
-      channel changes happen on the agent's own Sources tab at the bar, not
-      here.</p>
+      cards below manage the receiver/TV inventory, zones, favorites, and
+      schedules; day-to-day control happens on the agent's own Sources/TVs
+      tabs at the bar, not here.</p>
   </div>
 
   <div class="card" id="sitesCard" style="display:none;">
@@ -82,6 +83,79 @@
     </label>
     <button class="secondary" onclick="addFavorite()">Add favorite</button>
     <div id="favMsg"></div>
+  </div>
+
+  <div class="card" id="zonesCard" style="display:none;">
+    <h2>Zones</h2>
+    <p class="muted">Physical TV groupings (e.g. "Patio", "Main Bar") used for zone-wide power on the agent's TVs tab and for zone-scoped schedules. Deleting a zone just un-assigns its TVs — nothing about the TVs themselves is lost.</p>
+    <div id="zonesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+
+    <label for="newZoneName">Add a zone — name</label>
+    <input id="newZoneName" placeholder="e.g. Patio">
+    <button class="secondary" onclick="addZone()">Add zone</button>
+    <div id="zoneMsg"></div>
+  </div>
+
+  <div class="card" id="tvsCard" style="display:none;">
+    <h2>TVs</h2>
+    <p class="muted">The TV inventory that powers the agent's TVs tab. A TV needs a control method (found via Discovery, or set by hand) before it can actually be turned on/off from here.</p>
+    <div id="tvsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+
+    <label for="newTvName">Add a TV — name</label>
+    <input id="newTvName" placeholder="e.g. Bar TV 4">
+    <label for="newTvZone">Zone (optional)</label>
+    <select id="newTvZone"><option value="">Unassigned</option></select>
+    <label for="newTvIp">IP address</label>
+    <input id="newTvIp" placeholder="e.g. 192.168.1.120">
+    <label for="newTvMac">MAC address (needed for Wake-on-LAN)</label>
+    <input id="newTvMac" placeholder="e.g. AA:BB:CC:DD:EE:FF">
+    <label for="newTvControlMethod">Control method</label>
+    <select id="newTvControlMethod">
+      <option value="unknown">unknown (not set up yet)</option>
+      <option value="samsung_ws_token">samsung_ws_token</option>
+      <option value="samsung_ws_plain">samsung_ws_plain</option>
+      <option value="samsung_legacy">samsung_legacy</option>
+      <option value="smartthings">smartthings</option>
+      <option value="wol_only">wol_only</option>
+      <option value="none">none</option>
+    </select>
+    <label class="toggle-row" style="gap:8px;"><span class="label">Wake-on-LAN enabled</span>
+      <span class="switch"><input type="checkbox" id="newTvWol"><span class="slider"></span></span>
+    </label>
+    <button class="secondary" onclick="addTv()">Add TV</button>
+    <div id="tvMsg"></div>
+  </div>
+
+  <div class="card" id="schedulesCard" style="display:none;">
+    <h2>Schedules</h2>
+    <p class="muted">Fire automatically in this location's own timezone, evaluated on the agent box — e.g. all TVs on at 10:45, all off at 1:30 AM. Whole-room layout schedules aren't runnable yet (Phase 5); they can be created but won't do anything when they fire.</p>
+    <div id="schedulesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+
+    <label for="newSchedName">Add a schedule — name</label>
+    <input id="newSchedName" placeholder="e.g. Morning TVs on">
+    <label for="newSchedCron">Cron (5 fields: minute hour day-of-month month day-of-week)</label>
+    <input id="newSchedCron" placeholder="e.g. 45 10 * * *">
+    <label for="newSchedAction">Action</label>
+    <select id="newSchedAction" onchange="onSchedActionChange()">
+      <option value="tvs_power">tvs_power — turn TVs on/off</option>
+      <option value="source_tune">source_tune — retune a receiver</option>
+      <option value="apply_layout">apply_layout — not runnable yet (Phase 5)</option>
+    </select>
+    <div id="schedPayloadTvsPower">
+      <label for="newSchedTvState">State</label>
+      <select id="newSchedTvState"><option value="on">on</option><option value="off">off</option></select>
+      <label for="newSchedTvZone">Zone (optional — blank means every TV at this location)</label>
+      <select id="newSchedTvZone"><option value="">All zones</option></select>
+    </div>
+    <div id="schedPayloadSourceTune" style="display:none;">
+      <label for="newSchedSlot">Source slot</label>
+      <input id="newSchedSlot" type="number" placeholder="e.g. 4">
+      <label for="newSchedMajor">Channel</label>
+      <input id="newSchedMajor" type="number" placeholder="major, e.g. 206">
+      <input id="newSchedMinor" type="number" placeholder="minor (optional)" style="margin-top:8px;">
+    </div>
+    <button class="secondary" onclick="addSchedule()">Add schedule</button>
+    <div id="schedMsg"></div>
   </div>
 </div>
 

@@ -46,6 +46,9 @@ function showMsg(text, kind) {
     document.getElementById('sitesCard').style.display = '';
     document.getElementById('sourcesCard').style.display = '';
     document.getElementById('favoritesCard').style.display = '';
+    document.getElementById('zonesCard').style.display = '';
+    document.getElementById('tvsCard').style.display = '';
+    document.getElementById('schedulesCard').style.display = '';
     await loadSites();
   }
 })();
@@ -177,8 +180,13 @@ function onSourcesLocationChange() {
   if (!locationId) return;
   editingSourceId = null;
   editingFavoriteId = null;
+  editingZoneId = null;
+  editingTvId = null;
   loadSourcesAdmin(locationId);
   loadFavoritesAdmin(locationId);
+  loadZonesAdmin(locationId);
+  loadTvsAdmin(locationId);
+  loadSchedulesAdmin(locationId);
 }
 
 function showSourceMsg(text, kind) {
@@ -429,5 +437,338 @@ async function addFavorite() {
     await loadFavoritesAdmin(locationId);
   } catch (e) {
     showFavMsg(e.message, 'error');
+  }
+}
+
+// ---- Zones, TVs & Schedules admin (owner-only, Phase 3, docs/venue-control.md
+// §12: "zones, bulk and per-zone operations, schedules"). Same shared
+// location select as Sources/Favorites above. All three flow down to the
+// agent through GET /api/venue/agent/config; the agent's own TVs tab is
+// where day-to-day power control actually happens.
+let ZONES_ADMIN = [];
+let TVS_ADMIN = [];
+let SCHEDULES_ADMIN = [];
+let editingZoneId = null;
+let editingTvId = null;
+let editingScheduleId = null;
+
+function showZoneMsg(text, kind) {
+  document.getElementById('zoneMsg').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+}
+
+async function loadZonesAdmin(locationId) {
+  try {
+    ZONES_ADMIN = await api(`/api/venue-control/sites/${locationId}/zones`);
+    renderZonesList();
+    populateZoneSelects();
+  } catch (e) {
+    document.getElementById('zonesList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function populateZoneSelects() {
+  const options = '<option value="">Unassigned</option>' + ZONES_ADMIN.map((z) => `<option value="${z.id}">${escapeHtml(z.name)}</option>`).join('');
+  const tvSelect = document.getElementById('newTvZone');
+  if (tvSelect) tvSelect.innerHTML = options;
+  const schedSelect = document.getElementById('newSchedTvZone');
+  if (schedSelect) schedSelect.innerHTML = '<option value="">All zones</option>' + ZONES_ADMIN.map((z) => `<option value="${z.id}">${escapeHtml(z.name)}</option>`).join('');
+}
+
+function renderZonesList() {
+  const el = document.getElementById('zonesList');
+  if (!ZONES_ADMIN.length) { el.innerHTML = '<p class="muted">No zones yet.</p>'; return; }
+  el.innerHTML = ZONES_ADMIN.map((z) => {
+    if (z.id === editingZoneId) {
+      return `
+        <div class="list-row" style="flex-direction:column; align-items:stretch;">
+          <input id="editZoneName" value="${escapeHtml(z.name)}" placeholder="Name">
+          <div class="stack-actions">
+            <button class="ghost small" onclick="cancelEditZone()">Cancel</button>
+            <button class="primary small" style="margin-top:0;" onclick="saveEditZone('${z.id}')">Save</button>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="list-row">
+        <div class="name">${escapeHtml(z.name)}</div>
+        <div class="stack-actions" style="margin-top:0;">
+          <button class="small ghost" onclick="startEditZone('${z.id}')">Edit</button>
+          <button class="small ghost" onclick="deleteZone('${z.id}')">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function startEditZone(id) { editingZoneId = id; renderZonesList(); }
+function cancelEditZone() { editingZoneId = null; renderZonesList(); }
+
+async function saveEditZone(id) {
+  const name = document.getElementById('editZoneName').value.trim();
+  if (!name) { showZoneMsg('Name is required.', 'error'); return; }
+  try {
+    await withStepUp(() => api(`/api/venue-control/zones/${id}/update`, { method: 'POST', body: { name } }));
+    editingZoneId = null;
+    showZoneMsg('Zone updated.', 'success');
+    await loadZonesAdmin(document.getElementById('sourcesLocationSelect').value);
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showZoneMsg(e.message, 'error');
+  }
+}
+
+async function deleteZone(id) {
+  try {
+    await withStepUp(() => api(`/api/venue-control/zones/${id}/delete`, { method: 'POST' }));
+    showZoneMsg('Zone deleted. Any TVs in it are now unassigned.', 'success');
+    await loadZonesAdmin(document.getElementById('sourcesLocationSelect').value);
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showZoneMsg(e.message, 'error');
+  }
+}
+
+async function addZone() {
+  const locationId = document.getElementById('sourcesLocationSelect').value;
+  const name = document.getElementById('newZoneName').value.trim();
+  if (!locationId) { showZoneMsg('Turn Venue Control on for a location first.', 'error'); return; }
+  if (!name) { showZoneMsg('Name is required.', 'error'); return; }
+  try {
+    await withStepUp(() => api(`/api/venue-control/sites/${locationId}/zones`, { method: 'POST', body: { name } }));
+    document.getElementById('newZoneName').value = '';
+    showZoneMsg('Zone added.', 'success');
+    await loadZonesAdmin(locationId);
+  } catch (e) {
+    showZoneMsg(e.message, 'error');
+  }
+}
+
+function showTvMsg(text, kind) {
+  document.getElementById('tvMsg').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+}
+
+async function loadTvsAdmin(locationId) {
+  try {
+    TVS_ADMIN = await api(`/api/venue-control/sites/${locationId}/tvs`);
+    renderTvsList();
+  } catch (e) {
+    document.getElementById('tvsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function zoneName(zoneId) {
+  if (zoneId == null) return 'Unassigned';
+  const z = ZONES_ADMIN.find((zz) => String(zz.id) === String(zoneId));
+  return z ? z.name : 'Unassigned';
+}
+
+const CONTROL_METHODS = ['unknown', 'samsung_ws_token', 'samsung_ws_plain', 'samsung_legacy', 'smartthings', 'wol_only', 'none'];
+
+function renderTvsList() {
+  const el = document.getElementById('tvsList');
+  if (!TVS_ADMIN.length) { el.innerHTML = '<p class="muted">No TVs yet.</p>'; return; }
+  el.innerHTML = TVS_ADMIN.map((t) => {
+    if (t.id === editingTvId) {
+      return `
+        <div class="list-row" style="flex-direction:column; align-items:stretch;">
+          <input id="editTvName" value="${escapeHtml(t.name)}" placeholder="Name">
+          <select id="editTvZone" style="margin-top:8px;">
+            <option value="">Unassigned</option>
+            ${ZONES_ADMIN.map((z) => `<option value="${z.id}" ${String(t.zone_id) === String(z.id) ? 'selected' : ''}>${escapeHtml(z.name)}</option>`).join('')}
+          </select>
+          <input id="editTvIp" value="${escapeHtml(t.ip || '')}" placeholder="IP address" style="margin-top:8px;">
+          <input id="editTvMac" value="${escapeHtml(t.mac || '')}" placeholder="MAC address" style="margin-top:8px;">
+          <select id="editTvControlMethod" style="margin-top:8px;">
+            ${CONTROL_METHODS.map((m) => `<option value="${m}" ${t.control_method === m ? 'selected' : ''}>${m}</option>`).join('')}
+          </select>
+          <label class="toggle-row" style="gap:8px; margin-top:8px;"><span class="label">Wake-on-LAN enabled</span>
+            <span class="switch"><input type="checkbox" id="editTvWol" ${t.wol_enabled ? 'checked' : ''}><span class="slider"></span></span>
+          </label>
+          <label class="toggle-row" style="gap:8px;"><span class="label">Force re-pair (clear saved token)</span>
+            <span class="switch"><input type="checkbox" id="editTvResetToken"><span class="slider"></span></span>
+          </label>
+          <div class="stack-actions">
+            <button class="ghost small" onclick="cancelEditTv()">Cancel</button>
+            <button class="primary small" style="margin-top:0;" onclick="saveEditTv('${t.id}')">Save</button>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="list-row">
+        <div class="name">${escapeHtml(t.name)} <span class="badge ${t.enabled ? 'on' : 'off'}">${t.enabled ? 'active' : 'archived'}</span>
+          <div class="sub">${escapeHtml(zoneName(t.zone_id))} · ${escapeHtml(t.control_method)}${t.ip ? ' · ' + escapeHtml(t.ip) : ''}${t.wol_enabled ? ' · WoL' : ''}</div>
+        </div>
+        <div class="stack-actions" style="margin-top:0;">
+          <button class="small ghost" onclick="startEditTv('${t.id}')">Edit</button>
+          ${t.enabled
+            ? `<button class="small ghost" onclick="archiveTv('${t.id}')">Archive</button>`
+            : `<button class="small secondary" style="margin-top:0;" onclick="restoreTv('${t.id}')">Restore</button>`}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function startEditTv(id) { editingTvId = id; renderTvsList(); }
+function cancelEditTv() { editingTvId = null; renderTvsList(); }
+
+async function saveEditTv(id) {
+  const name = document.getElementById('editTvName').value.trim();
+  const zoneId = document.getElementById('editTvZone').value;
+  const ip = document.getElementById('editTvIp').value.trim();
+  const mac = document.getElementById('editTvMac').value.trim();
+  const controlMethod = document.getElementById('editTvControlMethod').value;
+  const wolEnabled = document.getElementById('editTvWol').checked;
+  const resetToken = document.getElementById('editTvResetToken').checked;
+  if (!name) { showTvMsg('Name is required.', 'error'); return; }
+  try {
+    await withStepUp(() => api(`/api/venue-control/tvs/${id}/update`, {
+      method: 'POST',
+      body: { name, zoneId: zoneId || null, ip: ip || null, mac: mac || null, controlMethod, wolEnabled, resetToken },
+    }));
+    editingTvId = null;
+    showTvMsg('TV updated.', 'success');
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showTvMsg(e.message, 'error');
+  }
+}
+
+async function archiveTv(id) {
+  try {
+    await withStepUp(() => api(`/api/venue-control/tvs/${id}/archive`, { method: 'POST' }));
+    showTvMsg('TV archived.', 'success');
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showTvMsg(e.message, 'error');
+  }
+}
+
+async function restoreTv(id) {
+  try {
+    await withStepUp(() => api(`/api/venue-control/tvs/${id}/restore`, { method: 'POST' }));
+    showTvMsg('TV restored.', 'success');
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showTvMsg(e.message, 'error');
+  }
+}
+
+async function addTv() {
+  const locationId = document.getElementById('sourcesLocationSelect').value;
+  const name = document.getElementById('newTvName').value.trim();
+  const zoneId = document.getElementById('newTvZone').value;
+  const ip = document.getElementById('newTvIp').value.trim();
+  const mac = document.getElementById('newTvMac').value.trim();
+  const controlMethod = document.getElementById('newTvControlMethod').value;
+  const wolEnabled = document.getElementById('newTvWol').checked;
+  if (!locationId) { showTvMsg('Turn Venue Control on for a location first.', 'error'); return; }
+  if (!name) { showTvMsg('Name is required.', 'error'); return; }
+  try {
+    await withStepUp(() => api(`/api/venue-control/sites/${locationId}/tvs`, {
+      method: 'POST',
+      body: { name, zoneId: zoneId || null, ip: ip || null, mac: mac || null, controlMethod, wolEnabled },
+    }));
+    document.getElementById('newTvName').value = '';
+    document.getElementById('newTvIp').value = '';
+    document.getElementById('newTvMac').value = '';
+    document.getElementById('newTvWol').checked = false;
+    showTvMsg('TV added.', 'success');
+    await loadTvsAdmin(locationId);
+  } catch (e) {
+    showTvMsg(e.message, 'error');
+  }
+}
+
+function showSchedMsg(text, kind) {
+  document.getElementById('schedMsg').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+}
+
+function onSchedActionChange() {
+  const action = document.getElementById('newSchedAction').value;
+  document.getElementById('schedPayloadTvsPower').style.display = action === 'tvs_power' ? '' : 'none';
+  document.getElementById('schedPayloadSourceTune').style.display = action === 'source_tune' ? '' : 'none';
+}
+
+async function loadSchedulesAdmin(locationId) {
+  try {
+    SCHEDULES_ADMIN = await api(`/api/venue-control/sites/${locationId}/schedules`);
+    renderSchedulesList();
+  } catch (e) {
+    document.getElementById('schedulesList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function describeSchedulePayload(s) {
+  if (s.action_type === 'tvs_power') return `${s.payload.state} · ${s.payload.zone_id ? zoneName(s.payload.zone_id) : 'all zones'}`;
+  if (s.action_type === 'source_tune') return `slot ${s.payload.slot} &rarr; ${s.payload.major}${s.payload.minor != null ? '.' + s.payload.minor : ''}`;
+  return 'not runnable yet (Phase 5)';
+}
+
+function renderSchedulesList() {
+  const el = document.getElementById('schedulesList');
+  if (!SCHEDULES_ADMIN.length) { el.innerHTML = '<p class="muted">No schedules yet.</p>'; return; }
+  el.innerHTML = SCHEDULES_ADMIN.map((s) => `
+      <div class="list-row">
+        <div class="name">${escapeHtml(s.name)} <span class="badge ${s.enabled ? 'on' : 'off'}">${s.enabled ? 'enabled' : 'disabled'}</span>
+          <div class="sub">${escapeHtml(s.cron_expr)} · ${escapeHtml(s.action_type)} · ${describeSchedulePayload(s)}</div>
+          ${s.last_run_at ? `<div class="sub">last ran ${new Date(s.last_run_at).toLocaleString()}: ${escapeHtml(s.last_result || '')}</div>` : ''}
+        </div>
+        <div class="stack-actions" style="margin-top:0;">
+          ${s.enabled
+            ? `<button class="small ghost" onclick="toggleSchedule('${s.id}', false)">Disable</button>`
+            : `<button class="small secondary" style="margin-top:0;" onclick="toggleSchedule('${s.id}', true)">Enable</button>`}
+          <button class="small ghost" onclick="deleteSchedule('${s.id}')">Delete</button>
+        </div>
+      </div>`).join('');
+}
+
+async function toggleSchedule(id, enabled) {
+  try {
+    await withStepUp(() => api(`/api/venue-control/schedules/${id}/update`, { method: 'POST', body: { enabled } }));
+    showSchedMsg(enabled ? 'Schedule enabled.' : 'Schedule disabled.', 'success');
+    await loadSchedulesAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showSchedMsg(e.message, 'error');
+  }
+}
+
+async function deleteSchedule(id) {
+  try {
+    await withStepUp(() => api(`/api/venue-control/schedules/${id}/delete`, { method: 'POST' }));
+    showSchedMsg('Schedule deleted.', 'success');
+    await loadSchedulesAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showSchedMsg(e.message, 'error');
+  }
+}
+
+async function addSchedule() {
+  const locationId = document.getElementById('sourcesLocationSelect').value;
+  const name = document.getElementById('newSchedName').value.trim();
+  const cronExpr = document.getElementById('newSchedCron').value.trim();
+  const actionType = document.getElementById('newSchedAction').value;
+  if (!locationId) { showSchedMsg('Turn Venue Control on for a location first.', 'error'); return; }
+  if (!name || !cronExpr) { showSchedMsg('Name and cron expression are required.', 'error'); return; }
+  let payload = {};
+  if (actionType === 'tvs_power') {
+    const zoneId = document.getElementById('newSchedTvZone').value;
+    payload = { state: document.getElementById('newSchedTvState').value, zone_id: zoneId ? Number(zoneId) : null };
+  } else if (actionType === 'source_tune') {
+    const slot = Number(document.getElementById('newSchedSlot').value);
+    const major = Number(document.getElementById('newSchedMajor').value);
+    const minorRaw = document.getElementById('newSchedMinor').value;
+    if (!slot || !major) { showSchedMsg('Slot and channel are required for source_tune.', 'error'); return; }
+    payload = { slot, major, minor: minorRaw ? Number(minorRaw) : null };
+  }
+  try {
+    await withStepUp(() => api(`/api/venue-control/sites/${locationId}/schedules`, {
+      method: 'POST',
+      body: { name, cronExpr, actionType, payload },
+    }));
+    document.getElementById('newSchedName').value = '';
+    document.getElementById('newSchedCron').value = '';
+    showSchedMsg('Schedule added.', 'success');
+    await loadSchedulesAdmin(locationId);
+  } catch (e) {
+    showSchedMsg(e.message, 'error');
   }
 }
