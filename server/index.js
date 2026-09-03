@@ -431,18 +431,41 @@ return rows[0];
 res.json({ ok: true, agentId: agent.id, siteId: req.vcSite.site_id, locationName: req.vcSite.location_name, timezone: req.vcSite.timezone });
 });
 
-// Phase 0 config is just the site shell (name/timezone/scan_ranges) so the
-// agent has something real to poll and cache -- sources/tvs/etc join in
-// starting Phase 2. ETag keeps the 30s poll near-free when nothing changed.
+// Phase 0 config was just the site shell (name/timezone/scan_ranges).
+// Phase 2 (docs/venue-control.md §12) joins in the receiver inventory and
+// favorites list -- this is how the DirecTV driver/poller and the local
+// Sources API (agent/lib/poller.js, agent/server.js) learn what receivers
+// exist without the agent ever talking to Supabase directly (§6: "the agent
+// holds no unique state" -- it's a cached mirror of what's here). Disabled
+// sources/favorites are left out entirely rather than sent with a flag, so
+// the agent never has to re-derive "is this usable" from more than one
+// field. ETag keeps the 30s poll near-free when nothing changed.
 app.get('/api/venue/agent/config', requireAgentAuth(), async (req, res) => {
+const { rows: sources } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_sources WHERE site_id = $1 AND enabled = true ORDER BY slot',
+[req.vcSite.site_id]
+));
+const { rows: favorites } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_favorites WHERE (site_id = $1 OR site_id IS NULL) AND enabled = true ORDER BY category, sort_order, name',
+[req.vcSite.site_id]
+));
 const config = {
-schema_version: 1,
+schema_version: 2,
 site: {
 location_id: req.vcSite.location_id,
 name: req.vcSite.location_name,
 timezone: req.vcSite.timezone,
 scan_ranges: req.vcSite.scan_ranges,
 },
+sources: sources.map((s) => ({
+slot: s.slot, qam_channel: s.qam_channel, label: s.label, kind: s.kind,
+ip: s.ip, port: s.port, mac: s.mac, receiver_id: s.receiver_id,
+access_card_id: s.access_card_id, serial_num: s.serial_num, sw_version: s.sw_version,
+enabled: s.enabled,
+})),
+favorites: favorites.map((f) => ({
+id: f.id, name: f.name, major: f.major, minor: f.minor, category: f.category, color: f.color, shared: f.site_id === null,
+})),
 };
 const etag = crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
 if (req.get('if-none-match') === etag) return res.status(304).end();
@@ -549,6 +572,205 @@ res.json({ ok: true, ...created });
 } catch (err) {
 res.status(err.status || 400).json({ error: err.message });
 }
+});
+
+// ---------------- Venue Control — Source control (Phase 2) ----------------
+// docs/venue-control.md §12, Phase 2: "DirecTV driver, poller, sources admin
+// CRUD (receiver ID, card #, IP, QAM channel), favorites CRUD with sort,
+// staff Sources tab." The driver, poller, and staff-facing control API live
+// on the agent (agent/lib/drivers/directv.js, agent/lib/poller.js,
+// agent/server.js's /api/sources/* -- talking to a receiver only makes
+// sense from the bar's own LAN, same reasoning as discovery in Phase 1).
+// These routes are the cloud half: owner setup for the receiver inventory
+// and the favorites list, both of which flow down to the agent through
+// GET /api/venue/agent/config below (extended further down this file).
+//
+// Owner-only, same posture as the Sites card above it -- this is
+// receiver/channel-plan setup, not day-to-day control. Day-to-day tuning
+// happens on the agent's own local Sources tab, gated by the agent's staff
+// PIN instead of a TSB Platform session.
+app.get('/api/venue-control/sites/:locationId/sources', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT s.* FROM vc_sources s JOIN vc_sites vs ON vs.id = s.site_id
+  WHERE vs.location_id = $1
+  ORDER BY s.slot`,
+[req.params.locationId]
+));
+res.json(rows);
+});
+
+app.post('/api/venue-control/sites/:locationId/sources', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { slot, qamChannel, label, kind, ip, port, mac, receiverId, accessCardId, notes } = req.body || {};
+if (!slot || !qamChannel || !(label || '').trim()) return res.status(400).json({ error: 'A source needs "slot", "qamChannel", and "label".' });
+try {
+const source = await withServiceClient(async (client) => {
+const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]);
+if (!siteRows[0]) throw Object.assign(new Error('Turn Venue Control on for this location before adding sources.'), { status: 404 });
+const { rows } = await client.query(
+`INSERT INTO vc_sources (site_id, slot, qam_channel, label, kind, ip, port, mac, receiver_id, access_card_id, notes)
+   VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,8080),$8,$9,$10,$11)
+   RETURNING *`,
+[siteRows[0].id, slot, qamChannel, label.trim(), kind || 'directv', ip || null, port || null, mac || null,
+ receiverId || null, accessCardId || null, notes || null]
+);
+return rows[0];
+});
+res.json({ ok: true, source });
+} catch (err) {
+if (err.code === '23505') return res.status(400).json({ error: 'That slot or QAM channel is already used by another source at this location.' });
+if (err.code === '23514' && err.constraint === 'vc_sources_directv_needs_ip') return res.status(400).json({ error: 'A DirecTV source needs an IP address.' });
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/sources/:id/update', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { slot, qamChannel, label, kind, ip, port, mac, receiverId, accessCardId, enabled, notes } = req.body || {};
+if (!slot || !qamChannel || !(label || '').trim()) return res.status(400).json({ error: 'A source needs "slot", "qamChannel", and "label".' });
+try {
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_sources SET
+   slot=$1, qam_channel=$2, label=$3, kind=$4, ip=$5, port=COALESCE($6,8080), mac=$7,
+   receiver_id=$8, access_card_id=$9, notes=$10, enabled=COALESCE($11,enabled), updated_at=now()
+ WHERE id=$12
+ RETURNING *`,
+[slot, qamChannel, label.trim(), kind || 'directv', ip || null, port || null, mac || null,
+ receiverId || null, accessCardId || null, notes || null, typeof enabled === 'boolean' ? enabled : null, req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Source not found.' });
+res.json({ ok: true, source: rows[0] });
+} catch (err) {
+if (err.code === '23505') return res.status(400).json({ error: 'That slot or QAM channel is already used by another source at this location.' });
+if (err.code === '23514' && err.constraint === 'vc_sources_directv_needs_ip') return res.status(400).json({ error: 'A DirecTV source needs an IP address.' });
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/sources/:id/archive', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+'UPDATE vc_sources SET enabled = false, updated_at = now() WHERE id = $1 RETURNING *',
+[req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Source not found.' });
+res.json({ ok: true, source: rows[0] });
+});
+
+app.post('/api/venue-control/sources/:id/restore', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+'UPDATE vc_sources SET enabled = true, updated_at = now() WHERE id = $1 RETURNING *',
+[req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Source not found.' });
+res.json({ ok: true, source: rows[0] });
+});
+
+// Favorites (§5: "site_id NULL = shared across all sites"). "shared: true"
+// on create makes a national-channel favorite visible from every location;
+// omitted/false scopes it to the location being managed. Scope is fixed at
+// creation -- to move a favorite between shared and site-specific, archive
+// it and add a new one, rather than growing an update-time migration path
+// for a setup action nobody's asked for yet.
+app.get('/api/venue-control/sites/:locationId/favorites', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows: siteRows } = await withServiceClient((client) => client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]));
+const siteId = siteRows[0] ? siteRows[0].id : null;
+const { rows } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_favorites WHERE site_id = $1 OR site_id IS NULL ORDER BY category, sort_order, name',
+[siteId]
+));
+res.json(rows);
+});
+
+app.post('/api/venue-control/sites/:locationId/favorites', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { name, major, minor, category, color, shared } = req.body || {};
+if (!(name || '').trim() || !major) return res.status(400).json({ error: 'A favorite needs "name" and "major".' });
+try {
+const favorite = await withServiceClient(async (client) => {
+let siteId = null;
+if (!shared) {
+const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]);
+if (!siteRows[0]) throw Object.assign(new Error('Turn Venue Control on for this location before adding favorites.'), { status: 404 });
+siteId = siteRows[0].id;
+}
+const { rows } = await client.query(
+`INSERT INTO vc_favorites (site_id, name, major, minor, category, color)
+   VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+[siteId, name.trim(), major, minor || null, (category || 'Sports').trim(), color || null]
+);
+return rows[0];
+});
+res.json({ ok: true, favorite });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue-control/favorites/:id/update', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { name, major, minor, category, color } = req.body || {};
+if (!(name || '').trim() || !major) return res.status(400).json({ error: 'A favorite needs "name" and "major".' });
+const { rows } = await withServiceClient((client) => client.query(
+'UPDATE vc_favorites SET name=$1, major=$2, minor=$3, category=$4, color=$5 WHERE id=$6 RETURNING *',
+[name.trim(), major, minor || null, (category || 'Sports').trim(), color || null, req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Favorite not found.' });
+res.json({ ok: true, favorite: rows[0] });
+});
+
+app.post('/api/venue-control/favorites/:id/archive', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+'UPDATE vc_favorites SET enabled = false WHERE id = $1 RETURNING *',
+[req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Favorite not found.' });
+res.json({ ok: true, favorite: rows[0] });
+});
+
+app.post('/api/venue-control/favorites/:id/restore', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+'UPDATE vc_favorites SET enabled = true WHERE id = $1 RETURNING *',
+[req.params.id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Favorite not found.' });
+res.json({ ok: true, favorite: rows[0] });
+});
+
+// Move within category + scope (site-specific favorites reorder among
+// themselves; shared favorites reorder among themselves) -- same
+// swap-adjacent-sort_order pattern as
+// /api/servicecalls/equipment-types/:id/move. `IS NOT DISTINCT FROM` makes
+// the sibling lookup null-safe for shared favorites (site_id IS NULL).
+app.post('/api/venue-control/favorites/:id/move', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const direction = req.body.direction;
+if (direction !== 'up' && direction !== 'down') return res.status(400).json({ error: 'Invalid direction.' });
+const result = await withServiceClient(async (client) => {
+const { rows: current } = await client.query('SELECT id, site_id, category FROM vc_favorites WHERE id = $1', [req.params.id]);
+if (!current[0]) return { ok: false, error: 'Favorite not found.' };
+const fav = current[0];
+const { rows: siblings } = await client.query(
+`SELECT id, sort_order FROM vc_favorites
+  WHERE category = $1 AND enabled = true AND site_id IS NOT DISTINCT FROM $2
+  ORDER BY sort_order, name`,
+[fav.category, fav.site_id]
+);
+const idx = siblings.findIndex((s) => s.id === fav.id);
+const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+if (idx === -1) return { ok: false, error: 'Favorite not found.' };
+if (swapIdx < 0 || swapIdx >= siblings.length) return { ok: true }; // already at the edge
+const other = siblings[swapIdx];
+await client.query('UPDATE vc_favorites SET sort_order = $1 WHERE id = $2', [other.sort_order, fav.id]);
+await client.query('UPDATE vc_favorites SET sort_order = $1 WHERE id = $2', [siblings[idx].sort_order, other.id]);
+return { ok: true };
+});
+res.status(result.ok === false ? 404 : 200).json(result);
 });
 
 // ---------------- Employees (owner/manager) ----------------
