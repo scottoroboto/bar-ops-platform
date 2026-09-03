@@ -4,6 +4,7 @@
 let STAFF_PIN = '';
 let TVS = [];
 let ZONES = [];
+let SOURCES = [];
 let refreshTimer = null;
 
 function submitPin() {
@@ -13,6 +14,7 @@ function submitPin() {
     document.getElementById('app').style.display = '';
     TVS = tvs;
     loadZonesThenRender();
+    loadSources();
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(refreshTvs, 20000); // matches lib/tv-poller.js's own 20s cadence
   }).catch(() => {
@@ -38,6 +40,30 @@ function escapeHtml(s) {
 async function loadZonesThenRender() {
   try { ZONES = await api('/api/zones'); } catch (e) { ZONES = []; }
   renderTvs();
+}
+
+// Phase 4 (docs/venue-control.md §12: "TV source selection") -- reuses the
+// same local /api/sources the Sources tab already exposes, so the picker
+// shows the real slot/label/qam_channel list without a second endpoint.
+async function loadSources() {
+  try { SOURCES = await api('/api/sources'); } catch (e) { SOURCES = []; }
+}
+
+function sourceLabel(slot) {
+  if (slot == null) return null;
+  const s = SOURCES.find((ss) => Number(ss.slot) === Number(slot));
+  return s ? `${s.label} (slot ${s.slot})` : `slot ${slot}`;
+}
+
+// live.slot is the last slot this TV was actually *commanded* to (set the
+// moment a select-channel command is sent, not verified afterward -- see
+// samsung-ws.js's selectChannel). Before any command has been sent this
+// session, fall back to the TV's own default_source_slot as a best guess,
+// clearly labeled as such rather than presented as fact.
+function currentSourceInfo(t) {
+  if (t.live && t.live.slot != null) return { slot: t.live.slot, confirmed: true };
+  if (t.default_source_slot != null) return { slot: t.default_source_slot, confirmed: false };
+  return null;
 }
 
 async function refreshTvs() {
@@ -106,11 +132,22 @@ function renderTvs() {
             <button class="small" onclick="volume(${t.id}, 'down')">Vol &minus;</button>
             <button class="small" onclick="volume(${t.id}, 'up')">Vol +</button>
             <button class="small" onclick="volume(${t.id}, 'mute')">Mute</button>` : ''}
-          </div>`}
+          </div>
+          ${t.channel_capable ? renderSourceRow(t) : ''}`}
         </div>
       `).join('')}
     `;
   }).join('');
+}
+
+function renderSourceRow(t) {
+  const info = currentSourceInfo(t);
+  const label = info
+    ? escapeHtml(sourceLabel(info.slot)) + (info.confirmed ? '' : ' <span class="muted">(usual, unconfirmed)</span>')
+    : '<span class="muted">not set</span>';
+  return `<div class="tv-source-row"><span class="muted">Source:</span> ${label}
+    <button class="small" onclick="openSourcePicker(${t.id})">Change source</button>
+  </div>`;
 }
 
 async function power(id, state) {
@@ -140,5 +177,38 @@ async function bulkPower(state, zoneId) {
     await refreshTvs();
   } catch (e) {
     alert(e.message);
+  }
+}
+
+// Phase 4 (docs/venue-control.md §12: "TV source selection") -- the picker
+// itself is a flat list of every configured source (not just DirecTV, so a
+// spare/static slot can still be picked); tapping one sends the key-code
+// sequence and closes on success, same "open, act, close" shape as the
+// Sources tab's favorites picker.
+let SOURCE_PICK_TV_ID = null;
+
+function openSourcePicker(tvId) {
+  SOURCE_PICK_TV_ID = tvId;
+  const tv = TVS.find((t) => Number(t.id) === Number(tvId));
+  document.getElementById('tvSourceTitle').textContent = tv ? `Choose a source for ${tv.name}` : 'Choose a source';
+  document.getElementById('tvSourceMsg').innerHTML = '';
+  document.getElementById('tvSourceGrid').innerHTML = SOURCES.length
+    ? SOURCES.map((s) => `
+        <button class="fav-btn" onclick="pickSource(${s.slot})">
+          <span class="cat">slot ${s.slot}</span>
+          <span>${escapeHtml(s.label)}</span>
+        </button>`).join('')
+    : '<p class="muted">No sources configured yet -- see TSB Platform: Venue Control &rarr; Sources.</p>';
+  document.getElementById('tvSourceDialog').showModal();
+}
+
+async function pickSource(slot) {
+  if (SOURCE_PICK_TV_ID == null) return;
+  try {
+    await api(`/api/tvs/${SOURCE_PICK_TV_ID}/slot`, { method: 'POST', body: JSON.stringify({ slot }) });
+    document.getElementById('tvSourceDialog').close();
+    await refreshTvs();
+  } catch (e) {
+    document.getElementById('tvSourceMsg').innerHTML = `<div class="msg error">${escapeHtml(e.message)}</div>`;
   }
 }

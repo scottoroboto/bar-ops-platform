@@ -33,12 +33,18 @@
   .tv-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
   .tv-name { font-size: 15px; font-weight: 600; }
   .tv-controls { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .tv-source-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
   #pinGate .card { max-width: 340px; margin: 60px auto 0; }
   #app { display: none; }
   .msg { padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-top: 10px; }
   .msg.error { background: rgba(229,86,109,0.15); color: #ff8a9a; }
   .msg.success { background: rgba(63,191,127,0.15); color: #6be3a4; }
   .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  dialog { background: #1c2027; color: #e8eaed; border: 1px solid #2c313a; border-radius: 12px; padding: 18px; max-width: 420px; }
+  dialog::backdrop { background: rgba(0,0,0,0.5); }
+  .fav-grid { display: flex; flex-wrap: wrap; gap: 8px; max-height: 300px; overflow-y: auto; }
+  .fav-btn { display: flex; flex-direction: column; align-items: flex-start; min-width: 90px; }
+  .fav-btn .cat { font-size: 10px; color: #9aa1ab; text-transform: uppercase; letter-spacing: 0.03em; }
 </style>
 </head>
 <body>
@@ -67,6 +73,16 @@
     <div id="tvsBox"><p class="muted">Loading…</p></div>
   </div>
 </div>
+
+<dialog id="tvSourceDialog">
+  <h2 style="margin-top:0;" id="tvSourceTitle">Choose a source</h2>
+  <p class="muted" style="margin-top:-6px;">Sends the channel keys as if pressed on the remote -- confirm visually that it worked.</p>
+  <div class="fav-grid" id="tvSourceGrid"></div>
+  <div id="tvSourceMsg"></div>
+  <div style="margin-top:12px;">
+    <button onclick="document.getElementById('tvSourceDialog').close()">Close</button>
+  </div>
+</dialog>
 
 <script src="tvs.js"></script>
 </body>
