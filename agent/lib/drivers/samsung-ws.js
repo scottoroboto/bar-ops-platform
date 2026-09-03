@@ -90,19 +90,31 @@ function wsUrlFor(tv) {
 
 // Opens the remote-control WS channel, waits for the ms.channel.connect
 // handshake (which is where a fresh pairing hands back a token -- see
-// §7.2), sends one key press, and closes. Returns the token if the TV sent
-// one, so callers can persist it onto vc_tvs.ws_token for next time. The
-// self-signed-cert TLS relaxation is scoped to this one connection via the
-// `rejectUnauthorized: false` socket option, not a process-wide setting.
-function sendKey(tv, key, hold = 'keyPress') {
+// §7.2), sends one or more key presses in order (with a delay between each,
+// so a multi-key sequence like a channel-select lands exactly like someone
+// pressing the physical remote), and closes. Returns the token if the TV
+// sent one, so callers can persist it onto vc_tvs.ws_token for next time.
+// The self-signed-cert TLS relaxation is scoped to this one connection via
+// the `rejectUnauthorized: false` socket option, not a process-wide setting.
+//
+// A single WS connection is reused for the whole sequence rather than
+// reconnecting per key -- reconnecting would re-trigger the pairing wait on
+// every key for a fresh token TV, and is simply slower for no benefit.
+function sendKeySequence(tv, keys, { interKeyDelayMs = 200 } = {}) {
   if (tv.control_method !== 'samsung_ws_token' && tv.control_method !== 'samsung_ws_plain') {
     return Promise.reject(new Error(`TV control_method "${tv.control_method}" has no WS remote-control path.`));
   }
   if (!tv.ip) return Promise.reject(new Error('TV has no IP address configured.'));
+  if (!Array.isArray(keys) || !keys.length) return Promise.reject(new Error('No keys to send.'));
+
+  // Generous enough for the longest realistic sequence (a QAM channel like
+  // "1234.5" is 8 keys) plus the pairing wait, without being unbounded.
+  const timeoutMs = Math.min(WS_TIMEOUT_MS + keys.length * (interKeyDelayMs + 300), 20000);
 
   return new Promise((resolve, reject) => {
     let settled = false;
     let capturedToken = null;
+    let keyIndex = 0;
     const url = wsUrlFor(tv);
     const ws = new WebSocket(url, tv.control_method === 'samsung_ws_token' ? { rejectUnauthorized: false } : undefined);
 
@@ -114,30 +126,35 @@ function sendKey(tv, key, hold = 'keyPress') {
       if (err) reject(err); else resolve(result);
     };
 
-    const timer = setTimeout(() => finish(new Error(`Samsung WS ${tv.ip} timed out after ${WS_TIMEOUT_MS}ms -- if this is the first connection, check the TV screen for an "Allow this device?" prompt.`)), WS_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(new Error(`Samsung WS ${tv.ip} timed out after ${timeoutMs}ms -- if this is the first connection, check the TV screen for an "Allow this device?" prompt.`)), timeoutMs);
 
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.event === 'ms.channel.connect') {
         capturedToken = (msg.data && msg.data.token) || null;
-        sendClick();
+        sendNextKey();
       } else if (msg.event === 'ms.channel.unauthorized' || msg.event === 'ms.channel.timeOut') {
         finish(new Error(`Samsung WS ${tv.ip} rejected the connection (${msg.event}) -- token may be stale; re-pairing may be needed.`));
       }
     });
 
-    function sendClick() {
+    function sendNextKey() {
+      if (keyIndex >= keys.length) {
+        // Give the TV a beat to actually act on the last key before we
+        // tear the socket down -- closing immediately after send has been
+        // known to drop the command on some Tizen versions.
+        setTimeout(() => finish(null, { ok: true, token: capturedToken, sent: keys.length }), 200);
+        return;
+      }
+      const key = keys[keyIndex++];
       const payload = JSON.stringify({
         method: 'ms.remote.control',
         params: { Cmd: 'Click', DataOfCmd: key, Option: 'false', TypeOfRemote: 'SendRemoteKey' },
       });
       ws.send(payload, (err) => {
         if (err) return finish(err);
-        // Give the TV a beat to actually act on the key before we tear the
-        // socket down -- closing immediately after send has been known to
-        // drop the command on some Tizen versions.
-        setTimeout(() => finish(null, { ok: true, token: capturedToken }), 200);
+        setTimeout(sendNextKey, interKeyDelayMs);
       });
     }
 
@@ -145,12 +162,52 @@ function sendKey(tv, key, hold = 'keyPress') {
       // samsung_ws_plain has no ms.channel.connect handshake to wait for --
       // send immediately. samsung_ws_token waits for the connect event
       // above (which is also where a first-time pairing prompt resolves).
-      if (tv.control_method === 'samsung_ws_plain') sendClick();
+      if (tv.control_method === 'samsung_ws_plain') sendNextKey();
     });
 
     ws.on('error', (err) => finish(err));
     ws.on('close', () => finish(new Error(`Samsung WS ${tv.ip} closed before completing.`)));
   });
+}
+
+function sendKey(tv, key) {
+  return sendKeySequence(tv, [key]).then((res) => ({ ok: true, token: res.token }));
+}
+
+// ---------------------------------------------------------------- channel selection (§7.2, stretch goal)
+
+// Builds the exact key-press sequence a person would use on the physical
+// remote to type a QAM channel: each digit of the major number, then (if a
+// minor/sub-channel is present) KEY_MINUS and each digit of the minor
+// number, then KEY_ENTER. "12.1" -> KEY_1 KEY_2 KEY_MINUS KEY_1 KEY_ENTER,
+// exactly per §7.2's example.
+function keysForQamChannel(qamChannel) {
+  const str = String(qamChannel == null ? '' : qamChannel).trim();
+  const parts = str.split('.');
+  if (!parts.length || parts.length > 2 || parts.some((p) => !/^\d+$/.test(p))) {
+    throw new Error(`QAM channel "${qamChannel}" isn't in a recognized major[.minor] format (e.g. "14" or "12.1").`);
+  }
+  const digitKeys = (digits) => digits.split('').map((d) => `KEY_${d}`);
+  const [major, minor] = parts;
+  const keys = digitKeys(major);
+  if (minor != null) keys.push('KEY_MINUS', ...digitKeys(minor));
+  keys.push('KEY_ENTER');
+  return keys;
+}
+
+// Sends the QAM channel as remote key codes. This is genuinely unverified
+// (§7.2: "marked stretch because it is unverified") -- there is no Samsung
+// API that reports back which channel the built-in tuner landed on, so the
+// result only confirms the key sequence was sent, not that the picture
+// actually changed. Requires the TV already on the Cable/Antenna input with
+// the QAM channel list programmed, same as the physical remote would.
+async function selectChannel(tv, qamChannel) {
+  if (tv.control_method !== 'samsung_ws_token' && tv.control_method !== 'samsung_ws_plain') {
+    throw new Error(`TV control_method "${tv.control_method}" can't select a channel -- needs samsung_ws_token or samsung_ws_plain (SmartThings is not a reliable channel path per §7.2).`);
+  }
+  const keys = keysForQamChannel(qamChannel);
+  const res = await sendKeySequence(tv, keys, { interKeyDelayMs: 200 });
+  return { ok: true, requested: qamChannel, method: 'ws', keysSent: keys, token: res.token };
 }
 
 // ---------------------------------------------------------------- discrete power (§7.2)
@@ -228,4 +285,4 @@ async function setVolume(tv, op) {
   throw new Error(`No volume control path available for this TV (control_method="${tv.control_method}"${samsungSt.configured() ? ', and no SmartThings device id set' : ', SmartThings not configured'}).`);
 }
 
-module.exports = { identify, getState, getPowerState, sendKey, setPower, setVolume };
+module.exports = { identify, getState, getPowerState, sendKey, sendKeySequence, setPower, setVolume, selectChannel, keysForQamChannel };
