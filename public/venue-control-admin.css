@@ -83,7 +83,26 @@
 .badge.kind-roku { background: rgba(79,141,253,0.18); color: #8fb6ff; }
 .badge.kind-static, .badge.kind-spare { background: rgba(154,163,178,0.15); color: var(--muted); }
 
+/* Phone-narrow layout (docs/venue-control-gui-reconciliation.md §3/§5: "no phone-narrow
+   layout anywhere in the current UI"). This page is already reachable from anywhere
+   (it's on the open internet, unlike the agent's own local staff pages) -- it just
+   never had real narrow-viewport rules of its own. The platform's base styles.css is
+   already mobile-first for plain list-rows/forms; the gaps are this page's own new
+   components (tabs, location row) plus the one wide table (Activity). */
 @media (max-width: 640px) {
   .vc-tabs { gap: 5px; }
   .vc-tab { padding: 7px 11px; font-size: 12.5px; }
+  .vc-location-row { flex-direction: column; align-items: stretch; }
+  .vc-location-row select { width: 100%; min-width: 0; }
+
+  /* A list-row with a name/badges on one side and 2-3 action buttons on the other
+     (every Sources/Favorites/Zones/TVs/Schedules/Layouts/Backups row) needs to wrap
+     rather than force horizontal scroll on a phone-width screen. */
+  .vc-panel .list-row { flex-wrap: wrap; }
+
+  /* The Activity log's 6-column table (When/Actor/Origin/Action/Target/Result) can't
+     usefully reflow -- let it scroll horizontally inside its own card instead of
+     forcing the whole page wider than the viewport. */
+  #activityList { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  #activityList table { width: auto; min-width: 560px; }
 }
