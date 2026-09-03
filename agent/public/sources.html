@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Venue Control Agent — Sources</title>
+<style>
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #14171c; color: #e8eaed; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 10px; color: #cfd3da; }
+  a { color: #7fb7ff; }
+  .muted { color: #9aa1ab; font-size: 13px; }
+  .card { background: #1c2027; border-radius: 12px; padding: 16px 18px; margin-top: 16px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge.on { background: rgba(63,191,127,0.18); color: #6be3a4; }
+  .badge.off { background: rgba(229,86,109,0.18); color: #ff8a9a; }
+  .badge.wait { background: rgba(154,161,171,0.18); color: #b6bcc6; }
+  input, select { background: #11141a; border: 1px solid #2c313a; color: #e8eaed; border-radius: 8px; padding: 8px 10px; font-size: 14px; font-family: inherit; }
+  button { background: #2c313a; border: 1px solid #3a404b; color: #e8eaed; border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer; }
+  button:hover { background: #353c47; }
+  button.primary { background: #2b6cb0; border-color: #2b6cb0; }
+  button.primary:hover { background: #3178c2; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.small { padding: 5px 10px; font-size: 12.5px; }
+  .fav-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+  .fav-btn { display: flex; flex-direction: column; align-items: flex-start; min-width: 90px; }
+  .fav-btn .cat { font-size: 10px; color: #9aa1ab; text-transform: uppercase; letter-spacing: 0.03em; }
+  .source-row { border-bottom: 1px solid #262b33; padding: 12px 0; }
+  .source-row:last-child { border-bottom: none; }
+  .source-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .source-name { font-size: 15px; font-weight: 600; }
+  .source-controls { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .source-controls input[type=text] { width: 90px; }
+  #pinGate .card { max-width: 340px; margin: 60px auto 0; }
+  #app { display: none; }
+  .msg { padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-top: 10px; }
+  .msg.error { background: rgba(229,86,109,0.15); color: #ff8a9a; }
+  .msg.success { background: rgba(63,191,127,0.15); color: #6be3a4; }
+  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  dialog { background: #1c2027; color: #e8eaed; border: 1px solid #2c313a; border-radius: 12px; padding: 18px; max-width: 420px; }
+  dialog::backdrop { background: rgba(0,0,0,0.5); }
+</style>
+</head>
+<body>
+<div class="wrap" id="pinGate">
+  <div class="card">
+    <h2>Sources</h2>
+    <p class="muted">Enter the staff PIN to change channels.</p>
+    <div class="field"><input type="password" id="pinInput" placeholder="Staff PIN" autocomplete="off"></div>
+    <button class="primary" onclick="submitPin()">Continue</button>
+    <div id="pinMsg"></div>
+  </div>
+</div>
+
+<div class="wrap" id="app">
+  <h1>Sources</h1>
+  <p class="muted">Change what's playing on any receiver. <a href="/">&larr; Agent status</a></p>
+
+  <div class="card" id="favCard" style="display:none;">
+    <h2>Favorites</h2>
+    <div class="fav-grid" id="favGrid"></div>
+  </div>
+
+  <div class="card">
+    <h2>Receivers <span class="muted" id="refreshedAt"></span></h2>
+    <div id="sourcesBox"><p class="muted">Loading…</p></div>
+  </div>
+</div>
+
+<dialog id="tuneFavDialog">
+  <h2 style="margin-top:0;" id="tuneFavTitle">Tune to favorite</h2>
+  <p class="muted">Pick which receiver(s) to send this to.</p>
+  <div id="tuneFavChecks"></div>
+  <div id="tuneFavMsg"></div>
+  <div style="margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
+    <button onclick="document.getElementById('tuneFavDialog').close()">Cancel</button>
+    <button class="primary" onclick="submitTuneFav()">Tune</button>
+  </div>
+</dialog>
+
+<script src="sources.js"></script>
+</body>
+</html>
