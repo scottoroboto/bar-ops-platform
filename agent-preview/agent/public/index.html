@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Venue Control Agent</title>
+<style>
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #14171c; color: #e8eaed; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 32px 20px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .muted { color: #9aa1ab; font-size: 14px; }
+  .card { background: #1c2027; border-radius: 12px; padding: 18px; margin-top: 18px; }
+  .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #262b33; font-size: 14px; }
+  .row:last-child { border-bottom: none; }
+  .row .k { color: #9aa1ab; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge.on { background: rgba(63,191,127,0.18); color: #6be3a4; }
+  .badge.off { background: rgba(229,86,109,0.18); color: #ff8a9a; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Venue Control Agent</h1>
+  <p class="muted">Phase 5 — layouts, backup/restore, and the activity log are live, alongside DirecTV source control and TV power/source selection.</p>
+  <div class="card" id="status">
+    <p class="muted">Loading…</p>
+  </div>
+  <p class="muted" style="margin-top:16px;"><a href="/sources.html" style="color:#7fb7ff;">Sources &rarr;</a> (staff PIN required) — change channels</p>
+  <p class="muted"><a href="/tvs.html" style="color:#7fb7ff;">TVs &rarr;</a> (staff PIN required) — power on/off, volume, source</p>
+  <p class="muted"><a href="/layouts.html" style="color:#7fb7ff;">Layouts &rarr;</a> (staff PIN required) — apply whole-room presets</p>
+  <p class="muted"><a href="/discovery.html" style="color:#7fb7ff;">Discovery &amp; Diagnostics &rarr;</a> (admin PIN required)</p>
+  <p class="muted"><a href="/admin.html" style="color:#7fb7ff;">Admin &rarr;</a> (admin PIN required) — capture layouts, backup &amp; restore</p>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

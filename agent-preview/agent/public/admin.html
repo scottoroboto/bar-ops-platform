@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Venue Control Agent — Admin</title>
+<link rel="stylesheet" href="admin-theme.css">
+</head>
+<body class="admin">
+<div class="wrap" id="pinGate">
+  <div class="card">
+    <h2>Admin</h2>
+    <p class="muted">Enter the admin PIN — capture layouts, take/restore backups.</p>
+    <div class="field"><input type="password" id="pinInput" placeholder="Admin PIN" autocomplete="off"></div>
+    <button class="primary" onclick="submitPin()">Continue</button>
+    <div id="pinMsg"></div>
+  </div>
+</div>
+
+<div class="wrap" id="app">
+  <h1>Admin</h1>
+  <p class="muted">Setup and disaster-recovery actions — not for day-to-day use. <a href="/">&larr; Agent status</a> · <a href="/discovery.html">Discovery &amp; Diagnostics &rarr;</a></p>
+
+  <div class="card">
+    <h2>Capture current state into a layout</h2>
+    <p class="muted">Reads what every source is tuned to and what every TV is showing right now, and saves it as that layout's preset. Do this once the room actually looks the way you want the layout to reproduce.</p>
+    <div class="field">
+      <label>Layout</label>
+      <select id="captureLayoutSelect"></select>
+    </div>
+    <button class="primary" onclick="captureLayout()">Capture current state</button>
+    <div id="captureMsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Backups</h2>
+    <p class="muted">docs/venue-control.md §6: a dead agent box loses nothing — everything lives in the cloud. Restoring here works even before this box has ever talked to TSB Platform's own admin pages.</p>
+    <button class="primary" onclick="takeBackupNow()">Take backup now</button>
+    <div id="backupMsg"></div>
+    <div id="backupsBox" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+  </div>
+</div>
+
+<script src="admin.js"></script>
+</body>
+</html>

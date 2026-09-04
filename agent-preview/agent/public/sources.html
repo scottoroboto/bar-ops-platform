@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Venue Control Agent — Sources</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="staff-theme.css">
+</head>
+<body class="staff">
+<div class="wrap" id="pinGate">
+  <div class="card">
+    <h2>Sources</h2>
+    <p class="muted">Enter the staff PIN to change channels.</p>
+    <div class="field"><input type="password" id="pinInput" placeholder="Staff PIN" autocomplete="off"></div>
+    <button class="primary" onclick="submitPin()">Continue</button>
+    <div id="pinMsg"></div>
+  </div>
+</div>
+
+<div class="wrap" id="app">
+  <h1>Sources</h1>
+  <p class="muted">Change what's playing on any receiver. <a href="/">&larr; Agent status</a></p>
+
+  <div class="card" id="favCard" style="display:none;">
+    <h2>Favorites</h2>
+    <div class="fav-grid" id="favGrid"></div>
+  </div>
+
+  <div class="card">
+    <h2>Sources <span class="muted" id="refreshedAt"></span></h2>
+    <div id="sourcesBox"><p class="muted">Loading…</p></div>
+  </div>
+</div>
+
+<dialog id="tuneFavDialog">
+  <h2 style="margin-top:0;" id="tuneFavTitle">Tune to favorite</h2>
+  <p class="muted">Pick which receiver(s) to send this to.</p>
+  <div id="tuneFavChecks"></div>
+  <div id="tuneFavMsg"></div>
+  <div style="margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
+    <button onclick="document.getElementById('tuneFavDialog').close()">Cancel</button>
+    <button class="primary" onclick="submitTuneFav()">Tune</button>
+  </div>
+</dialog>
+
+<dialog id="rokuAppsDialog">
+  <h2 style="margin-top:0;" id="rokuAppsTitle">Apps</h2>
+  <div id="rokuAppsMsg"></div>
+  <div class="fav-grid" id="rokuAppsGrid"><p class="muted">Loading…</p></div>
+  <div style="margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
+    <button onclick="document.getElementById('rokuAppsDialog').close()">Close</button>
+  </div>
+</dialog>
+
+<!-- Full-screen channel picker (screens/02-staff-channel-picker.html): opened per
+     receiver from its "Channels…" button. Favorites grid with live titles filled in
+     progressively, plus a keypad fallback for a channel not saved as a favorite. -->
+<div class="overlay" id="channelPicker">
+  <div class="overlay-header">
+    <div>
+      <h1 style="font-size:18px; margin:0;" id="pickerTitle">Channels</h1>
+      <p class="muted" style="margin:2px 0 0;">Tap a favorite, or use the keypad below.</p>
+    </div>
+    <button class="small" onclick="closeChannelPicker()">Close</button>
+  </div>
+  <div class="overlay-body">
+    <div id="pickerBlastRadius"></div>
+
+    <div class="card">
+      <h2>Favorites</h2>
+      <div class="channel-grid" id="pickerFavGrid"></div>
+    </div>
+
+    <div class="card">
+      <h2>Guide &amp; keypad</h2>
+      <div class="source-controls" style="margin-bottom:12px;">
+        <button onclick="pickerSendKey('guide')">Guide</button>
+        <button onclick="pickerSendKey('info')">Info</button>
+      </div>
+      <input type="text" id="pickerKeypadInput" placeholder="Channel" readonly style="width:140px; font-size:20px; text-align:center; margin-bottom:10px;">
+      <div class="keypad">
+        <button onclick="pickerKeypadPress('1')">1</button>
+        <button onclick="pickerKeypadPress('2')">2</button>
+        <button onclick="pickerKeypadPress('3')">3</button>
+        <button onclick="pickerKeypadPress('4')">4</button>
+        <button onclick="pickerKeypadPress('5')">5</button>
+        <button onclick="pickerKeypadPress('6')">6</button>
+        <button onclick="pickerKeypadPress('7')">7</button>
+        <button onclick="pickerKeypadPress('8')">8</button>
+        <button onclick="pickerKeypadPress('9')">9</button>
+        <button onclick="pickerKeypadPress('.')">.</button>
+        <button onclick="pickerKeypadPress('0')">0</button>
+        <button onclick="pickerKeypadPress('back')">&larr;</button>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button onclick="pickerKeypadPress('clear')">Clear</button>
+        <button class="primary" onclick="pickerKeypadTune()">Tune</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="sources.js"></script>
+</body>
+</html>

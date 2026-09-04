@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Venue Control Agent — TVs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="staff-theme.css">
+</head>
+<body class="staff">
+<div class="wrap" id="pinGate">
+  <div class="card">
+    <h2>TVs</h2>
+    <p class="muted">Enter the staff PIN to control TV power.</p>
+    <div class="field"><input type="password" id="pinInput" placeholder="Staff PIN" autocomplete="off"></div>
+    <button class="primary" onclick="submitPin()">Continue</button>
+    <div id="pinMsg"></div>
+  </div>
+</div>
+
+<div class="wrap" id="app">
+  <h1>TVs</h1>
+  <p class="muted">Turn TVs on or off, whole-room or one at a time. <a href="/">&larr; Agent status</a></p>
+
+  <div class="card">
+    <div class="zone-header">
+      <h2 style="margin:0;">All TVs <span class="muted" id="refreshedAt"></span></h2>
+      <div class="zone-actions">
+        <button class="small" onclick="setAllZonesCollapsed(true, allZoneKeys())">Collapse all</button>
+        <button class="small" onclick="setAllZonesCollapsed(false)">Expand all</button>
+        <button class="small" onclick="bulkPower('on')">All on</button>
+        <button class="small hold-danger" data-zone="" data-hold-action="off"><span class="hold-fill"></span><span class="hold-label">Hold: All off</span></button>
+      </div>
+    </div>
+    <div id="bulkProgress"></div>
+    <div id="tvsBox"><p class="muted">Loading…</p></div>
+  </div>
+</div>
+
+<dialog id="tvSourceDialog">
+  <h2 style="margin-top:0;" id="tvSourceTitle">Choose a source</h2>
+  <p class="muted" style="margin-top:-6px;">Sends the channel keys as if pressed on the remote -- confirm visually that it worked.</p>
+  <div class="fav-grid" id="tvSourceGrid"></div>
+  <div id="tvSourceMsg"></div>
+  <div style="margin-top:12px;">
+    <button onclick="document.getElementById('tvSourceDialog').close()">Close</button>
+  </div>
+</dialog>
+
+<script src="tvs.js"></script>
+</body>
+</html>

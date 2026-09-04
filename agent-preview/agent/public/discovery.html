@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Venue Control Agent — Discovery</title>
+<link rel="stylesheet" href="admin-theme.css">
+</head>
+<body class="admin">
+<div class="wrap" id="pinGate">
+  <div class="card">
+    <h2>Discovery &amp; Diagnostics</h2>
+    <p class="muted">Owner/admin only — enter the agent's admin PIN to continue.</p>
+    <div class="field"><input type="password" id="pinInput" placeholder="Admin PIN" autocomplete="off"></div>
+    <button class="primary" onclick="submitPin()">Continue</button>
+    <div id="pinMsg"></div>
+  </div>
+</div>
+
+<div class="wrap" id="app">
+  <h1>Discovery &amp; Diagnostics</h1>
+  <p class="muted">Phase 1 — scans this box's own LAN, classifies what answers, and lets you adopt devices into TSB Platform. Nothing here changes device state except the explicitly-marked tests below. <a href="/">&larr; Agent status</a></p>
+
+  <div class="card">
+    <h2>Scan</h2>
+    <div class="field">
+      <label for="rangesInput">CIDR ranges (comma-separated — leave blank to use this site's configured scan_ranges)</label>
+      <textarea id="rangesInput" placeholder="192.168.1.0/24"></textarea>
+    </div>
+    <div class="field-row">
+      <label class="muted"><input type="checkbox" id="deepCheck"> Deep scan (slower, wider timeouts)</label>
+      <button class="primary" id="scanBtn" onclick="startScan()">Scan now</button>
+    </div>
+    <div id="scanMsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Results <span id="runMeta" class="muted"></span></h2>
+    <div id="resultsBox"><p class="muted">No scan run yet.</p></div>
+  </div>
+</div>
+
+<dialog id="adoptDialog">
+  <h2 style="margin-top:0;">Adopt device</h2>
+  <div class="field"><label>Adopt as</label>
+    <select id="adoptAs" onchange="renderAdoptFields()">
+      <option value="tv">TV</option>
+      <option value="source">Source (receiver/Roku/spare)</option>
+    </select>
+  </div>
+  <div id="adoptFields"></div>
+  <div id="adoptMsg"></div>
+  <div class="field-row" style="margin-top:10px;">
+    <button onclick="document.getElementById('adoptDialog').close()">Cancel</button>
+    <button class="primary" onclick="submitAdopt()">Adopt</button>
+  </div>
+</dialog>
+
+<script src="discovery.js"></script>
+</body>
+</html>
