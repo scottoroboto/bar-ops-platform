@@ -1,0 +1,65 @@
+{
+  "_comment": "Fake headend for Ticket Sports Bar. Edit freely — the simulator reads this at startup. 'fault' values make a device misbehave on purpose so the drivers get exercised against real failure modes.",
+
+  "network": {
+    "base": "127.0.0.",
+    "note": "loopback mode binds 127.0.0.<host> on real ports (8080/8060/8001/8002). Linux allows this with no setup. macOS needs an alias per address — run `node simulator.js --print-aliases`."
+  },
+
+  "channels": {
+    "206":  { "call": "ESPN",   "title": "College Football: Michigan at Texas", "dur": 12600 },
+    "209":  { "call": "ESPN2",  "title": "College Football: Oregon at Ohio State", "dur": 12600 },
+    "208":  { "call": "ESPNU",  "title": "College Football: Tulane at Memphis", "dur": 11700 },
+    "219":  { "call": "FS1",    "title": "MLB: Dodgers at Padres", "dur": 10800 },
+    "618":  { "call": "FS2",    "title": "Bundesliga Weekly", "dur": 3600 },
+    "212":  { "call": "NFLN",   "title": "NFL Total Access", "dur": 3600 },
+    "213":  { "call": "MLBN",   "title": "MLB Tonight", "dur": 7200 },
+    "215":  { "call": "NHLN",   "title": "NHL Now", "dur": 3600 },
+    "216":  { "call": "NBATV",  "title": "NBA GameTime", "dur": 3600 },
+    "245":  { "call": "TNT",    "title": "Inside the NBA", "dur": 3600 },
+    "247":  { "call": "TBS",    "title": "MLB on TBS", "dur": 10800 },
+    "221":  { "call": "CBSSN",  "title": "NHL: Golden Knights at Kings", "dur": 9000 },
+    "218":  { "call": "GOLF",   "title": "PGA Tour Live", "dur": 14400 },
+    "610":  { "call": "BTN",    "title": "B1G Football", "dur": 12600 },
+    "611":  { "call": "SECN",   "title": "SEC Now", "dur": 3600 },
+    "612":  { "call": "ACCN",   "title": "ACC Huddle", "dur": 3600 },
+    "202":  { "call": "CNN",    "title": "The Lead", "dur": 3600 },
+    "360":  { "call": "FNC",    "title": "Special Report", "dur": 3600 },
+    "11":   { "call": "KTTV",   "title": "FOX 11 News at Six", "dur": 3600 },
+    "2":    { "call": "KCBS",   "title": "CBS 2 News", "dur": 1800 }
+  },
+
+  "receivers": [
+    { "host": 90, "slot": 10, "label": "DirecTV 10", "receiverId": "0368 0879 2810", "card": "0027-6187-7865", "major": 206 },
+    { "host": 91, "slot": 11, "label": "DirecTV 11", "receiverId": "0368 0879 2811", "card": "0027-6187-7866", "major": 219 },
+    { "host": 92, "slot": 12, "label": "DirecTV 12", "receiverId": "0368 0879 2812", "card": "0027-6187-7867", "major": 212 },
+    { "host": 93, "slot": 13, "label": "DirecTV 13", "receiverId": "0368 0879 2813", "card": "0027-6187-7868", "major": 209 },
+    { "host": 94, "slot": 14, "label": "DirecTV 14", "receiverId": "0368 0879 2814", "card": "0027-6187-7869", "major": 245 },
+    { "host": 95, "slot": 15, "label": "DirecTV 15", "receiverId": "0368 0879 2815", "card": "0027-6187-7870", "major": 213 },
+    { "host": 96, "slot": 16, "label": "DirecTV 16", "receiverId": "0368 0879 2816", "card": "0027-6187-7871", "major": 221 },
+    { "host": 97, "slot": 17, "label": "DirecTV 17", "receiverId": "0368 0879 2817", "card": "0027-6187-7872", "major": 11 },
+    { "host": 98, "slot": 18, "label": "DirecTV 18", "receiverId": "0368 0879 2818", "card": "0027-6187-7873", "major": 218, "fault": "standby" },
+    { "host": 99, "slot": 19, "label": "DirecTV 19", "receiverId": "0368 0879 2819", "card": "0027-6187-7874", "major": 208, "fault": "blackhole" }
+  ],
+
+  "rokus": [
+    { "host": 100, "slot": 20, "label": "Roku 1", "app": "YouTube TV" },
+    { "host": 101, "slot": 21, "label": "Roku 2", "app": null }
+  ],
+
+  "tvs": [
+    { "zone": "Main Bar",  "count": 14, "tag": "MB", "host": 120, "model": "UN55TU8000", "tokenAuth": true },
+    { "zone": "Patio",     "count": 12, "tag": "PA", "host": 140, "model": "UN50TU7000", "tokenAuth": true },
+    { "zone": "Back Room", "count": 10, "tag": "BR", "host": 160, "model": "UN43J5200",  "tokenAuth": false },
+    { "zone": "Dining",    "count": 8,  "tag": "DN", "host": 180, "model": "UN55TU8000", "tokenAuth": true },
+    { "zone": "Patio Bar", "count": 6,  "tag": "PB", "host": 200, "model": "UN40H5003",  "tokenAuth": false, "legacy": true }
+  ],
+
+  "faults": {
+    "_comment": "Applied by TV tag. 'off' = powered down, only Wake-on-LAN revives it. 'blackhole' = never answers. 'unpaired' = token TV that refuses the remote until you pair it once.",
+    "BR9": "off",
+    "BR10": "off",
+    "PA11": "blackhole",
+    "MB13": "unpaired"
+  }
+}
