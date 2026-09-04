@@ -1,0 +1,19 @@
+{
+  "name": "venue-control-agent",
+  "version": "0.6.0",
+  "private": true,
+  "description": "On-site agent for TSB Platform's Venue Control. Phase 0: registration, config pull, heartbeat, local status UI, admin PIN. Phase 1: network discovery/diagnostics (scan, classify, test, adopt). Phase 2: DirecTV SHEF driver + poller, staff Sources tab (channel control + favorites), staff PIN. Phase 3: Samsung TV power (WS remote + SmartThings fallback + WoL) with state verification, zones, bulk/per-zone power, staff TVs tab, cron schedules evaluated in the site's own timezone. Phase 4: TV source (QAM channel) selection via remote key codes, per-TV and bulk, from the staff TVs tab. Phase 5: whole-room layouts (capture-current-state, tap-to-apply with 15s undo), backup/restore, activity log. Phase 6: Roku ECP driver (apps, launch, keypress), spare/static slot handling -- see docs/venue-control.md in the main repo. All six build-order phases are now complete.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ws": "^8.21.3"
+  }
+}
