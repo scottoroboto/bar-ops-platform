@@ -390,3 +390,180 @@ async function pickSource(slot) {
     document.getElementById('tvSourceMsg').innerHTML = `<div class="msg error">${escapeHtml(e.message)}</div>`;
   }
 }
+
+// ---------------------------------------------------------------------
+// TV remote (screens/06-staff-remote-tv.html) -- aimed by tapping TV chips
+// rather than bound to one device like the source remotes (sources.js's
+// openRemote). Every button here fans out to every TV currently in
+// REMOTE_TARGETS via the two new bulk routes this round added
+// (POST /api/tvs/bulk/key, .../bulk/volume) plus the existing bulk/power.
+// "In remote mode the source highlight switches off entirely" -- the stage
+// below shows only the aim highlight (.remote-target), nothing else.
+// ---------------------------------------------------------------------
+let TV_REMOTE_OPEN = false;
+let REMOTE_TARGETS = new Set();
+let remoteKeyBuffer = []; // internal KEY_* tokens for the typed-channel keypad
+let remoteKeyBufferDisplay = '';
+
+function openTvRemote() {
+  TV_REMOTE_OPEN = true;
+  REMOTE_TARGETS.clear();
+  remoteKeyBuffer = [];
+  remoteKeyBufferDisplay = '';
+  document.getElementById('tvRemoteOverlay').classList.add('open');
+  renderTvRemotePanel();
+  renderTvRemoteStage();
+}
+
+function closeTvRemote() {
+  TV_REMOTE_OPEN = false;
+  document.getElementById('tvRemoteOverlay').classList.remove('open');
+}
+
+function toggleRemoteTarget(id) {
+  if (REMOTE_TARGETS.has(id)) REMOTE_TARGETS.delete(id);
+  else REMOTE_TARGETS.add(id);
+  renderTvRemoteStage();
+  renderTvRemoteBar();
+}
+
+function clearRemoteTargets() {
+  REMOTE_TARGETS.clear();
+  renderTvRemoteStage();
+  renderTvRemoteBar();
+}
+
+// "Select whole zone" needs a zone to mean -- taken from whichever TV was
+// aimed most recently rather than a separate zone picker, since by the time
+// someone reaches for this button they've almost always already tapped at
+// least one TV in the zone they mean.
+function selectWholeZoneForRemote() {
+  if (!REMOTE_TARGETS.size) { alert('Tap at least one TV first so I know which zone you mean.'); return; }
+  const anchor = TVS.find((t) => Number(t.id) === Number(Array.from(REMOTE_TARGETS).pop()));
+  const zoneKey = anchor && anchor.zone_id != null ? Number(anchor.zone_id) : null;
+  TVS.filter((t) => (t.zone_id == null ? null : Number(t.zone_id)) === zoneKey && t.ip)
+    .forEach((t) => REMOTE_TARGETS.add(t.id));
+  renderTvRemoteStage();
+  renderTvRemoteBar();
+}
+
+function renderTvRemoteStage() {
+  const stage = document.getElementById('tvRemoteStage');
+  const zoneName = (id) => {
+    if (id == null) return 'Unassigned';
+    const z = ZONES.find((zz) => Number(zz.id) === Number(id));
+    return z ? z.name : 'Unassigned';
+  };
+  const groups = new Map();
+  for (const tv of TVS) {
+    const key = tv.zone_id == null ? 'unassigned' : String(tv.zone_id);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(tv);
+  }
+  const orderedKeys = Array.from(groups.keys()).sort((a, b) => {
+    if (a === 'unassigned') return 1;
+    if (b === 'unassigned') return -1;
+    return zoneName(Number(a)).localeCompare(zoneName(Number(b)));
+  });
+  stage.innerHTML = `<div style="font-size:12px; font-weight:700; letter-spacing:0.1em; color:var(--muted); margin-bottom:8px;">TAP TVS TO AIM THE REMOTE</div>` +
+    orderedKeys.map((key) => {
+      const tvs = groups.get(key);
+      const name = key === 'unassigned' ? 'Unassigned' : zoneName(Number(key));
+      return `
+        <div class="zone-header"><div class="zone-title"><h2 style="margin:0;">${escapeHtml(name)}</h2>${zoneCountHtml(zoneCounts(tvs))}</div></div>
+        <div class="tv-grid">
+          ${tvs.map((t) => {
+            const info = currentSourceInfo(t);
+            const chan = info ? sourceLabel(info.slot) : null;
+            return `
+            <div class="tv-tile${REMOTE_TARGETS.has(t.id) ? ' remote-target' : ''}" style="cursor:pointer;" onclick="toggleRemoteTarget(${t.id})">
+              <div class="tv-top"><div class="tv-name">${escapeHtml(t.name)}${t.tag ? ` <span class="muted">(${escapeHtml(t.tag)})</span>` : ''}</div></div>
+              <div class="muted" style="font-size:12px;">${chan ? escapeHtml(chan) : 'no source set'}</div>
+            </div>`;
+          }).join('')}
+        </div>`;
+    }).join('');
+}
+
+function renderTvRemoteBar() {
+  const bar = document.getElementById('tvRemoteBar');
+  if (!bar) return;
+  const n = REMOTE_TARGETS.size;
+  const names = Array.from(REMOTE_TARGETS).map((id) => (TVS.find((t) => Number(t.id) === Number(id)) || {}).name).filter(Boolean);
+  bar.innerHTML = n
+    ? `<span class="count">${n} TV${n === 1 ? '' : 's'}</span> receiving the remote — ${escapeHtml(names.join(', '))}`
+    : `<span class="muted">No TVs selected — tap one or more to aim the remote.</span>`;
+}
+
+function renderTvRemotePanel() {
+  document.getElementById('tvRemotePanelBody').innerHTML = `
+    <div class="remote-grid cols-2">
+      <button class="on" onclick="remoteTvPower('on')">POWER ON</button>
+      <button class="off" onclick="remoteTvPower('off')">POWER OFF</button>
+    </div>
+    <div class="remote-grid cols-4">
+      <button class="small" onclick="remoteTvVolume('up')">Vol +</button>
+      <button class="small" onclick="remoteTvVolume('down')">Vol &minus;</button>
+      <button class="small" onclick="remoteTvVolume('mute')">Mute</button>
+      <button class="small" onclick="remoteTvVolume('unmute')">Unmute</button>
+    </div>
+    <div class="remote-grid cols-3">
+      <button class="small" onclick="remoteTvKey('KEY_SOURCE')">Input</button>
+      <button class="small" onclick="remoteTvKey('KEY_CHUP')">CH &#9650;</button>
+      <button class="small" onclick="remoteTvKey('KEY_CHDOWN')">CH &#9660;</button>
+    </div>
+    <input type="text" id="remoteTvKeypadDisplay" readonly placeholder="Type a channel" style="width:100%; text-align:center; font-size:20px; margin-top:12px;">
+    <div class="remote-grid cols-3" style="margin-top:8px;">
+      ${['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => `<button onclick="remoteTvKeypad('${d}')">${d}</button>`).join('')}
+      <button onclick="remoteTvKeypad('-')">&ndash;</button>
+      <button onclick="remoteTvKeypad('0')">0</button>
+      <button class="primary" onclick="remoteTvKeypadEnter()">Enter</button>
+    </div>
+    <div class="remote-footer">Every press goes to the highlighted TVs.</div>
+    <div class="remote-bar" id="tvRemoteBar" style="margin-top:12px;"></div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <button class="small" onclick="clearRemoteTargets()">Clear</button>
+      <button class="small" onclick="selectWholeZoneForRemote()">Select whole zone</button>
+    </div>`;
+  renderTvRemoteBar();
+}
+
+async function bulkKeyToTargets(keys) {
+  if (!REMOTE_TARGETS.size) { alert('Tap at least one TV first.'); return; }
+  try {
+    await api('/api/tvs/bulk/key', { method: 'POST', body: JSON.stringify({ tv_ids: Array.from(REMOTE_TARGETS), keys }) });
+  } catch (e) { alert(e.message); }
+}
+
+function remoteTvKey(key) { bulkKeyToTargets([key]); }
+
+async function remoteTvPower(state) {
+  if (!REMOTE_TARGETS.size) { alert('Tap at least one TV first.'); return; }
+  try {
+    await api('/api/tvs/bulk/power', { method: 'POST', body: JSON.stringify({ state, tv_ids: Array.from(REMOTE_TARGETS) }) });
+    await refreshTvs();
+    if (TV_REMOTE_OPEN) renderTvRemoteStage();
+  } catch (e) { alert(e.message); }
+}
+
+async function remoteTvVolume(op) {
+  if (!REMOTE_TARGETS.size) { alert('Tap at least one TV first.'); return; }
+  try {
+    await api('/api/tvs/bulk/volume', { method: 'POST', body: JSON.stringify({ op, tv_ids: Array.from(REMOTE_TARGETS) }) });
+  } catch (e) { alert(e.message); }
+}
+
+function remoteTvKeypad(ch) {
+  remoteKeyBuffer.push(ch === '-' ? 'KEY_MINUS' : `KEY_${ch}`);
+  remoteKeyBufferDisplay += ch;
+  document.getElementById('remoteTvKeypadDisplay').value = remoteKeyBufferDisplay;
+}
+
+async function remoteTvKeypadEnter() {
+  if (!remoteKeyBuffer.length) return;
+  const keys = [...remoteKeyBuffer, 'KEY_ENTER'];
+  remoteKeyBuffer = [];
+  remoteKeyBufferDisplay = '';
+  document.getElementById('remoteTvKeypadDisplay').value = '';
+  await bulkKeyToTargets(keys);
+}
