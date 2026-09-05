@@ -712,7 +712,7 @@ sources: sources.map((s) => ({
 id: s.id, slot: s.slot, qam_channel: s.qam_channel, label: s.label, kind: s.kind,
 ip: s.ip, port: s.port, mac: s.mac, receiver_id: s.receiver_id,
 access_card_id: s.access_card_id, serial_num: s.serial_num, sw_version: s.sw_version,
-enabled: s.enabled,
+enabled: s.enabled, notes: s.notes,
 })),
 favorites: favorites.map((f) => ({
 id: f.id, name: f.name, major: f.major, minor: f.minor, category: f.category, color: f.color, shared: f.site_id === null,
