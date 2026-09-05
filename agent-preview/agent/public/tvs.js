@@ -421,6 +421,13 @@ function closeTvRemote() {
 }
 
 function toggleRemoteTarget(id) {
+  // Normalize to Number before touching the Set -- t.id can arrive as a
+  // JS string (Postgres bigint columns serialize as strings) while this
+  // function's own `id` param is always a bare numeric literal (it's
+  // embedded unquoted in the onclick="" attribute below). Without this,
+  // the same TV can occupy two different-typed Set entries at once --
+  // see selectWholeZoneForRemote's matching Number(t.id) normalization.
+  id = Number(id);
   if (REMOTE_TARGETS.has(id)) REMOTE_TARGETS.delete(id);
   else REMOTE_TARGETS.add(id);
   renderTvRemoteStage();
@@ -442,7 +449,7 @@ function selectWholeZoneForRemote() {
   const anchor = TVS.find((t) => Number(t.id) === Number(Array.from(REMOTE_TARGETS).pop()));
   const zoneKey = anchor && anchor.zone_id != null ? Number(anchor.zone_id) : null;
   TVS.filter((t) => (t.zone_id == null ? null : Number(t.zone_id)) === zoneKey && t.ip)
-    .forEach((t) => REMOTE_TARGETS.add(t.id));
+    .forEach((t) => REMOTE_TARGETS.add(Number(t.id)));
   renderTvRemoteStage();
   renderTvRemoteBar();
 }
@@ -476,7 +483,7 @@ function renderTvRemoteStage() {
             const info = currentSourceInfo(t);
             const chan = info ? sourceLabel(info.slot) : null;
             return `
-            <div class="tv-tile${REMOTE_TARGETS.has(t.id) ? ' remote-target' : ''}" style="cursor:pointer;" onclick="toggleRemoteTarget(${t.id})">
+            <div class="tv-tile${REMOTE_TARGETS.has(Number(t.id)) ? ' remote-target' : ''}" style="cursor:pointer;" onclick="toggleRemoteTarget(${t.id})">
               <div class="tv-top"><div class="tv-name">${escapeHtml(t.name)}${t.tag ? ` <span class="muted">(${escapeHtml(t.tag)})</span>` : ''}</div></div>
               <div class="muted" style="font-size:12px;">${chan ? escapeHtml(chan) : 'no source set'}</div>
             </div>`;
