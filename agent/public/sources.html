@@ -102,6 +102,22 @@
   </div>
 </div>
 
+<!-- Device-matched remote panels (screens/03-staff-remote-directv.html,
+     screens/04-staff-remote-roku.html): opened per source from its "Remote…"
+     button. #remotePanelBody is filled per-kind by openRemote() in sources.js;
+     #remoteStage shows the full sources grid dimmed behind it, with only the
+     source the remote is bound to highlighted (single highlight, per §6). -->
+<div class="overlay remote-overlay" id="remoteOverlay">
+  <div class="remote-panel">
+    <div class="remote-panel-header">
+      <div><span class="title" id="remoteTitle">REMOTE</span> <span class="sub" id="remoteSub"></span></div>
+      <button class="close" onclick="closeRemote()">&times;</button>
+    </div>
+    <div id="remotePanelBody"></div>
+  </div>
+  <div class="remote-stage" id="remoteStage"></div>
+</div>
+
 <script src="sources.js"></script>
 </body>
 </html>

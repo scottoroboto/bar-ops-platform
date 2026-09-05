@@ -45,6 +45,7 @@ async function refreshSources() {
   try {
     SOURCES = await api('/api/sources');
     renderSources();
+    if (REMOTE_SLOT != null) renderRemoteStage(); // keep the remote's dimmed stage current while it's open
   } catch (e) {
     // A transient failure here shouldn't yank the page out from under
     // someone mid-tap -- just leave the last-known state showing.
@@ -117,6 +118,7 @@ function sourceControls(s) {
         <button class="small" onclick="goToChannel(${s.slot})">Go</button>
         <button class="small" onclick="sendKey(${s.slot}, 'guide')">Guide</button>
         <button class="small" onclick="sendKey(${s.slot}, 'info')">Info</button>
+        <button class="small" onclick="openRemote(${s.slot})">Remote…</button>
       </div>`;
   }
   if (s.kind === 'roku') {
@@ -124,6 +126,7 @@ function sourceControls(s) {
       <div class="source-controls">
         <button class="small" onclick="sendKey(${s.slot}, 'Home')">Home</button>
         <button class="small" onclick="openRokuApps(${s.slot})">Apps…</button>
+        <button class="small" onclick="openRemote(${s.slot})">Remote…</button>
       </div>`;
   }
   if (s.kind === 'spare') return `<p class="muted">Empty slot — reserved for a future source.</p>`;
@@ -204,6 +207,155 @@ async function launchRokuApp(appId) {
   } catch (e) {
     document.getElementById('rokuAppsMsg').innerHTML = `<div class="msg error">${escapeHtml(e.message)}</div>`;
   }
+}
+
+// ---------------------------------------------------------------------
+// Device-matched remote panels (screens/03-staff-remote-directv.html,
+// screens/04-staff-remote-roku.html). Bound to one source (REMOTE_SLOT) at
+// a time. Every button here sends exactly one real key over the same
+// POST /api/sources/:slot/key route the channel picker's Guide/Info buttons
+// already use (server.js dispatches DirecTV SHEF vs. Roku ECP by kind) --
+// no new backend endpoint needed for either remote.
+// ---------------------------------------------------------------------
+let REMOTE_SLOT = null;
+
+// Real SHEF key names (DirecTV's documented /remote/processKey vocabulary --
+// same list agent/lib/drivers/directv.js's processKey() passes straight
+// through as a query param, no translation layer needed here).
+function directvRemoteHtml() {
+  return `
+    <div class="remote-grid cols-2">
+      <button class="on" onclick="remoteKey('poweron')">POWER ON</button>
+      <button class="off" onclick="remoteKey('poweroff')">POWER OFF</button>
+    </div>
+    <div class="remote-grid cols-3">
+      <button onclick="remoteKey('guide')">Guide</button>
+      <button onclick="remoteKey('list')">List</button>
+      <button onclick="remoteKey('info')">Info</button>
+    </div>
+    <div class="remote-grid cols-3">
+      <button onclick="remoteKey('menu')">Menu</button>
+      <button onclick="remoteKey('exit')">Exit</button>
+      <button onclick="remoteKey('back')">Back</button>
+    </div>
+    <div class="remote-grid cols-3">
+      <button class="blank"></button>
+      <button onclick="remoteKey('up')">▲</button>
+      <button class="blank"></button>
+      <button onclick="remoteKey('left')">◀</button>
+      <button class="primary" onclick="remoteKey('select')">Select</button>
+      <button onclick="remoteKey('right')">▶</button>
+      <button class="blank"></button>
+      <button onclick="remoteKey('down')">▼</button>
+      <button class="blank"></button>
+    </div>
+    <div class="remote-grid cols-3">
+      <button onclick="remoteKey('chanup')">CH ▲</button>
+      <button onclick="remoteKey('prev')">Prev</button>
+      <button onclick="remoteKey('chandown')">CH ▼</button>
+    </div>
+    <div class="remote-grid cols-5">
+      <button class="small" onclick="remoteKey('rew')">Rew</button>
+      <button class="small" onclick="remoteKey('play')">Play</button>
+      <button class="small" onclick="remoteKey('stop')">Stop</button>
+      <button class="small" onclick="remoteKey('ffwd')">Ffwd</button>
+      <button class="small" onclick="remoteKey('record')">Rec</button>
+    </div>
+    <div class="remote-grid cols-2">
+      <button onclick="remoteKey('dash')">Dash</button>
+      <button class="primary" onclick="remoteKey('enter')">Enter</button>
+    </div>
+    <div class="remote-footer">Numeric channel entry lives in Channels… — this remote mirrors the physical one.</div>`;
+}
+
+// Roku ECP's own key vocabulary (agent/lib/drivers/roku.js's keypress() is a
+// thin passthrough to /keypress/<key> — these are Roku's real key names,
+// not an internal mapping). PowerOn/PowerOff only do anything on a Roku TV;
+// a plain streaming stick/box has no power state and simply ignores them,
+// same as it would from the physical remote.
+function rokuRemoteHtml() {
+  return `
+    <div class="remote-grid cols-2">
+      <button class="on" onclick="remoteKey('PowerOn')">POWER ON</button>
+      <button class="off" onclick="remoteKey('PowerOff')">POWER OFF</button>
+    </div>
+    <div class="remote-grid cols-2">
+      <button onclick="remoteKey('Back')">Back</button>
+      <button onclick="remoteKey('Home')">Home</button>
+    </div>
+    <div class="remote-grid cols-3">
+      <button class="blank"></button>
+      <button onclick="remoteKey('Up')">▲</button>
+      <button class="blank"></button>
+      <button onclick="remoteKey('Left')">◀</button>
+      <button class="primary" onclick="remoteKey('Select')">OK</button>
+      <button onclick="remoteKey('Right')">▶</button>
+      <button class="blank"></button>
+      <button onclick="remoteKey('Down')">▼</button>
+      <button class="blank"></button>
+    </div>
+    <div class="remote-grid cols-2">
+      <button class="small" onclick="remoteKey('InstantReplay')">Replay</button>
+      <button class="small" onclick="remoteKey('Info')">Options</button>
+    </div>
+    <div class="remote-grid cols-3">
+      <button class="small" onclick="remoteKey('Rev')">Rev</button>
+      <button class="small" onclick="remoteKey('Play')">Play</button>
+      <button class="small" onclick="remoteKey('Fwd')">Fwd</button>
+    </div>
+    <div id="remoteRokuApps"><p class="muted" style="margin-top:12px;">Loading apps…</p></div>
+    <div class="remote-footer">Tap an app to launch it. Full list: Apps… on the Sources tab.</div>`;
+}
+
+async function fillRemoteRokuApps(slot) {
+  const el = document.getElementById('remoteRokuApps');
+  if (!el) return;
+  try {
+    const { apps } = await api(`/api/sources/${slot}/apps`);
+    if (REMOTE_SLOT !== slot) return; // closed/reopened for a different slot while this was in flight
+    if (!apps.length) { el.innerHTML = '<p class="muted">No apps reported by this Roku.</p>'; return; }
+    el.innerHTML = `<div class="remote-grid cols-4">${apps.slice(0, 8).map((a) => `
+      <button class="small" onclick="launchRokuApp('${a.id}')">${escapeHtml(a.name)}</button>
+    `).join('')}</div>`;
+  } catch (e) {
+    if (REMOTE_SLOT === slot) el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// Stage: the full sources grid, dimmed (see .remote-stage in staff-theme.css),
+// with exactly one tile lit -- the source this remote is actually driving
+// right now. Read-only; tapping it does nothing, it's context, not a control.
+function renderRemoteStage() {
+  const stage = document.getElementById('remoteStage');
+  stage.innerHTML = `<div class="channel-grid">${SOURCES.map((s) => `
+    <div class="channel-tile${Number(s.slot) === Number(REMOTE_SLOT) ? ' remote-target' : ''}">
+      <span class="cat">slot ${s.slot} · ${escapeHtml(s.qam_channel)}</span>
+      <span class="name">${escapeHtml(s.label)}</span>
+      <span class="live-title">${s.kind === 'roku' ? (s.live && s.live.appId != null ? escapeHtml(s.live.appName || '') : '') : (s.live && s.live.major != null ? `${s.live.major}${s.live.minor != null ? '.' + s.live.minor : ''}` : '')}</span>
+    </div>`).join('')}</div>`;
+}
+
+function openRemote(slot) {
+  REMOTE_SLOT = slot;
+  const source = SOURCES.find((s) => Number(s.slot) === Number(slot));
+  if (!source) return;
+  document.getElementById('remoteTitle').textContent = source.kind === 'roku' ? 'ROKU' : 'DIRECTV';
+  document.getElementById('remoteSub').textContent = `${source.label} · ${source.qam_channel}`;
+  document.getElementById('remotePanelBody').innerHTML = source.kind === 'roku' ? rokuRemoteHtml() : directvRemoteHtml();
+  renderRemoteStage();
+  document.getElementById('remoteOverlay').classList.add('open');
+  if (source.kind === 'roku') fillRemoteRokuApps(slot);
+}
+
+function closeRemote() {
+  document.getElementById('remoteOverlay').classList.remove('open');
+  REMOTE_SLOT = null;
+}
+
+async function remoteKey(key) {
+  if (REMOTE_SLOT == null) return;
+  await sendKey(REMOTE_SLOT, key);
+  refreshSources(); // a key like Home/PowerOn can change what's showing -- pick it up without waiting for the next 15s tick
 }
 
 async function loadFavorites() {
