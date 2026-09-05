@@ -26,7 +26,7 @@ const roku = require('./drivers/roku');
 const POLL_INTERVAL_MS = 15 * 1000;
 const STAGGER_STEP_MS = 400; // spreads receivers across the poll window instead of firing them all at once
 
-const state = new Map(); // slot (number) -> { slot, kind, major, minor, appId, appName, active, updatedAt, ok, error }
+const state = new Map(); // slot (number) -> { slot, kind, major, minor, appId, appName, active, updatedAt, lastOkAt, ok, error }
 
 function currentSources() {
   const config = cache.get('config') || {};
@@ -36,6 +36,7 @@ function currentSources() {
 async function pollOne(source) {
   const slot = Number(source.slot);
   const kind = source.kind;
+  const now = new Date().toISOString();
   try {
     if (kind === 'directv') {
       const s = await directv.getState(source.ip, source.port || 8080);
@@ -43,7 +44,7 @@ async function pollOne(source) {
         slot, kind,
         major: s.major, minor: s.minor, active: s.active,
         appId: null, appName: null,
-        updatedAt: new Date().toISOString(), ok: true, error: null,
+        updatedAt: now, lastOkAt: now, ok: true, error: null,
       });
     } else if (kind === 'roku') {
       const s = await roku.getState(source.ip, source.port || 8060);
@@ -51,14 +52,17 @@ async function pollOne(source) {
         slot, kind,
         major: null, minor: null, active: s.on,
         appId: s.appId, appName: s.appName,
-        updatedAt: new Date().toISOString(), ok: true, error: null,
+        updatedAt: now, lastOkAt: now, ok: true, error: null,
       });
     }
   } catch (err) {
     // Keep the last-known channel/app on a failed poll rather than blanking
     // it -- a device that's briefly unreachable shouldn't make the UI forget
     // what it was last known to be showing. `ok: false` is what actually
-    // signals the problem to the UI.
+    // signals the problem to the UI. `lastOkAt` carries forward from the
+    // last successful poll (distinct from `updatedAt`, which always moves
+    // to "now" on every attempt, success or not) so the UI can show a real
+    // "last seen HH:MM" instead of the misleading last-attempt time.
     const prev = state.get(slot);
     state.set(slot, {
       slot, kind,
@@ -67,7 +71,8 @@ async function pollOne(source) {
       appId: prev ? prev.appId : null,
       appName: prev ? prev.appName : null,
       active: null,
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
+      lastOkAt: prev ? prev.lastOkAt : null,
       ok: false,
       error: err.message,
     });
