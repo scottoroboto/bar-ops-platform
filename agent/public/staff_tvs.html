@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Venue Control Agent — TVs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="staff-theme.css">
+</head>
+<body class="staff">
+<div class="wrap" id="pinGate">
+  <div class="card">
+    <h2>TVs</h2>
+    <p class="muted">Enter the staff PIN to control TV power.</p>
+    <div class="field"><input type="password" id="pinInput" placeholder="Staff PIN" autocomplete="off"></div>
+    <button class="primary" onclick="submitPin()">Continue</button>
+    <div id="pinMsg"></div>
+  </div>
+</div>
+
+<div id="app">
+  <!-- Branded top bar, shared shape with staff_sources.html/staff_layouts.html
+       -- see staff-theme.css's .staff-topbar rules. Quick button here opens
+       the TV remote (screen 06), matching screens/05-staff-tvs.html. -->
+  <div class="staff-topbar">
+    <div class="staff-topbar-inner">
+      <div class="tb-brand">
+        <img class="tb-logo" src="ticket-logo.png" alt="Ticket Sports Bar">
+        <div class="tb-divider"></div>
+        <a href="/" title="Agent status"><span class="tb-conn-dot"></span></a>
+      </div>
+      <button class="tb-quick" onclick="openTvRemote()">
+        <svg width="15" height="19" viewBox="0 0 16 20" fill="none"><rect x="1" y="1" width="14" height="18" rx="3" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="5.5" r="1.5" fill="currentColor"/><path d="M4.5 10.5h7M4.5 14h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span class="label">TV Remote</span>
+      </button>
+      <div class="tb-nav">
+        <a href="/staff_sources.html">Sources</a>
+        <a href="/staff_tvs.html" class="active">TVs</a>
+        <a href="/staff_layouts.html">Layouts</a>
+        <div class="tb-divider" style="height:40px; margin:0 6px;"></div>
+        <div class="tb-clock">
+          <div class="day" id="tbDay">—</div>
+          <div class="time" id="tbTime">—</div>
+          <div class="date" id="tbDate">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="zone-header">
+        <h2 style="margin:0;">All TVs <span class="muted" id="refreshedAt"></span></h2>
+        <div class="zone-actions">
+          <button class="small" onclick="setAllZonesCollapsed(true, allZoneKeys())">Collapse all</button>
+          <button class="small" onclick="setAllZonesCollapsed(false)">Expand all</button>
+          <button class="small" onclick="bulkPower('on')">All on</button>
+          <button class="small hold-danger" data-zone="" data-hold-action="off"><span class="hold-fill"></span><span class="hold-label">Hold: All off</span></button>
+          <button class="small primary" onclick="openTvRemote()">TV Remote</button>
+        </div>
+      </div>
+      <div id="bulkProgress"></div>
+      <div id="tvsBox"><p class="muted">Loading…</p></div>
+    </div>
+  </div>
+</div>
+
+<dialog id="tvSourceDialog">
+  <h2 style="margin-top:0;" id="tvSourceTitle">Choose a source</h2>
+  <p class="muted" style="margin-top:-6px;">Sends the channel keys as if pressed on the remote -- confirm visually that it worked.</p>
+  <div class="fav-grid" id="tvSourceGrid"></div>
+  <div id="tvSourceMsg"></div>
+  <div style="margin-top:12px;">
+    <button onclick="document.getElementById('tvSourceDialog').close()">Close</button>
+  </div>
+</dialog>
+
+<!-- TV remote (screens/06-staff-remote-tv.html): aimed by tapping TV chips in
+     #tvRemoteStage (multi-select, "receiving the remote" highlight) rather
+     than bound to one device -- every button in #tvRemotePanelBody fans out
+     to every currently-aimed TV via tvs.js's remoteTv*() functions. -->
+<div class="overlay remote-overlay" id="tvRemoteOverlay">
+  <div class="remote-panel">
+    <div class="remote-panel-header">
+      <span class="title">TV</span>
+      <button class="close" onclick="closeTvRemote()">&times;</button>
+    </div>
+    <div id="tvRemotePanelBody"></div>
+  </div>
+  <div class="remote-stage interactive" id="tvRemoteStage"></div>
+</div>
+
+<script src="staff_tvs.js"></script>
+</body>
+</html>

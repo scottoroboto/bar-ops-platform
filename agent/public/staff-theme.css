@@ -46,6 +46,10 @@
   --blue-bg-strong: #2F4966;
   --blue-border: #4E6A85;
   --blue-fg: #7FA8D9;
+  --alert-card-bg: #241713;
+  --static-card-bg: #16201A;
+  --open-border: #2A241C;
+  --open-text: #4E463A;
 }
 
 * { box-sizing: border-box; }
@@ -295,6 +299,132 @@ body.staff {
   border-radius: 10px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
 }
 .staff .remote-bar .count { color: var(--amber-bright); font-weight: 800; font-size: 17px; }
+
+/* Branded top bar (screens/01-staff-sources.html's header, lifted verbatim --
+   logo/connection dot, a persistent quick-remote shortcut, the SOURCES/TVS/
+   LAYOUTS nav pills with the current page lit, and a live clock). Shared
+   across all three staff pages; each page marks its own nav pill .active. */
+.staff-topbar {
+  width: 100%; border-bottom: 1px solid var(--border); background: var(--base);
+  position: sticky; top: 0; z-index: 30;
+}
+.staff-topbar-inner {
+  max-width: 1180px; margin: 0 auto; min-height: 64px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 24px; gap: 16px; flex-wrap: wrap;
+}
+.staff-topbar .tb-brand { display: flex; align-items: center; gap: 14px; }
+.staff-topbar .tb-logo { height: 40px; width: auto; display: block; }
+.staff-topbar .tb-divider { width: 1px; height: 26px; background: var(--border); }
+.staff-topbar .tb-conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--on-fg); flex-shrink: 0; }
+.staff-topbar .tb-conn-dot[title] { cursor: help; }
+
+.staff-topbar .tb-quick {
+  display: flex; align-items: center; gap: 8px; background: none;
+  border: 1.5px solid var(--border-mid); border-radius: 8px; padding: 10px 16px;
+  font-size: 13.5px; font-weight: 700; letter-spacing: 0.05em; color: var(--muted-strong);
+  min-height: 0; text-transform: uppercase;
+}
+.staff-topbar .tb-quick:hover { background: #2b241a; border-color: var(--border-strong); }
+.staff-topbar .tb-quick svg { flex-shrink: 0; }
+
+.staff-topbar .tb-nav { display: flex; align-items: center; gap: 8px; }
+.staff-topbar .tb-nav a {
+  display: inline-block; font-size: 14.5px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--muted-strong); padding: 11px 20px; border-radius: 8px; text-decoration: none;
+}
+.staff-topbar .tb-nav a:hover { text-decoration: none; background: #2b241a; }
+.staff-topbar .tb-nav a.active { color: var(--base); background: var(--amber); font-weight: 700; }
+.staff-topbar .tb-nav a.active:hover { background: var(--amber); }
+
+.staff-topbar .tb-clock { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.staff-topbar .tb-clock .day { font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em; color: var(--text); text-transform: uppercase; }
+.staff-topbar .tb-clock .time { font-size: 19px; font-weight: 700; color: var(--text); line-height: 1.15; }
+.staff-topbar .tb-clock .date { font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; color: var(--text); }
+
+@media (max-width: 900px) {
+  .staff-topbar .tb-quick span.label { display: none; } /* icon-only when the bar gets tight */
+  .staff-topbar .tb-nav a { padding: 10px 12px; }
+}
+
+/* Source card grid (screens/01-staff-sources.html). Real per-source state
+   in place of the mockup's illustrative game data -- see staff_sources.js
+   for exactly which fields feed which piece of text. No time-remaining
+   progress bar: real DirecTV/Roku data gives a title and a channel, not a
+   live game clock, so that element was dropped rather than faked. */
+.staff .source-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
+  gap: 16px; margin-top: 4px;
+}
+.staff .source-card {
+  background: var(--card-alt); border: 1px solid var(--border-strong); border-radius: 10px;
+  padding: 14px 16px; min-height: 148px; display: flex; flex-direction: column;
+  justify-content: space-between; text-align: left; font-family: inherit;
+  cursor: pointer;
+}
+.staff .source-card:hover { border-color: var(--amber-dim-strong); }
+.staff .source-card:disabled, .staff .source-card.no-tap { cursor: default; }
+.staff .source-card.no-tap:hover { border-color: var(--border-strong); }
+
+.staff .source-card .sc-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.staff .source-card .sc-slot {
+  font-size: 13px; font-weight: 700; letter-spacing: 0.06em; color: var(--amber);
+  border: 1px solid var(--amber-dim); border-radius: 5px; padding: 3px 8px;
+}
+.staff .source-card .sc-count { font-size: 13px; font-weight: 600; color: var(--muted-strong); white-space: nowrap; }
+.staff .source-card .sc-headline {
+  font-size: 24px; line-height: 1.15; font-weight: 700; color: var(--text);
+  letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.staff .source-card .sc-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.staff .source-card .sc-callsign { font-size: 15px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staff .source-card .sc-sub { font-size: 13px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+
+/* Asleep (directv standby) -- muted, tap to send a power-on key. */
+.staff .source-card.sc-asleep { background: var(--card); border-color: var(--border); }
+.staff .source-card.sc-asleep .sc-slot { color: var(--muted); border-color: var(--border-mid); }
+.staff .source-card.sc-asleep .sc-count { color: var(--open-text); }
+.staff .source-card.sc-asleep .sc-headline { color: var(--muted); }
+.staff .source-card.sc-asleep .sc-callsign { color: var(--open-text); font-weight: 600; }
+
+/* Not responding -- genuinely unreachable, real alert red, distinct from asleep. */
+.staff .source-card.sc-alert { background: var(--alert-card-bg); border-color: var(--off-bg); }
+.staff .source-card.sc-alert .sc-slot { color: var(--off-fg); border-color: var(--off-bg); }
+.staff .source-card.sc-alert .sc-count { color: var(--off-fg); font-weight: 700; }
+.staff .source-card.sc-alert .sc-headline { color: #F0BAB0; display: flex; align-items: center; gap: 10px; }
+.staff .source-card.sc-alert .sc-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off-fg); flex-shrink: 0; }
+.staff .source-card.sc-alert .sc-callsign { color: #A9736A; font-weight: 600; }
+.staff .source-card.sc-alert .sc-sub { color: #A9736A; }
+
+/* Roku idle (on the home screen, nothing launched). */
+.staff .source-card.sc-idle .sc-headline { color: var(--muted); }
+.staff .source-card.sc-idle .sc-count { color: var(--open-text); }
+
+/* Roku label color (both normal and idle) -- matches the blue used for Roku
+   elsewhere in this theme, distinct from DirecTV's plain white/amber. */
+.staff .source-card .sc-callsign.roku { color: var(--blue-fg); }
+.staff .source-card .sc-slot.roku { color: var(--blue-fg); border-color: var(--blue-bg-strong); }
+
+/* Static source (e.g. an always-on scoreboard feed) -- green, driverless, non-interactive. */
+.staff .source-card.sc-static { background: var(--static-card-bg); border-color: var(--on-bg); cursor: default; }
+.staff .source-card.sc-static .sc-slot { color: var(--on-fg); border-color: var(--on-bg); }
+.staff .source-card.sc-static .sc-callsign { color: var(--on-fg); }
+.staff .source-card.sc-static:hover { border-color: var(--on-bg); }
+
+/* Open/spare slot -- nothing configured, dashed outline, not tappable. */
+.staff .source-card.sc-open {
+  background: transparent; border: 1px dashed var(--open-border); cursor: default;
+}
+.staff .source-card.sc-open:hover { border-color: var(--open-border); }
+.staff .source-card.sc-open .sc-slot { color: var(--open-text); border: none; padding: 0; }
+.staff .source-card.sc-open .sc-headline { font-size: 19px; font-weight: 600; color: var(--border-strong); }
+.staff .source-card.sc-open .sc-sub { color: var(--border-strong); }
+
+/* Remote-picker dialog (header's quick-launch button, when more than one
+   DirecTV receiver exists and it needs to ask which one). */
+.staff .remote-pick-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.staff .remote-pick-grid button { text-align: left; justify-content: flex-start; }
 
 /* Undo bar (already used by layouts.js -- re-themed here, structure unchanged). */
 .staff #undoBar {
