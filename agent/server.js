@@ -199,7 +199,7 @@ app.get('/api/sources', (req, res) => {
   const liveBySlot = new Map(poller.getAllState().map((s) => [s.slot, s]));
   res.json((config.sources || []).map((s) => ({
     slot: s.slot, qam_channel: s.qam_channel, label: s.label, kind: s.kind,
-    ip: s.ip, port: s.port,
+    ip: s.ip, port: s.port, notes: s.notes,
     live: liveBySlot.get(Number(s.slot)) || null,
   })));
 });
