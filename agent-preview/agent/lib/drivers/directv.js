@@ -129,6 +129,17 @@ async function identify(ip, port = DEFAULT_PORT) {
   };
 }
 
+// SHEF's "no minor/sub-channel" sentinel -- a satellite channel with no
+// minor number reports minor: 65535 (0xFFFF) rather than omitting the field
+// or sending null. Confirmed against the device simulator, which emulates
+// this convention deliberately. Every minor value read off the wire needs
+// to pass through this before it reaches a caller, or "no minor channel"
+// renders as a literal ".65535" in the staff UI.
+const NO_MINOR = 65535;
+function normalizeMinor(minor) {
+  return minor != null && minor !== NO_MINOR ? minor : null;
+}
+
 async function getState(ip, port = DEFAULT_PORT) {
   // Sequential, not Promise.all -- both calls go through the same
   // per-receiver queue regardless, so parallelizing here would just make
@@ -138,7 +149,7 @@ async function getState(ip, port = DEFAULT_PORT) {
   return {
     active: mode && typeof mode.mode === 'number' ? mode.mode === 0 : null, // 0 = active per SHEF convention; null if unrecognized
     major: tuned.major != null ? tuned.major : null,
-    minor: tuned.minor != null ? tuned.minor : null,
+    minor: normalizeMinor(tuned.minor),
     raw: { mode, tuned },
   };
 }
