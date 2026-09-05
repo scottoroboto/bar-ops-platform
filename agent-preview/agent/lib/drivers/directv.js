@@ -145,9 +145,23 @@ async function getState(ip, port = DEFAULT_PORT) {
   // per-receiver queue regardless, so parallelizing here would just make
   // them wait on each other anyway; sequential reads more clearly.
   const mode = await getMode(ip, port);
+  const active = mode && typeof mode.mode === 'number' ? mode.mode === 0 : null; // 0 = active per SHEF convention; null if unrecognized
+
+  // A standby/asleep receiver 403s on every /tv endpoint (including
+  // getTuned) while /info/mode still answers normally -- that's the whole
+  // mechanism by which "asleep" is detectable at all. If we already know
+  // it's asleep, skip getTuned rather than let its expected failure throw
+  // out of this function: the caller (poller.js) has no way to tell "asleep,
+  // confirmed" apart from "genuinely unreachable" once everything's lumped
+  // into one rejected promise, and would misreport a sleeping receiver as
+  // "Not responding" instead of "asleep" (no tap-to-wake affordance).
+  if (active === false) {
+    return { active, major: null, minor: null, raw: { mode, tuned: null } };
+  }
+
   const tuned = await getTuned(ip, port);
   return {
-    active: mode && typeof mode.mode === 'number' ? mode.mode === 0 : null, // 0 = active per SHEF convention; null if unrecognized
+    active,
     major: tuned.major != null ? tuned.major : null,
     minor: normalizeMinor(tuned.minor),
     raw: { mode, tuned },
