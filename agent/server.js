@@ -421,6 +421,33 @@ app.post('/api/tvs/:id/power', async (req, res) => {
   }
 });
 
+// Registered BEFORE /api/tvs/:id/volume below -- same route-ordering
+// reason as bulk/power/bulk/slot above (Phase 2 precedent: a literal
+// "bulk" segment must come before a sibling ":id" route or Express will
+// match ":id" first). Used by the TV remote panel (06, docs/
+// venue-control-gui-reconciliation.md's design-pack round) to send one
+// volume/mute op to every TV the remote is currently aimed at in one call,
+// rather than the client firing N individual /:id/volume requests.
+app.post('/api/tvs/bulk/volume', async (req, res) => {
+  const { op, tv_ids } = req.body || {};
+  if (!['up', 'down', 'mute', 'unmute'].includes(op)) return res.status(400).json({ error: 'Missing/invalid "op" -- expected "up", "down", "mute", or "unmute".' });
+  if (!Array.isArray(tv_ids) || !tv_ids.length) return res.status(400).json({ error: 'Missing "tv_ids" array.' });
+  const config = cache.get('config') || {};
+  const ids = new Set(tv_ids.map(Number));
+  const targets = (config.tvs || []).filter((t) => t.enabled !== false && t.ip && ids.has(Number(t.id)));
+  const results = await mapWithConcurrency(targets, 4, async (tv) => {
+    try {
+      const result = await samsungWs.setVolume(tv, op);
+      maybeReportToken(tv, result);
+      activity.record('tv.volume', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, op }, result: result.ok !== false ? 'ok' : 'failed' });
+      return { id: tv.id, name: tv.name, ok: result.ok !== false, result };
+    } catch (err) {
+      return { id: tv.id, name: tv.name, ok: false, error: err.message };
+    }
+  });
+  res.json({ ok: true, results });
+});
+
 app.post('/api/tvs/:id/volume', async (req, res) => {
   try {
     const tv = findTv(req.params.id);
@@ -432,6 +459,43 @@ app.post('/api/tvs/:id/volume', async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// Generic "send this key (or key sequence) to these TVs" -- the TV remote
+// panel (06) is a real physical-remote analog: INPUT/CH UP/CH DOWN are
+// single keys, and typing a channel on the on-screen keypad + ENTER is the
+// exact same digit/KEY_MINUS/KEY_ENTER sequence samsung-ws.js's own
+// keysForQamChannel() builds for Phase 4's "Change source" admin
+// convenience feature -- reused here via sendKeySequence directly rather
+// than re-implemented. Deliberately NOT gated by channel_capable (§5's
+// gate exists so an *unattended* admin action doesn't claim success it
+// can't verify; a person standing there aiming a real remote at the screen
+// can always see for themselves, exactly like the physical remote never
+// checks a flag either). No per-IP serialization needed the way DirecTV/
+// SHEF needs it -- each TV's own WS connection already serializes against
+// itself inside sendKeySequence, and different TVs' sockets are fully
+// independent, so this fans out with the same concurrency-4 cap as every
+// other bulk TV route.
+app.post('/api/tvs/bulk/key', async (req, res) => {
+  const { tv_ids, keys, key } = req.body || {};
+  const keySeq = Array.isArray(keys) && keys.length ? keys : (key ? [key] : null);
+  if (!keySeq) return res.status(400).json({ error: 'Missing "key" or "keys".' });
+  if (!Array.isArray(tv_ids) || !tv_ids.length) return res.status(400).json({ error: 'Missing "tv_ids" array.' });
+  const config = cache.get('config') || {};
+  const ids = new Set(tv_ids.map(Number));
+  const targets = (config.tvs || []).filter((t) => t.enabled !== false && t.ip && ids.has(Number(t.id))
+    && (t.control_method === 'samsung_ws_token' || t.control_method === 'samsung_ws_plain'));
+  const results = await mapWithConcurrency(targets, 4, async (tv) => {
+    try {
+      const result = await samsungWs.sendKeySequence(tv, keySeq);
+      maybeReportToken(tv, result);
+      activity.record('tv.key', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, keys: keySeq }, result: 'ok' });
+      return { id: tv.id, name: tv.name, ok: true };
+    } catch (err) {
+      return { id: tv.id, name: tv.name, ok: false, error: err.message };
+    }
+  });
+  res.json({ ok: true, results });
 });
 
 // ---------------- TV source selection (Phase 4, docs/venue-control.md §7.2/§8.2) ----------------
