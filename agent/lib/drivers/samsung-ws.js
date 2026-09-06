@@ -23,6 +23,23 @@ const APP_NAME = 'TSB Venue Control';
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
+// Maps a raw low-level connection error (Node's net/ws internals -- things
+// like "socket hang up" or "ECONNREFUSED") to a message a staff member
+// scanning a bulk-move failure list can actually act on, matching the style
+// of the timeout/unauthorized errors below ("power it on", "re-pairing may
+// be needed") instead of surfacing a bare technical string. A TV that's
+// genuinely off drops off the network fast enough that the OS resets the
+// connection before the WS timeout above ever fires, so this is the error
+// path that case actually takes.
+const UNREACHABLE_ERROR_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT']);
+function friendlyConnError(err, tv) {
+  const raw = (err && err.message) || String(err);
+  if ((err && UNREACHABLE_ERROR_CODES.has(err.code)) || /socket hang up/i.test(raw)) {
+    return new Error(`Samsung WS ${tv.ip} isn't reachable (${err && err.code ? err.code : raw}) -- TV may be powered off or off the network; power it on and check it, then retry.`);
+  }
+  return new Error(`Samsung WS ${tv.ip} error: ${raw}`);
+}
+
 function fetchWithTimeout(url, opts = {}, timeoutMs = HTTP_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -165,7 +182,7 @@ function sendKeySequence(tv, keys, { interKeyDelayMs = 200 } = {}) {
       if (tv.control_method === 'samsung_ws_plain') sendNextKey();
     });
 
-    ws.on('error', (err) => finish(err));
+    ws.on('error', (err) => finish(friendlyConnError(err, tv)));
     ws.on('close', () => finish(new Error(`Samsung WS ${tv.ip} closed before completing.`)));
   });
 }
