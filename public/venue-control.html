@@ -29,14 +29,12 @@
     <nav class="vc-tabs" id="vcTabs">
       <button class="vc-tab" data-panel="sites" onclick="showVcPanel('sites')">Sites</button>
       <button class="vc-tab" data-panel="sources" onclick="showVcPanel('sources')">Sources</button>
-      <button class="vc-tab" data-panel="favorites" onclick="showVcPanel('favorites')">Favorites</button>
-      <button class="vc-tab" data-panel="zones" onclick="showVcPanel('zones')">Zones</button>
+      <button class="vc-tab" data-panel="zones-favorites" onclick="showVcPanel('zones-favorites')">Zones &amp; Favourites</button>
       <button class="vc-tab" data-panel="tvs" onclick="showVcPanel('tvs')">TVs</button>
       <button class="vc-tab" data-panel="health" onclick="showVcPanel('health')">Device Health</button>
       <button class="vc-tab" data-panel="schedules" onclick="showVcPanel('schedules')">Schedules</button>
       <button class="vc-tab" data-panel="layouts" onclick="showVcPanel('layouts')">Layouts</button>
-      <button class="vc-tab" data-panel="backups" onclick="showVcPanel('backups')">Backups</button>
-      <button class="vc-tab" data-panel="activity" onclick="showVcPanel('activity')">Activity</button>
+      <button class="vc-tab" data-panel="backups-activity" onclick="showVcPanel('backups-activity')">Backups &amp; Activity</button>
     </nav>
 
   <section class="vc-panel" data-panel="sites">
@@ -81,39 +79,39 @@
   </div>
   </section>
 
-  <section class="vc-panel" data-panel="favorites">
-  <div class="card" id="favoritesCard">
-    <h2>Favorites</h2>
-    <p class="muted">Quick-tune buttons that show up on the agent's Sources tab. "Shared" favorites appear at every location; otherwise a favorite belongs to the location selected above.</p>
-    <div id="favoritesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+  <section class="vc-panel" data-panel="zones-favorites">
+  <div class="vc-split">
+    <div class="card" id="zonesCard">
+      <h2>Zones</h2>
+      <p class="muted">Physical TV groupings used for zone-wide power on the agent's TVs tab and for zone-scoped schedules. Order here is the order staff see on the TVs tab. Deleting a zone just un-assigns its TVs — nothing about the TVs themselves is lost.</p>
+      <div id="zonesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
 
-    <label for="newFavName">Add a favorite — name</label>
-    <input id="newFavName" placeholder="e.g. ESPN">
-    <label for="newFavMajor">Channel</label>
-    <input id="newFavMajor" type="number" placeholder="major, e.g. 206">
-    <input id="newFavMinor" type="number" placeholder="minor (optional, satellite only)" style="margin-top:8px;">
-    <label for="newFavCategory">Category</label>
-    <input id="newFavCategory" placeholder="e.g. Sports" value="Sports">
-    <label for="newFavColor">Color (optional)</label>
-    <input id="newFavColor" placeholder="e.g. #2b6cb0">
-    <label class="toggle-row" style="gap:8px;"><span class="label">Shared across all locations</span>
-      <span class="switch"><input type="checkbox" id="newFavShared"><span class="slider"></span></span>
-    </label>
-    <button class="secondary" onclick="addFavorite()">Add favorite</button>
-    <div id="favMsg"></div>
-  </div>
-  </section>
+      <label for="newZoneName">Add a zone — name</label>
+      <input id="newZoneName" placeholder="e.g. Patio">
+      <button class="secondary" onclick="addZone()">Add zone</button>
+      <div id="zoneMsg"></div>
+    </div>
 
-  <section class="vc-panel" data-panel="zones">
-  <div class="card" id="zonesCard">
-    <h2>Zones</h2>
-    <p class="muted">Physical TV groupings (e.g. "Patio", "Main Bar") used for zone-wide power on the agent's TVs tab and for zone-scoped schedules. Deleting a zone just un-assigns its TVs — nothing about the TVs themselves is lost.</p>
-    <div id="zonesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+    <div class="card" id="favoritesCard">
+      <h2>Favorites</h2>
+      <p class="muted">Quick-tune buttons that show up on the agent's Sources tab. "Shared" favorites appear at every location; otherwise a favorite belongs to the location selected above.</p>
+      <div id="favoritesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
 
-    <label for="newZoneName">Add a zone — name</label>
-    <input id="newZoneName" placeholder="e.g. Patio">
-    <button class="secondary" onclick="addZone()">Add zone</button>
-    <div id="zoneMsg"></div>
+      <label for="newFavName">Add a favorite — name</label>
+      <input id="newFavName" placeholder="e.g. ESPN">
+      <label for="newFavMajor">Channel</label>
+      <input id="newFavMajor" type="number" placeholder="major, e.g. 206">
+      <input id="newFavMinor" type="number" placeholder="minor (optional, satellite only)" style="margin-top:8px;">
+      <label for="newFavCategory">Category</label>
+      <input id="newFavCategory" placeholder="e.g. Sports" value="Sports">
+      <label for="newFavColor">Color (optional)</label>
+      <input id="newFavColor" placeholder="e.g. #2b6cb0">
+      <label class="toggle-row" style="gap:8px;"><span class="label">Shared across all locations</span>
+        <span class="switch"><input type="checkbox" id="newFavShared"><span class="slider"></span></span>
+      </label>
+      <button class="secondary" onclick="addFavorite()">Add favorite</button>
+      <div id="favMsg"></div>
+    </div>
   </div>
   </section>
 
@@ -121,7 +119,33 @@
   <div class="card" id="tvsCard">
     <h2>TVs</h2>
     <p class="muted">The TV inventory that powers the agent's TVs tab. A TV needs a control method (found via Discovery, or set by hand) before it can actually be turned on/off from here.</p>
+
+    <div class="vc-tv-toolbar">
+      <div class="vc-chip-row" id="tvZoneChips"></div>
+      <input id="tvSearch" class="vc-search" placeholder="Search name, tag or IP" oninput="onTvFilterChange()">
+    </div>
+
     <div id="tvsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+
+    <div class="vc-bulk-bar" id="tvBulkBar" hidden>
+      <span class="vc-bulk-count" id="tvBulkCount"></span>
+      <div class="vc-bulk-actions">
+        <select id="tvBulkZoneSelect"><option value="">Move to zone…</option></select>
+        <button class="small ghost" onclick="bulkMoveTvsToZone()">Move</button>
+        <select id="tvBulkControlSelect">
+          <option value="">Set control method…</option>
+          <option value="unknown">unknown</option>
+          <option value="samsung_ws_token">samsung_ws_token</option>
+          <option value="samsung_ws_plain">samsung_ws_plain</option>
+          <option value="samsung_legacy">samsung_legacy</option>
+          <option value="smartthings">smartthings</option>
+          <option value="wol_only">wol_only</option>
+          <option value="none">none</option>
+        </select>
+        <button class="small ghost" onclick="bulkSetTvControlMethod()">Set</button>
+        <button class="small ghost" onclick="bulkArchiveTvs()">Archive selected</button>
+      </div>
+    </div>
 
     <label for="newTvName">Add a TV — name</label>
     <input id="newTvName" placeholder="e.g. Bar TV 4">
@@ -153,7 +177,9 @@
   <div class="card" id="healthCard">
     <h2>Device Health</h2>
     <p class="muted">TVs and receivers report in through the on-site agent's own pollers — problems first, each with what it means for the room right now. A device with no control method set up yet (see the TVs tab) never appears here; there's nothing to monitor until it does.</p>
-    <div id="healthList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+    <div id="healthStats" class="vc-health-stats"></div>
+    <div id="healthList" style="margin-top:16px;"><p class="muted">Loading…</p></div>
+    <div id="healthBreakdown" class="vc-health-breakdown"></div>
   </div>
   </section>
 
@@ -165,8 +191,30 @@
 
     <label for="newSchedName">Add a schedule — name</label>
     <input id="newSchedName" placeholder="e.g. Morning TVs on">
-    <label for="newSchedCron">Cron (5 fields: minute hour day-of-month month day-of-week)</label>
-    <input id="newSchedCron" placeholder="e.g. 45 10 * * *">
+
+    <label>Days</label>
+    <div class="vc-day-chips" id="newSchedDayChips">
+      <button type="button" class="vc-day-chip" data-day="1" onclick="toggleSchedDay(this)">M</button>
+      <button type="button" class="vc-day-chip" data-day="2" onclick="toggleSchedDay(this)">T</button>
+      <button type="button" class="vc-day-chip" data-day="3" onclick="toggleSchedDay(this)">W</button>
+      <button type="button" class="vc-day-chip" data-day="4" onclick="toggleSchedDay(this)">T</button>
+      <button type="button" class="vc-day-chip" data-day="5" onclick="toggleSchedDay(this)">F</button>
+      <button type="button" class="vc-day-chip" data-day="6" onclick="toggleSchedDay(this)">S</button>
+      <button type="button" class="vc-day-chip" data-day="0" onclick="toggleSchedDay(this)">S</button>
+    </div>
+    <p class="muted" style="margin:-4px 0 10px;">No days selected means every day.</p>
+
+    <label for="newSchedTime">Time</label>
+    <input id="newSchedTime" type="time" value="10:45" oninput="updateSchedCronFromChips()">
+
+    <p class="muted vc-cron-preview" id="newSchedCronPreview" style="margin:6px 0 0;">Will run as: <code id="newSchedCronPreviewCode">45 10 * * *</code></p>
+
+    <details class="vc-advanced">
+      <summary>Advanced: edit the cron expression directly</summary>
+      <label for="newSchedCron">Cron (5 fields: minute hour day-of-month month day-of-week)</label>
+      <input id="newSchedCron" placeholder="e.g. 45 10 * * *" value="45 10 * * *" oninput="onSchedRawCronEdit()">
+    </details>
+
     <label for="newSchedAction">Action</label>
     <select id="newSchedAction" onchange="onSchedActionChange()">
       <option value="tvs_power">tvs_power — turn TVs on/off</option>
@@ -217,21 +265,21 @@
   </div>
   </section>
 
-  <section class="vc-panel" data-panel="backups">
-  <div class="card" id="backupsCard">
-    <h2>Backups &amp; restore</h2>
-    <p class="muted">Everything here — zones, sources, TVs, favorites, layouts, schedules — lives in the cloud, so a dead agent box loses nothing. A safety snapshot is taken automatically right before any restore, so restoring is itself reversible.</p>
-    <button class="secondary" onclick="takeBackupAdmin()">Take backup now</button>
-    <div id="backupMsg"></div>
-    <div id="backupsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
-  </div>
-  </section>
+  <section class="vc-panel" data-panel="backups-activity">
+  <div class="vc-split">
+    <div class="card" id="backupsCard">
+      <h2>Backups &amp; restore</h2>
+      <p class="muted">Everything here — zones, sources, TVs, favorites, layouts, schedules — lives in the cloud, so a dead agent box loses nothing. A safety snapshot is taken automatically right before any restore, so restoring is itself reversible.</p>
+      <button class="secondary" onclick="takeBackupAdmin()">Take backup now</button>
+      <div id="backupMsg"></div>
+      <div id="backupsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+    </div>
 
-  <section class="vc-panel" data-panel="activity">
-  <div class="card" id="activityCard">
-    <h2>Activity log</h2>
-    <p class="muted">Who did what, from where — every archive/delete/restore made here, plus the real day-to-day actions (TV power, source selection, layout apply) taken from the agent's own Sources/TVs/Layouts tabs.</p>
-    <div id="activityList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+    <div class="card" id="activityCard">
+      <h2>Activity log</h2>
+      <p class="muted">Who did what, from where — every archive/delete/restore made here, plus the real day-to-day actions (TV power, source selection, layout apply) taken from the agent's own Sources/TVs/Layouts tabs.</p>
+      <div id="activityList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+    </div>
   </div>
   </section>
   </div>

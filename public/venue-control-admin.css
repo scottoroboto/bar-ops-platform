@@ -105,4 +105,132 @@
      forcing the whole page wider than the viewport. */
   #activityList { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   #activityList table { width: auto; min-width: 560px; }
+
+  .vc-split { grid-template-columns: 1fr !important; }
 }
+
+/* ---- Two-panel tabs: Zones & Favourites, Backups & Activity (A7/A10) --
+   side-by-side cards on one tab instead of two separate tabs, matching the
+   design pack; collapses to one column above under the phone breakpoint. ---- */
+.vc-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+/* ---- TVs toolbar: zone/status filter chips + search (A6) ---- */
+.vc-tv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 4px;
+}
+.vc-chip-row { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; }
+.vc-filter-chip {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
+.vc-filter-chip:hover { color: var(--text); border-color: var(--muted); }
+.vc-filter-chip.active { background: rgba(79,141,253,0.14); color: var(--accent); border-color: var(--accent); }
+.vc-filter-chip.warn.active { background: rgba(227,165,61,0.16); color: #e3a53d; border-color: #e3a53d; }
+.vc-search {
+  width: 220px;
+  min-width: 160px;
+  padding: 7px 12px;
+  font-size: 13px;
+  margin: 0;
+}
+
+/* ---- Bulk action bar (TVs multi-select, A6) ---- */
+.vc-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  background: rgba(79,141,253,0.10);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 10px 0 16px;
+}
+.vc-bulk-bar[hidden] { display: none; }
+.vc-bulk-count { font-weight: 600; font-size: 13px; color: var(--accent); white-space: nowrap; }
+.vc-bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.vc-bulk-actions select { width: auto; margin: 0; padding: 6px 10px; font-size: 12.5px; }
+.vc-bulk-actions button { margin: 0; }
+.vc-tv-row-check { margin-right: 10px; width: auto; }
+
+/* ---- Live status pill on the TVs list, joined from Device Health data ---- */
+.badge.state-on { background: rgba(63,191,127,0.18); color: #6be3a4; }
+.badge.state-off { background: rgba(154,163,178,0.15); color: var(--muted); }
+.badge.state-warning { background: rgba(227,165,61,0.16); color: #e3a53d; }
+.badge.state-danger { background: rgba(224,90,90,0.16); color: #ef8686; }
+
+/* ---- Schedules: day chips + time, cron shown as the read-only translation
+   underneath (A8) ---- */
+.vc-day-chips { display: flex; gap: 6px; }
+.vc-day-chip {
+  width: 38px; height: 38px; margin: 0; padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--card-border);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+.vc-day-chip:hover { border-color: var(--muted); color: var(--text); }
+.vc-day-chip.active { background: var(--accent); border-color: var(--accent); color: #08101f; }
+.vc-cron-preview code {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12.5px;
+}
+details.vc-advanced { margin: 10px 0 14px; }
+details.vc-advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+details.vc-advanced summary:hover { color: var(--text); }
+
+/* ---- Device Health: summary stat strip + per-kind bars (A9) ---- */
+.vc-health-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 1px;
+  background: var(--card-border);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 14px 0 4px;
+}
+.vc-health-stat { background: var(--card); padding: 12px 14px; }
+.vc-health-stat .num { font-size: 22px; font-weight: 700; line-height: 1.1; }
+.vc-health-stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-top: 4px; }
+.vc-health-stat.good .num { color: #6be3a4; }
+.vc-health-stat.warn .num { color: #e3a53d; }
+.vc-health-stat.danger .num { color: #ef8686; }
+
+.vc-health-breakdown { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
+.vc-hb-row { display: grid; grid-template-columns: 140px 1fr auto; align-items: center; gap: 12px; }
+.vc-hb-row .hb-name { font-size: 13px; font-weight: 600; }
+.vc-hb-track { height: 8px; border-radius: 999px; background: rgba(255,255,255,0.06); overflow: hidden; }
+.vc-hb-fill { height: 100%; background: #6be3a4; border-radius: 999px; }
+.vc-hb-fill.has-down { background: #e3a53d; }
+.vc-hb-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.vc-hb-count .down { color: #ef8686; font-weight: 600; }

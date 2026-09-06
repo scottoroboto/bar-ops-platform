@@ -210,15 +210,27 @@ function onSourcesLocationChange() {
   editingFavoriteId = null;
   editingZoneId = null;
   editingTvId = null;
-  loadSourcesAdmin(locationId);
+  TV_SELECTED.clear();
+  TV_ZONE_FILTER = 'all';
+
+  // Several tabs now cross-reference each other's data (Zones shows a TV
+  // count, TVs joins in Device Health's live status, Activity resolves
+  // ids to names) -- each loader still renders itself immediately so the
+  // tab isn't empty while other calls are in flight, but these fire off a
+  // second, fully-informed re-render once everything it depends on has
+  // actually landed, rather than trusting whatever order the requests
+  // happen to resolve in.
+  const sourcesP = loadSourcesAdmin(locationId);
   loadFavoritesAdmin(locationId);
-  loadZonesAdmin(locationId);
-  loadTvsAdmin(locationId);
-  loadHealthAdmin(locationId);
-  loadLayoutsAdmin(locationId);
+  const zonesP = loadZonesAdmin(locationId);
+  const tvsP = loadTvsAdmin(locationId);
+  const healthP = loadHealthAdmin(locationId);
+  const layoutsP = loadLayoutsAdmin(locationId);
   loadSchedulesAdmin(locationId);
   loadBackupsAdmin(locationId);
-  loadActivityAdmin(locationId);
+
+  Promise.all([zonesP, tvsP, healthP]).then(() => { renderZonesList(); renderTvZoneChips(); renderTvsList(); renderHealthList(); });
+  Promise.all([sourcesP, zonesP, tvsP, layoutsP]).then(() => loadActivityAdmin(locationId));
 }
 
 function showSourceMsg(text, kind) {
@@ -520,7 +532,8 @@ function populateZoneSelects() {
 function renderZonesList() {
   const el = document.getElementById('zonesList');
   if (!ZONES_ADMIN.length) { el.innerHTML = '<p class="muted">No zones yet.</p>'; return; }
-  el.innerHTML = ZONES_ADMIN.map((z) => {
+  el.innerHTML = ZONES_ADMIN.map((z, i) => {
+    const tvCount = TVS_ADMIN.filter((t) => t.enabled && String(t.zone_id) === String(z.id)).length;
     if (z.id === editingZoneId) {
       return `
         <div class="list-row" style="flex-direction:column; align-items:stretch;">
@@ -533,13 +546,38 @@ function renderZonesList() {
     }
     return `
       <div class="list-row">
-        <div class="name">${escapeHtml(z.name)}</div>
+        <div class="name">${escapeHtml(z.name)}
+          <div class="sub">${tvCount} TV${tvCount === 1 ? '' : 's'}</div>
+        </div>
         <div class="stack-actions" style="margin-top:0;">
+          <button class="small ghost" onclick="moveZone('${z.id}','up')" ${i === 0 ? 'disabled' : ''}>&#9650;</button>
+          <button class="small ghost" onclick="moveZone('${z.id}','down')" ${i === ZONES_ADMIN.length - 1 ? 'disabled' : ''}>&#9660;</button>
           <button class="small ghost" onclick="startEditZone('${z.id}')">Edit</button>
           <button class="small ghost" onclick="deleteZone('${z.id}')">Delete</button>
         </div>
       </div>`;
   }).join('');
+}
+
+// Reorders by swapping the two zones' sort_order the same way moveFavorite()
+// and monitoring.js's own moveSystem() already do it elsewhere in this
+// codebase -- vc_zones already has a sort_order column and the update route
+// already accepts sortOrder, this just wires up a client for it (A7: "order
+// here is the order staff see on the TVs tab" -- Favorites got a reorder
+// control when this was first built, Zones never did).
+async function moveZone(id, direction) {
+  const idx = ZONES_ADMIN.findIndex((z) => String(z.id) === String(id));
+  if (idx === -1) return;
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= ZONES_ADMIN.length) return;
+  const a = ZONES_ADMIN[idx], b = ZONES_ADMIN[swapIdx];
+  try {
+    await withStepUp(() => api(`/api/venue-control/zones/${a.id}/update`, { method: 'POST', body: { sortOrder: swapIdx } }));
+    await withStepUp(() => api(`/api/venue-control/zones/${b.id}/update`, { method: 'POST', body: { sortOrder: idx } }));
+    await loadZonesAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showZoneMsg(e.message, 'error');
+  }
 }
 
 function startEditZone(id) { editingZoneId = id; renderZonesList(); }
@@ -606,10 +644,137 @@ function zoneName(zoneId) {
 
 const CONTROL_METHODS = ['unknown', 'samsung_ws_token', 'samsung_ws_plain', 'samsung_legacy', 'smartthings', 'wol_only', 'none'];
 
+// ---- TVs: zone/status filter chips + search + multi-select bulk bar (A6).
+// Device Health's own data is reused here rather than adding a new
+// endpoint -- monitored_systems.external_ref is that row's vc_tvs.id (see
+// server/monitoring.js), so a TV's live status is just a lookup by id,
+// joined in at render time.
+let TV_ZONE_FILTER = 'all'; // 'all' | a zone id | 'needs-attention' | 'never-paired'
+let TV_SEARCH = '';
+let TV_SELECTED = new Set();
+
+function tvHealthFor(tvId) {
+  return (HEALTH_SYSTEMS || []).find((h) => h.kind === 'vc_tv' && String(h.external_ref) === String(tvId));
+}
+
+// "Needs attention" = reporting anything other than online, or has no
+// control method set up at all (can't be turned on/off from here yet
+// regardless of what Device Health says). "Never paired" is the samsung_ws_token
+// devices that haven't completed the TV's own "Allow this device?" handshake --
+// the same condition Device Health's "warning" status represents for a TV.
+function tvNeedsAttention(t) {
+  const h = tvHealthFor(t.id);
+  return (h && h.last_status && h.last_status !== 'online') || t.control_method === 'unknown';
+}
+function tvNeverPaired(t) {
+  const h = tvHealthFor(t.id);
+  return t.control_method === 'samsung_ws_token' && h && h.last_status === 'warning';
+}
+
+function renderTvZoneChips() {
+  const el = document.getElementById('tvZoneChips');
+  if (!el) return;
+  const chips = [{ id: 'all', label: 'All zones' }]
+    .concat(ZONES_ADMIN.map((z) => ({ id: String(z.id), label: z.name })))
+    .concat([{ id: 'needs-attention', label: 'Needs attention', warn: true }, { id: 'never-paired', label: 'Never paired', warn: true }]);
+  el.innerHTML = chips.map((c) => `<button type="button" class="vc-filter-chip${c.warn ? ' warn' : ''}${TV_ZONE_FILTER === c.id ? ' active' : ''}" onclick="setTvZoneFilter('${c.id}')">${escapeHtml(c.label)}</button>`).join('');
+}
+
+function setTvZoneFilter(id) { TV_ZONE_FILTER = id; renderTvZoneChips(); renderTvsList(); }
+function onTvFilterChange() { TV_SEARCH = document.getElementById('tvSearch').value.trim().toLowerCase(); renderTvsList(); }
+
+function filteredTvs() {
+  return TVS_ADMIN.filter((t) => {
+    if (TV_ZONE_FILTER === 'needs-attention' && !tvNeedsAttention(t)) return false;
+    if (TV_ZONE_FILTER === 'never-paired' && !tvNeverPaired(t)) return false;
+    if (TV_ZONE_FILTER !== 'all' && TV_ZONE_FILTER !== 'needs-attention' && TV_ZONE_FILTER !== 'never-paired' && String(t.zone_id) !== TV_ZONE_FILTER) return false;
+    if (TV_SEARCH) {
+      const hay = `${t.name} ${t.tag || ''} ${t.ip || ''}`.toLowerCase();
+      if (!hay.includes(TV_SEARCH)) return false;
+    }
+    return true;
+  });
+}
+
+function tvStateBadge(t) {
+  const h = tvHealthFor(t.id);
+  if (!t.enabled) return '';
+  if (!h || !h.last_status) return '<span class="badge state-off">no data yet</span>';
+  if (h.last_status === 'online') return '<span class="badge state-on">online</span>';
+  if (h.last_status === 'warning') return '<span class="badge state-warning">needs pairing</span>';
+  return '<span class="badge state-danger">not responding</span>';
+}
+
+function toggleTvSelect(id, checked) {
+  if (checked) TV_SELECTED.add(String(id)); else TV_SELECTED.delete(String(id));
+  renderTvBulkBar();
+}
+
+function renderTvBulkBar() {
+  const bar = document.getElementById('tvBulkBar');
+  if (!bar) return;
+  const n = TV_SELECTED.size;
+  bar.hidden = n === 0;
+  if (n === 0) return;
+  document.getElementById('tvBulkCount').textContent = `${n} TV${n === 1 ? '' : 's'} selected`;
+  const zoneSelect = document.getElementById('tvBulkZoneSelect');
+  zoneSelect.innerHTML = '<option value="">Move to zone…</option><option value="__unassigned__">Unassigned</option>'
+    + ZONES_ADMIN.map((z) => `<option value="${z.id}">${escapeHtml(z.name)}</option>`).join('');
+}
+
+async function bulkMoveTvsToZone() {
+  const val = document.getElementById('tvBulkZoneSelect').value;
+  if (!val) { showTvMsg('Pick a zone first.', 'error'); return; }
+  const zoneId = val === '__unassigned__' ? null : val;
+  const ids = Array.from(TV_SELECTED);
+  try {
+    await withStepUp(() => Promise.all(ids.map((id) => api(`/api/venue-control/tvs/${id}/update`, { method: 'POST', body: { zoneId } }))));
+    showTvMsg(`Moved ${ids.length} TV${ids.length === 1 ? '' : 's'}.`, 'success');
+    TV_SELECTED.clear();
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+    renderTvBulkBar();
+  } catch (e) {
+    showTvMsg(e.message, 'error');
+  }
+}
+
+async function bulkSetTvControlMethod() {
+  const method = document.getElementById('tvBulkControlSelect').value;
+  if (!method) { showTvMsg('Pick a control method first.', 'error'); return; }
+  const ids = Array.from(TV_SELECTED);
+  try {
+    await withStepUp(() => Promise.all(ids.map((id) => api(`/api/venue-control/tvs/${id}/update`, { method: 'POST', body: { controlMethod: method } }))));
+    showTvMsg(`Updated ${ids.length} TV${ids.length === 1 ? '' : 's'}.`, 'success');
+    TV_SELECTED.clear();
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+    renderTvBulkBar();
+  } catch (e) {
+    showTvMsg(e.message, 'error');
+  }
+}
+
+async function bulkArchiveTvs() {
+  const ids = Array.from(TV_SELECTED);
+  if (!ids.length) return;
+  if (!confirm(`Archive ${ids.length} TV${ids.length === 1 ? '' : 's'}? This can be undone from the archived list.`)) return;
+  try {
+    await withStepUp(() => Promise.all(ids.map((id) => api(`/api/venue-control/tvs/${id}/archive`, { method: 'POST' }))));
+    showTvMsg(`Archived ${ids.length} TV${ids.length === 1 ? '' : 's'}.`, 'success');
+    TV_SELECTED.clear();
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+    renderTvBulkBar();
+  } catch (e) {
+    showTvMsg(e.message, 'error');
+  }
+}
+
 function renderTvsList() {
   const el = document.getElementById('tvsList');
+  renderTvBulkBar();
   if (!TVS_ADMIN.length) { el.innerHTML = '<p class="muted">No TVs yet.</p>'; return; }
-  el.innerHTML = TVS_ADMIN.map((t) => {
+  const rows = filteredTvs();
+  if (!rows.length) { el.innerHTML = '<p class="muted">No TVs match this filter.</p>'; return; }
+  el.innerHTML = rows.map((t) => {
     if (t.id === editingTvId) {
       return `
         <div class="list-row" style="flex-direction:column; align-items:stretch;">
@@ -643,7 +808,8 @@ function renderTvsList() {
     }
     return `
       <div class="list-row">
-        <div class="name">${escapeHtml(t.name)} <span class="badge ${t.enabled ? 'on' : 'off'}">${t.enabled ? 'active' : 'archived'}</span>
+        <input type="checkbox" class="vc-tv-row-check" ${TV_SELECTED.has(String(t.id)) ? 'checked' : ''} onchange="toggleTvSelect('${t.id}', this.checked)">
+        <div class="name">${escapeHtml(t.name)} <span class="badge ${t.enabled ? 'on' : 'off'}">${t.enabled ? 'active' : 'archived'}</span> ${tvStateBadge(t)}
           <div class="sub">${escapeHtml(zoneName(t.zone_id))} · ${escapeHtml(t.control_method)}${t.ip ? ' · ' + escapeHtml(t.ip) : ''}${t.wol_enabled ? ' · WoL' : ''}${t.channel_capable ? ' · channel-capable' : ''}${t.default_source_slot != null ? ` · default slot ${t.default_source_slot}` : ''}</div>
         </div>
         <div class="stack-actions" style="margin-top:0;">
@@ -735,6 +901,51 @@ async function addTv() {
 
 function showSchedMsg(text, kind) {
   document.getElementById('schedMsg').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+}
+
+// ---- Plain-language day/time schedule builder (A8) -- the day chips + time
+// field are the primary UI; #newSchedCron (in the "Advanced" details) stays
+// the actual field addSchedule() reads and the backend validates, so this
+// only ever WRITES a valid 5-field cron string into it, never changes what
+// gets sent.
+function toggleSchedDay(btn) {
+  btn.classList.toggle('active');
+  updateSchedCronFromChips();
+}
+
+function updateSchedCronFromChips() {
+  const days = Array.from(document.querySelectorAll('#newSchedDayChips .vc-day-chip.active')).map((b) => b.dataset.day);
+  const dayField = days.length ? days.slice().sort().join(',') : '*';
+  const time = document.getElementById('newSchedTime').value || '10:45';
+  const [hh, mm] = time.split(':').map((n) => parseInt(n, 10) || 0);
+  const cron = `${mm} ${hh} * * ${dayField}`;
+  document.getElementById('newSchedCron').value = cron;
+  document.getElementById('newSchedCronPreviewCode').textContent = cron;
+}
+
+// Best-effort reflect a hand-typed cron back into chips/time so flipping
+// back to the simple view isn't jarring -- deliberately lossy for anything
+// that isn't a plain "minute hour * * days" weekly schedule (a day-of-month,
+// a step value, etc.); those are left exactly as typed, advanced-only.
+function onSchedRawCronEdit() {
+  const raw = document.getElementById('newSchedCron').value.trim();
+  document.getElementById('newSchedCronPreviewCode').textContent = raw || '—';
+  const parts = raw.split(/\s+/);
+  if (parts.length !== 5) return;
+  const [mm, hh, dom, mon, dow] = parts;
+  if (dom !== '*' || mon !== '*') return;
+  if (!/^\d{1,2}$/.test(mm) || !/^\d{1,2}$/.test(hh)) return;
+  document.getElementById('newSchedTime').value = `${hh.padStart(2, '0')}:${mm.padStart(2, '0')}`;
+  const activeDays = dow === '*' ? [] : dow.split(',');
+  document.querySelectorAll('#newSchedDayChips .vc-day-chip').forEach((b) => {
+    b.classList.toggle('active', activeDays.includes(b.dataset.day));
+  });
+}
+
+function resetSchedForm() {
+  document.getElementById('newSchedTime').value = '10:45';
+  document.querySelectorAll('#newSchedDayChips .vc-day-chip').forEach((b) => b.classList.remove('active'));
+  updateSchedCronFromChips();
 }
 
 function onSchedActionChange() {
@@ -838,7 +1049,7 @@ async function addSchedule() {
       body: { name, cronExpr, actionType, payload },
     }));
     document.getElementById('newSchedName').value = '';
-    document.getElementById('newSchedCron').value = '';
+    resetSchedForm();
     showSchedMsg('Schedule added.', 'success');
     await loadSchedulesAdmin(locationId);
   } catch (e) {
@@ -1065,10 +1276,22 @@ async function loadHealthAdmin(locationId) {
   }
 }
 
+// external_ref on a monitored_systems row is that row's vc_tvs.id / vc_sources.id
+// (server/monitoring.js) -- joining back to SOURCES_ADMIN/TVS_ADMIN here gets a
+// specific, per-device consequence (zone name, how many TVs default to a dead
+// source) instead of one fixed sentence per kind, matching A9's "no answer for
+// 11 minutes, 4 Back Room TVs are on it" without inventing data we don't have
+// (there's no tracked "since" timestamp for when a device went bad, only when
+// it was last polled, so this doesn't claim a duration A9 shows but we can't).
 function healthConsequence(system) {
-  return system.kind === 'vc_tv'
-    ? 'Won’t respond to power or channel commands until it’s back online — check its power and network connection at the TV.'
-    : 'Its channel can’t be changed remotely until it’s back online — check power and network at the headend.';
+  if (system.kind === 'vc_tv') {
+    const tv = TVS_ADMIN.find((t) => String(t.id) === String(system.external_ref));
+    const zone = tv ? zoneName(tv.zone_id) : null;
+    return `Won’t respond to power or channel commands until it’s back online — check its power and network connection at the TV${zone && zone !== 'Unassigned' ? ` (${escapeHtml(zone)})` : ''}.`;
+  }
+  const source = SOURCES_ADMIN.find((s) => String(s.id) === String(system.external_ref));
+  const downstream = source ? TVS_ADMIN.filter((t) => t.enabled && t.default_source_slot === source.slot).length : 0;
+  return `Its channel can’t be changed remotely until it’s back online — check power and network at the headend.${downstream ? ` ${downstream} TV${downstream === 1 ? '' : 's'} default${downstream === 1 ? 's' : ''} to this source.` : ''}`;
 }
 
 function healthBadgeClass(status) {
@@ -1090,8 +1313,64 @@ function renderHealthRow(s, isProblem) {
     </div>`;
 }
 
+// Summary strip (A9): counts computed straight off HEALTH_SYSTEMS, no new
+// endpoint. "Auto-fixed" from A9 isn't included -- there's no IP-moved/
+// auto-repair event tracked anywhere in this data model, and fabricating a
+// number for it would be worse than leaving it out.
+function renderHealthStats() {
+  const el = document.getElementById('healthStats');
+  if (!el) return;
+  if (!HEALTH_SYSTEMS.length) { el.innerHTML = ''; return; }
+  const total = HEALTH_SYSTEMS.length;
+  const healthy = HEALTH_SYSTEMS.filter((s) => !s.last_status || s.last_status === 'online').length;
+  const warning = HEALTH_SYSTEMS.filter((s) => s.last_status === 'warning').length;
+  const danger = HEALTH_SYSTEMS.filter((s) => s.last_status && s.last_status !== 'online' && s.last_status !== 'warning').length;
+  const lastSweep = HEALTH_SYSTEMS.reduce((max, s) => {
+    const t = s.last_checked_at ? new Date(s.last_checked_at).getTime() : 0;
+    return t > max ? t : max;
+  }, 0);
+  const stats = [
+    { num: total, lbl: 'devices managed', cls: '' },
+    { num: healthy, lbl: 'healthy', cls: 'good' },
+    { num: danger, lbl: 'not responding', cls: danger ? 'danger' : '' },
+    { num: warning, lbl: 'need attention', cls: warning ? 'warn' : '' },
+    { num: lastSweep ? new Date(lastSweep).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—', lbl: 'last contact sweep', cls: '' },
+  ];
+  el.innerHTML = stats.map((s) => `<div class="vc-health-stat ${s.cls}"><div class="num">${escapeHtml(String(s.num))}</div><div class="lbl">${escapeHtml(s.lbl)}</div></div>`).join('');
+}
+
+// Per-category bars (A9's "Everything else"): grouped by the real kind
+// distinctions the data already carries (SOURCES_ADMIN.kind for DirecTV vs.
+// Roku, all vc_tv rows lumped as "TVs" since this app doesn't track TV brand
+// as its own field) -- a group with no devices at this location just doesn't
+// render, rather than showing a fabricated 0-of-0 bar.
+function renderHealthBreakdown() {
+  const el = document.getElementById('healthBreakdown');
+  if (!el) return;
+  if (!HEALTH_SYSTEMS.length) { el.innerHTML = ''; return; }
+  const sourceById = new Map(SOURCES_ADMIN.map((s) => [String(s.id), s]));
+  const groups = [
+    { name: 'DirecTV receivers', rows: HEALTH_SYSTEMS.filter((h) => h.kind === 'vc_source' && (sourceById.get(String(h.external_ref)) || {}).kind === 'directv') },
+    { name: 'Rokus', rows: HEALTH_SYSTEMS.filter((h) => h.kind === 'vc_source' && (sourceById.get(String(h.external_ref)) || {}).kind === 'roku') },
+    { name: 'TVs', rows: HEALTH_SYSTEMS.filter((h) => h.kind === 'vc_tv') },
+  ].filter((g) => g.rows.length);
+  el.innerHTML = groups.map((g) => {
+    const ok = g.rows.filter((r) => !r.last_status || r.last_status === 'online').length;
+    const down = g.rows.length - ok;
+    const pct = Math.round((ok / g.rows.length) * 100);
+    return `
+      <div class="vc-hb-row">
+        <div class="hb-name">${escapeHtml(g.name)}</div>
+        <div class="vc-hb-track"><div class="vc-hb-fill${down ? ' has-down' : ''}" style="width:${pct}%"></div></div>
+        <div class="vc-hb-count">${ok} of ${g.rows.length} ok${down ? ` · <span class="down">${down} down</span>` : ''}</div>
+      </div>`;
+  }).join('');
+}
+
 function renderHealthList() {
   const el = document.getElementById('healthList');
+  renderHealthStats();
+  renderHealthBreakdown();
   if (!HEALTH_SYSTEMS.length) {
     el.innerHTML = '<p class="muted">Nothing reported yet — the on-site agent starts reporting TV/receiver health about 20 seconds after it starts, then once a minute.</p>';
     return;
@@ -1112,6 +1391,22 @@ function renderHealthList() {
 // ---- Activity log (owner-only, Phase 5, docs/venue-control.md §11: "All
 // destructive admin actions write to vc_activity with actor and origin.")
 // Read-only -- there's nothing to manage here, just recent history.
+
+// A10's own mockup writes the target by name ("DirecTV 10 -> NFL Net 212",
+// "Sunday NFL"), not by id -- this resolves target_type/target_id against
+// whichever admin array is already loaded for the tab. Falls back to the
+// raw "#id" for anything archived/deleted out from under the log, or a
+// target_type this lookup doesn't know about, rather than showing nothing.
+function resolveActivityTarget(type, id) {
+  if (!type) return '—';
+  if (id == null) return escapeHtml(type);
+  const lists = { source: SOURCES_ADMIN, tv: TVS_ADMIN, zone: ZONES_ADMIN, layout: LAYOUTS_ADMIN, favorite: FAVORITES_ADMIN, schedule: SCHEDULES_ADMIN };
+  const list = lists[type];
+  const row = list ? list.find((r) => String(r.id) === String(id)) : null;
+  const label = row ? (row.name || row.label) : null;
+  return label ? `${escapeHtml(type)}: ${escapeHtml(label)}` : `${escapeHtml(type)} #${escapeHtml(String(id))}`;
+}
+
 async function loadActivityAdmin(locationId) {
   const el = document.getElementById('activityList');
   try {
@@ -1127,7 +1422,7 @@ async function loadActivityAdmin(locationId) {
               <td>${escapeHtml(a.actor || '—')}</td>
               <td>${escapeHtml(a.origin)}</td>
               <td>${escapeHtml(a.action)}</td>
-              <td>${a.target_type ? `${escapeHtml(a.target_type)} #${a.target_id}` : '—'}</td>
+              <td>${resolveActivityTarget(a.target_type, a.target_id)}</td>
               <td>${a.result === 'ok' ? '<span class="badge on">ok</span>' : `<span class="badge off">${escapeHtml(a.result)}</span>`}</td>
             </tr>`).join('')}
         </tbody>
