@@ -437,7 +437,7 @@ body.staff {
    re-routing tool, replacing the earlier per-TV power/volume/mute grid.
    Built to match the mockups' own inline-styled markup pixel-for-pixel
    (colors/sizes lifted directly from screens/05 and screens/06's source, not
-   re-derived) rather than reusing the coarser sc-*/tv-tile vocabulary the
+   re-derived) rather than reusing the coarser sc- / tv-tile vocabulary the
    Sources/old-TVs pages use -- per Scotto's explicit "build exactly what I
    designed." Two columns: a source list on the left, a zone-grouped TV chip
    grid on the right, a sticky commit bar along the bottom. Per-TV
