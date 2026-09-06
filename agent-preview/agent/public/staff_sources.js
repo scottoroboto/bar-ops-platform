@@ -489,19 +489,16 @@ function renderRemoteStage() {
   stage.innerHTML = filtered.map(remoteStageTileHtml).join('');
 }
 
-// Reflects which remote (if any) is currently open on the topbar's own
-// quick-launch button -- lit amber and relabeled to match, same "the button
-// itself shows what's active" pattern as the TVs page's TV Remote toggle.
+// Reflects which remote (if any) is currently open on the topbar's own two
+// dedicated buttons -- whichever one matches the open remote's kind lights
+// up amber, same "the button itself shows what's active" pattern as the TVs
+// page's TV Remote toggle. (Two separate always-visible buttons, one per
+// kind, rather than one relabeling button -- Scotto's explicit request.)
 function setQuickButtonState(kind) {
-  const btn = document.getElementById('tbQuickRemote');
-  const label = btn.querySelector('.label');
-  if (kind) {
-    btn.classList.add('open');
-    label.textContent = kind === 'roku' ? 'Roku Remote' : 'DirecTV Remote';
-  } else {
-    btn.classList.remove('open');
-    label.textContent = 'DirecTV Remote';
-  }
+  const directvBtn = document.getElementById('tbQuickRemoteDirectv');
+  const rokuBtn = document.getElementById('tbQuickRemoteRoku');
+  directvBtn.classList.toggle('open', kind === 'directv');
+  rokuBtn.classList.toggle('open', kind === 'roku');
 }
 
 // Inline swap for #sourcesWrap -- the branded topbar (including the now-lit
@@ -530,32 +527,32 @@ function closeRemote() {
   setQuickButtonState(null);
 }
 
-// Topbar's single, persistent Remote shortcut (screens/01, 03, 04's header
-// action -- "DirecTV Remote" idle, relabeling to whichever kind is actually
-// open). Tapping it while a remote is already open just closes it, same as
-// the X in the panel header. Tapping it idle asks which device -- grouped
-// DirecTV then Roku, so it doubles as the "only their devices" picker --
-// unless there's only one controllable device total, in which case it skips
-// straight to that device's remote rather than showing a pointless
-// single-item picker.
-function toggleQuickRemote() {
-  if (REMOTE_SLOT != null) { closeRemote(); return; }
-  openQuickRemotePicker();
+// Topbar's two dedicated Remote shortcuts, one per kind -- "DirecTV Remote"
+// and "Roku Remote" sit side by side (Scotto's explicit request), each only
+// ever offering "their devices" (per his earlier "only their devices are
+// available" instruction) rather than one combined picker. Tapping a
+// button while that same kind's remote is already open just closes it, same
+// as the X in the panel header. Tapping the *other* kind's button while a
+// remote is open switches straight to it (openRemote() below fully replaces
+// the panel/stage/state, no need to close first). Tapping a button idle
+// asks which device of that kind -- unless there's only one, in which case
+// it skips straight to that device's remote rather than showing a
+// pointless single-item picker.
+function toggleQuickRemote(kind) {
+  if (REMOTE_SLOT != null && REMOTE_KIND === kind) { closeRemote(); return; }
+  openQuickRemotePicker(kind);
 }
 
-function openQuickRemotePicker() {
-  const directvSources = SOURCES.filter((s) => s.kind === 'directv');
-  const rokuSources = SOURCES.filter((s) => s.kind === 'roku');
-  if (!directvSources.length && !rokuSources.length) { alert('No DirecTV receivers or Roku devices configured yet.'); return; }
-  const all = [...directvSources, ...rokuSources];
-  if (all.length === 1) { openRemote(all[0].slot); return; }
-  const groupHtml = (label, list) => !list.length ? '' : `
-    <div class="remote-pick-group-label">${label}</div>
-    ${list.map((s) => `
-      <button onclick="document.getElementById('quickRemoteDialog').close(); openRemote(${s.slot});">
-        ${escapeHtml(s.label)} <span class="muted">(${escapeHtml(s.qam_channel)})</span>
-      </button>`).join('')}`;
-  document.getElementById('quickRemoteGrid').innerHTML = groupHtml('DirecTV', directvSources) + groupHtml('Roku', rokuSources);
+function openQuickRemotePicker(kind) {
+  const list = SOURCES.filter((s) => s.kind === kind);
+  if (!list.length) { alert(kind === 'roku' ? 'No Roku devices configured yet.' : 'No DirecTV receivers configured yet.'); return; }
+  if (list.length === 1) { openRemote(list[0].slot); return; }
+  document.getElementById('quickRemoteTitle').textContent = kind === 'roku' ? 'Roku Remote' : 'DirecTV Remote';
+  document.getElementById('quickRemoteSub').textContent = kind === 'roku' ? 'Pick a Roku device.' : 'Pick a DirecTV receiver.';
+  document.getElementById('quickRemoteGrid').innerHTML = list.map((s) => `
+    <button onclick="document.getElementById('quickRemoteDialog').close(); openRemote(${s.slot});">
+      ${escapeHtml(s.label)} <span class="muted">(${escapeHtml(s.qam_channel)})</span>
+    </button>`).join('');
   document.getElementById('quickRemoteDialog').showModal();
 }
 

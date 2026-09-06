@@ -349,6 +349,14 @@ body.staff {
 .staff-topbar .tb-conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--on-fg); flex-shrink: 0; }
 .staff-topbar .tb-conn-dot[title] { cursor: help; }
 
+/* Two dedicated remote buttons (DirecTV Remote, Roku Remote) sitting side by
+   side, rather than one button that relabels itself -- Scotto's explicit
+   request. Wrapped so the pair counts as a single flex child of
+   .staff-topbar-inner (which is justify-content:space-between) -- otherwise
+   the two buttons would space apart from each other instead of sitting
+   together. */
+.staff-topbar .tb-quick-group { display: flex; align-items: center; gap: 10px; }
+
 .staff-topbar .tb-quick {
   display: flex; align-items: center; gap: 8px; background: none;
   border: 1.5px solid var(--border-mid); border-radius: 8px; padding: 10px 16px;
