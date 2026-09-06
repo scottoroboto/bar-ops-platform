@@ -284,8 +284,13 @@ body.staff {
 .staff .remote-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
 .staff .remote-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
 .staff .remote-grid.cols-5 { grid-template-columns: repeat(5, 1fr); }
-.staff .remote-grid button { flex-direction: column; gap: 3px; font-size: 12.5px; letter-spacing: 0.03em; min-height: 56px; }
+.staff .remote-grid button {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; font-size: 12.5px; letter-spacing: 0.03em; min-height: 56px;
+}
 .staff .remote-grid button.blank { visibility: hidden; pointer-events: none; }
+.staff .remote-grid button svg { flex-shrink: 0; }
+.staff .remote-grid button.keypad-digit { font-size: 22px; font-weight: 600; }
 .staff .remote-footer { margin-top: auto; padding-top: 12px; font-size: 12px; color: var(--muted); text-align: center; }
 
 /* Single-highlight rule (§6: "one highlight, one meaning per screen") -- the
@@ -425,6 +430,223 @@ body.staff {
    DirecTV receiver exists and it needs to ask which one). */
 .staff .remote-pick-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .staff .remote-pick-grid button { text-align: left; justify-content: flex-start; }
+
+/* ---------------------------------------------------------------------
+   TVs page rebuild (screens/05-staff-tvs.html + screens/06-staff-remote-tv.html,
+   2026-09-06): "pick a source -> pick the TVs to move -> commit" bulk
+   re-routing tool, replacing the earlier per-TV power/volume/mute grid.
+   Built to match the mockups' own inline-styled markup pixel-for-pixel
+   (colors/sizes lifted directly from screens/05 and screens/06's source, not
+   re-derived) rather than reusing the coarser sc-*/tv-tile vocabulary the
+   Sources/old-TVs pages use -- per Scotto's explicit "build exactly what I
+   designed." Two columns: a source list on the left, a zone-grouped TV chip
+   grid on the right, a sticky commit bar along the bottom. Per-TV
+   power/volume/mute now lives only in the TV Remote (which takes over the
+   left column in place, reusing .remote-grid/.remote-panel-header/.remote-bar
+   from the old full-screen remote -- see .tv-remote-panel below), not inline
+   on this grid, per Scotto's explicit instruction.
+   --------------------------------------------------------------------- */
+.staff-topbar .tb-actions { display: flex; align-items: center; gap: 9px; }
+.staff-topbar .tva-btn {
+  display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 700;
+  letter-spacing: 0.05em; border-radius: 8px; padding: 12px 17px; min-height: 0;
+  background: transparent; cursor: pointer; font-family: inherit;
+}
+.staff-topbar .tva-on { color: var(--amber); border: 1.5px solid var(--amber-dim); }
+.staff-topbar .tva-on:hover { background: rgba(240,166,60,0.08); }
+/* ALL TVs OFF -- functionally a .hold-danger (same pointerdown/hold-fill JS),
+   but this button's resting look is neutral, not red, per the mockup: red is
+   reserved for the alert language TVs already use elsewhere; the topbar
+   button itself just carries a small HOLD chip as the only warning. */
+.staff-topbar button.tva-off.hold-danger {
+  background: transparent; border: 1.5px solid var(--border-strong); color: var(--muted-strong);
+  padding: 12px 14px 12px 17px;
+}
+.staff-topbar button.tva-off.hold-danger:hover { background: rgba(255,255,255,0.03); }
+.staff-topbar .tva-off .hold-fill { background: rgba(240,166,60,0.18); }
+.staff-topbar .tva-off .hold-chip {
+  display: inline-block; background: var(--muted); color: var(--base);
+  font-size: 9px; font-weight: 800; letter-spacing: 0.1em; border-radius: 3px;
+  padding: 3px 6px; text-transform: uppercase; position: relative; z-index: 1;
+}
+.staff-topbar .tva-remote { color: var(--muted-strong); border: 1.5px solid var(--border-strong); }
+.staff-topbar .tva-remote:hover { background: rgba(255,255,255,0.03); }
+.staff-topbar .tva-remote svg path, .staff-topbar .tva-remote svg rect, .staff-topbar .tva-remote svg circle { stroke: currentColor; }
+.staff-topbar .tva-remote svg circle[fill] { fill: currentColor; }
+/* Open state -- solid amber fill, dark icon, matches screens/06's header. */
+.staff-topbar .tva-remote.open { color: var(--base); background: var(--amber); border-color: var(--amber); }
+
+.staff .tvs-workspace {
+  display: flex; gap: 20px; margin-top: 4px; height: calc(100vh - 190px); min-height: 420px;
+}
+.staff .tvs-col-source {
+  width: 396px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0;
+}
+.staff .tvs-col-tvs { flex-grow: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.staff .tvs-col-header {
+  height: 28px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.staff .tvs-col-header .tvs-col-title {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.14em; color: var(--muted); text-transform: uppercase;
+}
+.staff .tvs-legend { display: flex; align-items: center; gap: 18px; }
+.staff .tvs-legend .swatch { display: flex; align-items: center; gap: 7px; }
+.staff .tvs-legend .sw-box { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.staff .tvs-legend .sw-box.on { background: var(--amber); }
+.staff .tvs-legend .sw-box.sel { background: #2A2013; border: 2px solid var(--amber); }
+.staff .tvs-legend span.lbl { font-size: 12px; font-weight: 600; color: var(--muted-strong); }
+
+/* Left rail: one 40px row per configured source (1 - Pick a source), exactly
+   the row shape screens/05-staff-tvs.html uses -- slot, title, callsign/tag,
+   count, all on one line, not the taller card grid the Sources page uses. */
+.staff .tvsrc-scroll { flex-grow: 1; overflow-y: auto; min-height: 0; }
+.staff .tvsrc-list { display: flex; flex-direction: column; gap: 2px; }
+.staff .tvsrc-row {
+  display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px;
+  border-radius: 7px; background: var(--card-alt); border: none; width: 100%;
+  text-align: left; font-family: inherit; cursor: pointer;
+}
+.staff .tvsrc-row.no-tap { cursor: default; }
+.staff .tvsrc-row .tvsrc-slot { font-size: 13px; font-weight: 700; color: var(--muted); width: 34px; flex-shrink: 0; }
+.staff .tvsrc-row .tvsrc-title {
+  font-size: 16px; font-weight: 600; color: var(--text); flex-grow: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.staff .tvsrc-row .tvsrc-callsign { font-size: 13px; font-weight: 500; color: var(--muted-strong); flex-shrink: 0; }
+.staff .tvsrc-row .tvsrc-count { font-size: 14px; font-weight: 700; color: var(--muted-strong); width: 22px; text-align: right; flex-shrink: 0; }
+
+/* Picked -- this is the source currently selected to move TVs onto. Solid
+   amber fill, dark text -- same "you are here" treatment as the topbar
+   nav's own .active pill, and the one state a source row can be in at once. */
+.staff .tvsrc-row.picked { background: var(--amber); }
+.staff .tvsrc-row.picked .tvsrc-slot { color: var(--amber-dim-strong); font-weight: 800; }
+.staff .tvsrc-row.picked .tvsrc-title { color: var(--base); font-weight: 700; }
+.staff .tvsrc-row.picked .tvsrc-callsign { color: var(--amber-dim-strong); font-weight: 700; }
+.staff .tvsrc-row.picked .tvsrc-count { color: var(--base); font-weight: 800; }
+
+.staff .tvsrc-row.sc-asleep { background: var(--card); }
+.staff .tvsrc-row.sc-asleep .tvsrc-slot,
+.staff .tvsrc-row.sc-asleep .tvsrc-callsign,
+.staff .tvsrc-row.sc-asleep .tvsrc-count { color: var(--open-text); }
+.staff .tvsrc-row.sc-asleep .tvsrc-title { color: var(--muted); font-weight: 500; }
+
+.staff .tvsrc-row.sc-alert { background: var(--alert-card-bg); border: 1px solid var(--off-bg); }
+.staff .tvsrc-row.sc-alert .tvsrc-slot { color: var(--off-fg); font-weight: 800; }
+.staff .tvsrc-row.sc-alert .tvsrc-title { color: #F0BAB0; font-weight: 700; }
+.staff .tvsrc-row.sc-alert .tvsrc-count { color: var(--off-fg); font-weight: 800; }
+
+.staff .tvsrc-row .tvsrc-slot.roku { color: var(--blue-fg); }
+.staff .tvsrc-row.sc-idle { background: var(--card); }
+.staff .tvsrc-row.sc-idle .tvsrc-slot.roku { color: var(--blue-border); }
+.staff .tvsrc-row.sc-idle .tvsrc-title { color: var(--muted); font-weight: 500; }
+.staff .tvsrc-row.sc-idle .tvsrc-callsign,
+.staff .tvsrc-row.sc-idle .tvsrc-count { color: var(--open-text); }
+
+.staff .tvsrc-row.sc-static .tvsrc-slot { color: var(--on-fg); }
+
+.staff .tvsrc-row.sc-open { background: transparent; border: 1px dashed var(--open-border); }
+.staff .tvsrc-row.sc-open .tvsrc-slot { color: var(--open-text); }
+.staff .tvsrc-row.sc-open .tvsrc-title { font-size: 15px; font-weight: 500; color: var(--border-strong); }
+
+/* Right side: zone-grouped chip grid (2 - Pick the TVs to move) / TV aim
+   grid (TV Remote mode). Zone header reuses the existing .zone-toggle
+   chevron button; the rest is new (15px name, count, "N on a dead source"
+   note) to match screens/05's exact type scale rather than the old page's
+   smaller zone-header text. */
+.staff .tvz-group { margin-bottom: 8px; }
+.staff .tvz-group:last-child { margin-bottom: 0; }
+.staff .tvz-header { height: 24px; display: flex; align-items: center; gap: 8px; }
+.staff .tvz-header .tvz-name { font-size: 15px; font-weight: 700; color: var(--text); }
+.staff .tvz-header .tvz-count { font-size: 15px; font-weight: 500; color: var(--muted); }
+.staff .tvz-header .tvz-dead-note { color: var(--off-fg); font-size: 13px; font-weight: 700; margin-left: 2px; }
+.staff .tvz-header.collapsed {
+  height: 46px; border: 1px solid var(--border); border-radius: 7px; padding: 0 12px;
+}
+.staff .tvz-header.collapsed .tvz-name { color: var(--muted-strong); }
+.staff .tvz-header .tvz-collapsed-note { flex-grow: 1; text-align: right; font-size: 12px; font-weight: 600; color: var(--open-text); }
+
+.staff .tvz-scroll { flex-grow: 1; overflow-y: auto; min-height: 0; }
+.staff .tv-chip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; margin-top: 6px; }
+.staff .tv-chip {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  min-height: 52px; border-radius: 7px; background: var(--card-alt); border: 1px solid var(--border-strong);
+  cursor: pointer; font-family: inherit; padding: 4px 3px;
+}
+.staff .tv-chip .chip-qam { font-size: 12px; font-weight: 600; color: var(--muted); line-height: 1; }
+.staff .tv-chip .chip-tag { font-size: 18px; font-weight: 700; color: var(--muted-strong); line-height: 1.15; }
+.staff .tv-chip .chip-source { font-size: 12px; font-weight: 600; color: var(--muted); line-height: 1; }
+
+/* Already on the picked source -- solid amber fill (the "blast radius" half
+   of the two-highlight rule). Never applied together with .remote-target's
+   look -- selection always wins visually, see below. */
+.staff .tv-chip.picked-on { background: var(--amber); border-color: var(--amber); }
+.staff .tv-chip.picked-on .chip-qam { color: var(--amber-dim-strong); font-weight: 700; }
+.staff .tv-chip.picked-on .chip-tag { color: var(--base); font-weight: 800; }
+.staff .tv-chip.picked-on .chip-source { color: var(--amber-dim-strong); font-weight: 700; }
+
+/* Dead source -- this TV is tuned to a source that's currently unreachable.
+   Same alert red as the Sources page; "no signal" replaces the channel
+   line and stays red even once the chip is selected (below). */
+.staff .tv-chip.dead-source { background: var(--alert-card-bg); border-color: var(--off-bg); }
+.staff .tv-chip.dead-source .chip-qam { color: #A9736A; }
+.staff .tv-chip.dead-source .chip-tag { color: #F0BAB0; font-weight: 700; }
+.staff .tv-chip.dead-source .chip-source { color: var(--off-fg); font-weight: 700; }
+
+/* Selected to move / aimed with the remote -- amber outline ring, reusing
+   the existing .remote-target look (2A2013 fill + amber border) so both
+   screens share one "you're about to act on this" visual. Layered on top of
+   whatever base state the chip already has; never rendered the same as
+   .picked-on, per "two distinct highlights, never collapse these"
+   (screens/05's own rule) -- .remote-target's !important wins over
+   .picked-on/.dead-source's background/border here by design. */
+.staff .tv-chip.remote-target .chip-qam { color: #C98A2E; }
+.staff .tv-chip.remote-target .chip-tag { color: var(--amber); font-weight: 800; }
+.staff .tv-chip.remote-target .chip-source { color: #C98A2E; font-weight: 700; }
+.staff .tv-chip.remote-target.dead-source .chip-qam { color: #C98A2E; }
+.staff .tv-chip.remote-target.dead-source .chip-source { color: var(--off-fg); }
+
+/* Sticky commit bar -- "Change N TVs to X" fires POST /api/tvs/bulk/slot in
+   pick-a-source mode; in TV Remote mode the same bar instead reads "N TVs
+   receiving the remote" with Clear / Select whole zone, matching screens/06. */
+.staff .tvs-commit-bar {
+  height: 62px; flex-shrink: 0; margin-top: 10px; border-radius: 9px; background: var(--card-alt);
+  border: 1px solid var(--border-strong); display: flex; align-items: center; justify-content: space-between;
+  padding: 0 10px 0 18px; gap: 14px;
+}
+.staff .tvs-commit-bar .cb-left { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.staff .tvs-commit-bar .cb-count { font-size: 20px; font-weight: 800; color: var(--amber); flex-shrink: 0; }
+.staff .tvs-commit-bar .cb-names { font-size: 15px; font-weight: 500; color: var(--muted-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staff .tvs-commit-bar .cb-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.staff .tvs-commit-bar button.cb-clear { background: none; border: none; color: var(--muted-strong); font-size: 15px; font-weight: 600; padding: 13px 18px; }
+.staff .tvs-commit-bar button.cb-clear:hover { background: rgba(255,255,255,0.04); }
+.staff .tvs-commit-bar button.cb-secondary { background: none; border: 1px solid var(--border-strong); color: var(--muted-strong); font-size: 15px; font-weight: 600; padding: 13px 20px; }
+.staff .tvs-commit-bar button.cb-commit { background: var(--amber); border: none; color: var(--base); font-size: 16px; font-weight: 700; padding: 14px 22px; }
+.staff .tvs-commit-bar button.cb-commit:hover { background: var(--amber-bright); }
+.staff .tvs-commit-bar button.cb-commit:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* TV Remote takes over the entire left column in place (screens/06) -- the
+   source list is swapped out for this panel, and the right-side TV grid
+   switches into "tap to aim" mode (see .tv-chip.remote-target above).
+   Reuses the existing .remote-grid/.remote-panel-header/.remote-bar
+   vocabulary from the old full-screen remote overlay -- only the container
+   is new. */
+.staff .tv-remote-panel {
+  display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border-strong);
+  border-radius: 12px; padding: 16px; height: 100%;
+}
+.staff .tv-remote-panel .remote-panel-header { height: 40px; flex-shrink: 0; margin-bottom: 0; }
+.staff .tv-remote-panel .remote-panel-header .title { font-size: 20px; letter-spacing: 0.16em; }
+.staff .tv-remote-panel hr { border: none; height: 1px; background: var(--border); margin: 4px 0 16px; }
+.staff .tv-remote-panel input#remoteTvKeypadDisplay {
+  background: var(--card-alt); border: 1px solid var(--border-strong); border-radius: 9px;
+  min-height: 44px; margin-top: 12px;
+}
+.staff .tv-remote-panel .remote-footer { flex-grow: 1; display: flex; align-items: flex-end; justify-content: center; padding-top: 12px; }
+
+@media (max-width: 980px) {
+  .staff .tvs-workspace { flex-direction: column; }
+  .staff .tvs-col-source { width: 100%; }
+}
 
 /* Undo bar (already used by layouts.js -- re-themed here, structure unchanged). */
 .staff #undoBar {

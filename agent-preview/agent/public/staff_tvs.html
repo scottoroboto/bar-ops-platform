@@ -12,7 +12,7 @@
 <div class="wrap" id="pinGate">
   <div class="card">
     <h2>TVs</h2>
-    <p class="muted">Enter the staff PIN to control TV power.</p>
+    <p class="muted">Enter the staff PIN to move TVs between sources.</p>
     <div class="field"><input type="password" id="pinInput" placeholder="Staff PIN" autocomplete="off"></div>
     <button class="primary" onclick="submitPin()">Continue</button>
     <div id="pinMsg"></div>
@@ -21,8 +21,10 @@
 
 <div id="app">
   <!-- Branded top bar, shared shape with staff_sources.html/staff_layouts.html
-       -- see staff-theme.css's .staff-topbar rules. Quick button here opens
-       the TV remote (screen 06), matching screens/05-staff-tvs.html. -->
+       -- see staff-theme.css's .staff-topbar rules. ALL TVs ON / ALL TVs OFF
+       (hold) / TV REMOTE now live here in the bar itself, matching
+       screens/05-staff-tvs.html and screens/06-staff-remote-tv.html exactly
+       -- not in a per-page zone-actions row like the old per-TV grid used. -->
   <div class="staff-topbar">
     <div class="staff-topbar-inner">
       <div class="tb-brand">
@@ -30,10 +32,14 @@
         <div class="tb-divider"></div>
         <a href="/" title="Agent status"><span class="tb-conn-dot"></span></a>
       </div>
-      <button class="tb-quick" onclick="openTvRemote()">
-        <svg width="15" height="19" viewBox="0 0 16 20" fill="none"><rect x="1" y="1" width="14" height="18" rx="3" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="5.5" r="1.5" fill="currentColor"/><path d="M4.5 10.5h7M4.5 14h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <span class="label">TV Remote</span>
-      </button>
+      <div class="tb-actions">
+        <button class="tva-btn tva-on" onclick="bulkPower('on')">ALL TVs ON</button>
+        <button class="tva-btn tva-off hold-danger" data-hold-action="off"><span class="hold-fill"></span><span class="hold-label">ALL TVs OFF <span class="hold-chip">HOLD</span></span></button>
+        <button class="tva-btn tva-remote" id="tvRemoteToggle" onclick="toggleTvRemote()">
+          <svg width="15" height="19" viewBox="0 0 16 20" fill="none"><rect x="1" y="1" width="14" height="18" rx="3" stroke-width="1.6"/><circle cx="8" cy="5.5" r="1.5"/><path d="M4.5 10.5h7M4.5 14h7" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span class="label">TV Remote</span>
+        </button>
+      </div>
       <div class="tb-nav">
         <a href="/staff_sources.html">Sources</a>
         <a href="/staff_tvs.html" class="active">TVs</a>
@@ -48,47 +54,20 @@
     </div>
   </div>
 
+  <!-- Both columns are fully JS-rendered (renderPage() in staff_tvs.js) --
+       #tvsColSource swaps between the source rail (1 - Pick a source) and
+       the inline TV Remote panel; #tvsColTvs swaps its header/legend and its
+       sticky bottom bar between "pick the TVs to move" / commit and
+       "tap TVs to aim the remote" / receiving-the-remote, per Scotto's
+       instruction that the remote replaces the source box in place rather
+       than opening as a separate overlay. -->
   <div class="wrap">
-    <div class="card">
-      <div class="zone-header">
-        <h2 style="margin:0;">All TVs <span class="muted" id="refreshedAt"></span></h2>
-        <div class="zone-actions">
-          <button class="small" onclick="setAllZonesCollapsed(true, allZoneKeys())">Collapse all</button>
-          <button class="small" onclick="setAllZonesCollapsed(false)">Expand all</button>
-          <button class="small" onclick="bulkPower('on')">All on</button>
-          <button class="small hold-danger" data-zone="" data-hold-action="off"><span class="hold-fill"></span><span class="hold-label">Hold: All off</span></button>
-          <button class="small primary" onclick="openTvRemote()">TV Remote</button>
-        </div>
-      </div>
-      <div id="bulkProgress"></div>
-      <div id="tvsBox"><p class="muted">Loading…</p></div>
+    <div id="bulkProgress"></div>
+    <div class="tvs-workspace">
+      <div class="tvs-col-source" id="tvsColSource"><p class="muted">Loading…</p></div>
+      <div class="tvs-col-tvs" id="tvsColTvs"></div>
     </div>
   </div>
-</div>
-
-<dialog id="tvSourceDialog">
-  <h2 style="margin-top:0;" id="tvSourceTitle">Choose a source</h2>
-  <p class="muted" style="margin-top:-6px;">Sends the channel keys as if pressed on the remote -- confirm visually that it worked.</p>
-  <div class="fav-grid" id="tvSourceGrid"></div>
-  <div id="tvSourceMsg"></div>
-  <div style="margin-top:12px;">
-    <button onclick="document.getElementById('tvSourceDialog').close()">Close</button>
-  </div>
-</dialog>
-
-<!-- TV remote (screens/06-staff-remote-tv.html): aimed by tapping TV chips in
-     #tvRemoteStage (multi-select, "receiving the remote" highlight) rather
-     than bound to one device -- every button in #tvRemotePanelBody fans out
-     to every currently-aimed TV via tvs.js's remoteTv*() functions. -->
-<div class="overlay remote-overlay" id="tvRemoteOverlay">
-  <div class="remote-panel">
-    <div class="remote-panel-header">
-      <span class="title">TV</span>
-      <button class="close" onclick="closeTvRemote()">&times;</button>
-    </div>
-    <div id="tvRemotePanelBody"></div>
-  </div>
-  <div class="remote-stage interactive" id="tvRemoteStage"></div>
 </div>
 
 <script src="staff_tvs.js"></script>
