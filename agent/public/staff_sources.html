@@ -28,18 +28,18 @@
     <div class="staff-topbar-inner">
       <div class="tb-brand">
         <img class="tb-logo" src="ticket-logo.png" alt="Ticket Sports Bar">
+        <!-- Favorites (round 4, 2026-09-06): replaces the old two dedicated
+             DirecTV/Roku "Remote" buttons that used to live here -- those are
+             gone now that tapping a source card opens its full remote
+             directly (see cardTap() in staff_sources.js). This is the one
+             button left in this spot, opening the DirecTV-favorites picker
+             overlay (#favOverlay) instead. -->
+        <button class="tb-fav-btn" id="tbFavBtn" onclick="openFavorites()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.9 6.6 7.1.7-5.4 4.7 1.6 7-6.2-3.8-6.2 3.8 1.6-7-5.4-4.7 7.1-.7L12 2.5Z"/></svg>
+          <span class="label">Favorites</span>
+        </button>
         <div class="tb-divider"></div>
         <a href="/" title="Agent status"><span class="tb-conn-dot"></span></a>
-      </div>
-      <div class="tb-quick-group">
-        <button class="tb-quick" id="tbQuickRemoteDirectv" onclick="toggleQuickRemote('directv')">
-          <svg width="15" height="19" viewBox="0 0 16 20" fill="none"><rect x="1" y="1" width="14" height="18" rx="3" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="5.5" r="1.5" fill="currentColor"/><path d="M4.5 10.5h7M4.5 14h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          <span class="label">DirecTV Remote</span>
-        </button>
-        <button class="tb-quick" id="tbQuickRemoteRoku" onclick="toggleQuickRemote('roku')">
-          <svg width="15" height="19" viewBox="0 0 16 20" fill="none"><rect x="1" y="1" width="14" height="18" rx="3" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="5.5" r="1.5" fill="currentColor"/><path d="M4.5 10.5h7M4.5 14h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          <span class="label">Roku Remote</span>
-        </button>
       </div>
       <div class="tb-nav">
         <a href="/staff_sources.html" class="active">Sources</a>
@@ -56,57 +56,78 @@
   </div>
 
   <div class="wrap" id="sourcesWrap">
-    <div class="card" id="favCard" style="display:none;">
-      <h2>Favorites</h2>
-      <div class="fav-grid" id="favGrid"></div>
-    </div>
-
     <p class="muted" id="refreshedAt" style="margin: 4px 0 12px;"></p>
     <div class="source-grid" id="sourcesBox"><p class="muted">Loading…</p></div>
   </div>
 
   <!-- Device-matched remote panels (screens/03-staff-remote-directv.html,
-       screens/04-staff-remote-roku.html): opened from the topbar's single
-       contextual Remote button (toggleQuickRemote() in staff_sources.js).
-       Swaps in for #sourcesWrap in place, same as the TVs page's inline TV
-       Remote swap -- the branded topbar (including this same button, now lit
-       amber) stays visible the whole time, matching the mockups exactly.
+       screens/04-staff-remote-roku.html): opened by tapping a live source
+       card directly (cardTap() in staff_sources.js) -- round 4, 2026-09-06,
+       replacing the old channel-picker/apps-dialog-first flow and the
+       topbar's two dedicated Remote buttons. Swaps in for #sourcesWrap in
+       place, same as the TVs page's inline TV Remote swap -- the branded
+       topbar stays visible the whole time.
        #remoteStage shows ONLY sources of the same kind as the one bound
        (REMOTE_KIND) -- per Scotto's explicit instruction, this is filtered
        to "their devices" only rather than the mockup's literal mixed grid --
        with exactly one tile lit (the source actually being driven; only one
-       device is ever controlled at a time). -->
+       device is ever controlled at a time).
+       Header (round 4): no more "DIRECTV"/"ROKU" title line -- just the
+       receiver + its QAM slot on the left (bigger now that there's no title
+       line above them), and the live channel/app + program, right-justified
+       next to the close button, on the right (Scotto's original "make text
+       for Directv number and current station larger and right justified
+       next to X" request). -->
   <div class="wrap remote-overlay" id="remoteOverlay">
     <div class="remote-stage" id="remoteStage"></div>
     <div class="remote-panel">
       <div class="remote-panel-header">
-        <div><span class="title" id="remoteTitle">REMOTE</span> <span class="sub" id="remoteSub"></span></div>
-        <button class="close" onclick="closeRemote()">&times;</button>
+        <div>
+          <div class="rcvr" id="remoteRcvr"></div>
+          <div class="zone" id="remoteZone"></div>
+        </div>
+        <div class="now-row">
+          <div class="now">
+            <div class="now-chan" id="remoteNowChan"></div>
+            <div class="now-prog" id="remoteNowProg"></div>
+          </div>
+          <button class="close" onclick="closeRemote()">&times;</button>
+        </div>
       </div>
+      <div id="remoteBlastRadius"></div>
       <div id="remotePanelBody"></div>
     </div>
   </div>
+
+  <!-- Favorites overlay (round 4, 2026-09-06): opened from the topbar's
+       Favorites button. Favorites are DirecTV-only (they're a saved
+       channel, and only DirecTV receivers have channels), so this is a
+       two-column picker rather than the old page-top strip: every saved
+       favorite on the left, every DirecTV receiver on the right. Tap a
+       receiver to select it (defaults to the first one), then tap a
+       favorite to tune that receiver straight to it -- no more separate
+       "which receiver(s)" dialog. -->
+  <div class="fav-backdrop" id="favOverlay">
+    <div class="fav-panel">
+      <div class="fav-panel-header">
+        <h1>Favorites</h1>
+        <button class="close" onclick="closeFavorites()">&times;</button>
+      </div>
+      <div class="fav-panel-cols">
+        <div class="col-favs">
+          <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.9 6.6 7.1.7-5.4 4.7 1.6 7-6.2-3.8-6.2 3.8 1.6-7-5.4-4.7 7.1-.7L12 2.5Z"/></svg>Favorites — tap to tune</h2>
+          <div class="fav-tile-grid" id="favTileGrid"></div>
+        </div>
+        <div class="col-divider"></div>
+        <div class="col-directv">
+          <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="13" rx="2"/><path d="M8 21h8M12 18v3"/></svg>DirecTV Receivers — then pick one</h2>
+          <div class="rcv-tile-grid" id="favRcvGrid"></div>
+        </div>
+      </div>
+      <div class="fav-panel-footer" id="favFooter"></div>
+    </div>
+  </div>
 </div>
-
-<dialog id="quickRemoteDialog">
-  <h2 style="margin-top:0;" id="quickRemoteTitle">Remote</h2>
-  <p class="muted" id="quickRemoteSub">Pick a device.</p>
-  <div class="remote-pick-grid" id="quickRemoteGrid"></div>
-  <div style="margin-top:12px;">
-    <button onclick="document.getElementById('quickRemoteDialog').close()">Cancel</button>
-  </div>
-</dialog>
-
-<dialog id="tuneFavDialog">
-  <h2 style="margin-top:0;" id="tuneFavTitle">Tune to favorite</h2>
-  <p class="muted">Pick which receiver(s) to send this to.</p>
-  <div id="tuneFavChecks"></div>
-  <div id="tuneFavMsg"></div>
-  <div style="margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
-    <button onclick="document.getElementById('tuneFavDialog').close()">Cancel</button>
-    <button class="primary" onclick="submitTuneFav()">Tune</button>
-  </div>
-</dialog>
 
 <dialog id="rokuAppsDialog">
   <h2 style="margin-top:0;" id="rokuAppsTitle">Apps</h2>
@@ -116,54 +137,6 @@
     <button onclick="document.getElementById('rokuAppsDialog').close()">Close</button>
   </div>
 </dialog>
-
-<!-- Full-screen channel picker (screens/02-staff-channel-picker.html): opened per
-     receiver from its "Channels…" button. Favorites grid with live titles filled in
-     progressively, plus a keypad fallback for a channel not saved as a favorite. -->
-<div class="overlay" id="channelPicker">
-  <div class="overlay-header">
-    <div>
-      <h1 style="font-size:18px; margin:0;" id="pickerTitle">Channels</h1>
-      <p class="muted" style="margin:2px 0 0;">Tap a favorite, or use the keypad below.</p>
-    </div>
-    <button class="small" onclick="closeChannelPicker()">Close</button>
-  </div>
-  <div class="overlay-body">
-    <div id="pickerBlastRadius"></div>
-
-    <div class="card">
-      <h2>Favorites</h2>
-      <div class="channel-grid" id="pickerFavGrid"></div>
-    </div>
-
-    <div class="card">
-      <h2>Guide &amp; keypad</h2>
-      <div class="source-controls" style="margin-bottom:12px;">
-        <button onclick="pickerSendKey('guide')">Guide</button>
-        <button onclick="pickerSendKey('info')">Info</button>
-      </div>
-      <input type="text" id="pickerKeypadInput" placeholder="Channel" readonly style="width:140px; font-size:20px; text-align:center; margin-bottom:10px;">
-      <div class="keypad">
-        <button onclick="pickerKeypadPress('1')">1</button>
-        <button onclick="pickerKeypadPress('2')">2</button>
-        <button onclick="pickerKeypadPress('3')">3</button>
-        <button onclick="pickerKeypadPress('4')">4</button>
-        <button onclick="pickerKeypadPress('5')">5</button>
-        <button onclick="pickerKeypadPress('6')">6</button>
-        <button onclick="pickerKeypadPress('7')">7</button>
-        <button onclick="pickerKeypadPress('8')">8</button>
-        <button onclick="pickerKeypadPress('9')">9</button>
-        <button onclick="pickerKeypadPress('.')">.</button>
-        <button onclick="pickerKeypadPress('0')">0</button>
-        <button onclick="pickerKeypadPress('back')">&larr;</button>
-      </div>
-      <div style="display:flex; gap:8px; margin-top:12px;">
-        <button onclick="pickerKeypadPress('clear')">Clear</button>
-        <button class="primary" onclick="pickerKeypadTune()">Tune</button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <script src="staff_sources.js"></script>
 </body>
