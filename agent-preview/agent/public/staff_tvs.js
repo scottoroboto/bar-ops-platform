@@ -453,7 +453,10 @@ async function commitSlotChange() {
       return { id: t.id, name: t.tag || t.name, status: r.ok ? 'done' : 'failed', error: r.error };
     });
     renderBulkProgress(`Moving to ${label}`, rows, () => commitSlotChange());
-    SELECTED_TV_IDS.clear();
+    // Only drop the TVs that actually confirmed -- a failed one stays selected
+    // so both the chip grid and the Retry button above still point at it,
+    // instead of Retry silently no-op'ing on an emptied selection.
+    rows.filter((r) => r.status === 'done').forEach((r) => SELECTED_TV_IDS.delete(Number(r.id)));
     await refreshAll();
   } catch (e) {
     renderBulkProgress(`Moving to ${label}`, targets.map((t) => ({ id: t.id, name: t.tag || t.name, status: 'failed', error: e.message })), () => commitSlotChange());
