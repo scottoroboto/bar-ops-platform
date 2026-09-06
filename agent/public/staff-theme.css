@@ -260,25 +260,50 @@ body.staff {
 /* Device-matched remote panels (screens 03/04/06 of the design-pack round --
    docs/venue-control-gui-reconciliation.md's last open staff-UI item: "three
    dedicated remotes ... don't exist -- today's controls are the bare button
-   lists"). A fixed-width panel of real remote buttons on the left, with the
-   relevant grid (sources for 03/04, TVs for 06) dimmed but still visible on
-   the right so context ("what am I actually driving") never disappears --
-   same overlay mechanism as the channel picker above, just split in two. */
-.staff .remote-overlay { position: fixed; inset: 0; background: var(--base); z-index: 55; display: none; }
+   lists"). Per screens/03 and 04 exactly: this is an INLINE swap for
+   #sourcesWrap, not a full-viewport overlay -- the branded topbar (with this
+   same remote lit amber, see .tb-quick.open above) stays visible the whole
+   time. The relevant device grid stays visible, dimmed, on the left (context
+   -- "what am I actually driving"), with a fixed remote-button panel on the
+   right, same shape screens 03/04 use. #remoteStage's own tiles carry their
+   own dim/lit opacity individually (see .remote-stage-tile below) rather
+   than the whole stage being uniformly dimmed, so the one lit tile actually
+   reads as bright the way the mockup shows it, not just outlined. */
+.staff .remote-overlay { display: none; gap: 18px; min-width: 0; }
 .staff .remote-overlay.open { display: flex; }
+.staff .remote-stage {
+  flex-grow: 1; min-width: 0; display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-content: start;
+}
+.staff .remote-stage-tile {
+  border-radius: 9px; background: var(--card); border: 1px solid var(--border);
+  padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between;
+  min-height: 84px; opacity: 0.55; filter: grayscale(0.2);
+}
+.staff .remote-stage-tile .rst-slot { font-size: 11px; font-weight: 700; color: var(--muted); }
+.staff .remote-stage-tile .rst-title {
+  font-size: 15px; font-weight: 700; color: var(--muted-strong); line-height: 1.15;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.staff .remote-stage-tile .rst-sub { font-size: 11px; font-weight: 600; color: var(--muted); }
+/* The one tile actually receiving this remote -- full brightness + amber,
+   everything else in the stage stays dimmed. Only one tile is ever lit at a
+   time, per Scotto's "only one device controlled at a time." */
+.staff .remote-stage-tile.remote-target {
+  opacity: 1; filter: none; background: #2A2013; border: 2px solid var(--amber);
+}
+.staff .remote-stage-tile.remote-target .rst-slot,
+.staff .remote-stage-tile.remote-target .rst-title { color: var(--text); }
+.staff .remote-stage-tile.remote-target .rst-slot { color: var(--amber); }
+
 .staff .remote-panel {
-  width: 380px; flex-shrink: 0; background: var(--card); border-right: 1px solid var(--border-strong);
+  width: 420px; flex-shrink: 0; background: var(--card); border: 1px solid var(--border-strong); border-radius: 12px;
   padding: 16px; display: flex; flex-direction: column; overflow-y: auto;
 }
 .staff .remote-panel-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; gap: 8px; }
 .staff .remote-panel-header .title { font-size: 17px; font-weight: 800; letter-spacing: 0.1em; }
 .staff .remote-panel-header .sub { font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .staff .remote-panel-header button.close { background: none; border: none; color: var(--muted); font-size: 22px; min-height: 0; padding: 0 4px; }
-.staff .remote-stage {
-  flex-grow: 1; padding: 16px 20px; overflow-y: auto; min-width: 0;
-  opacity: 0.55; filter: grayscale(0.15); pointer-events: none; /* "dimmed", per every 03/04/06 mockup -- context only, not interactive, except 06's tv-grid which re-enables pointer-events itself */
-}
-.staff .remote-stage.interactive { opacity: 1; filter: none; pointer-events: auto; }
 .staff .remote-grid { display: grid; gap: 8px; margin-top: 8px; }
 .staff .remote-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
 .staff .remote-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
@@ -332,6 +357,11 @@ body.staff {
 }
 .staff-topbar .tb-quick:hover { background: #2b241a; border-color: var(--border-strong); }
 .staff-topbar .tb-quick svg { flex-shrink: 0; }
+/* Active state while a remote panel is open (screens 03/04) -- same lit-amber
+   treatment as the TVs page's .tva-remote.open, so the button itself shows
+   which remote is currently driving, and doubles as an obvious close toggle. */
+.staff-topbar .tb-quick.open { color: var(--base); background: var(--amber); border-color: var(--amber); }
+.staff-topbar .tb-quick.open:hover { background: var(--amber); }
 
 .staff-topbar .tb-nav { display: flex; align-items: center; gap: 8px; }
 .staff-topbar .tb-nav a {
@@ -426,10 +456,16 @@ body.staff {
 .staff .source-card.sc-open .sc-headline { font-size: 19px; font-weight: 600; color: var(--border-strong); }
 .staff .source-card.sc-open .sc-sub { color: var(--border-strong); }
 
-/* Remote-picker dialog (header's quick-launch button, when more than one
-   DirecTV receiver exists and it needs to ask which one). */
+/* Remote-picker dialog (header's single quick-launch button, when more than
+   one DirecTV receiver / Roku device exists and it needs to ask which one --
+   grouped by kind so it doubles as the "only their devices" picker). */
 .staff .remote-pick-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .staff .remote-pick-grid button { text-align: left; justify-content: flex-start; }
+.staff .remote-pick-group-label {
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); margin: 10px 0 -2px;
+}
+.staff .remote-pick-group-label:first-child { margin-top: 0; }
 
 /* ---------------------------------------------------------------------
    TVs page rebuild (screens/05-staff-tvs.html + screens/06-staff-remote-tv.html,

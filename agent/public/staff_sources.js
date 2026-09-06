@@ -353,6 +353,7 @@ async function launchRokuApp(appId) {
 // no new backend endpoint needed for either remote.
 // ---------------------------------------------------------------------
 let REMOTE_SLOT = null;
+let REMOTE_KIND = null; // 'directv' | 'roku' -- which kind of device this remote is bound to, so the stage only ever shows "their devices" (Scotto's explicit instruction), never a mixed grid.
 
 // Real SHEF key names (DirecTV's documented /remote/processKey vocabulary --
 // same list agent/lib/drivers/directv.js's processKey() passes straight
@@ -457,50 +458,104 @@ async function fillRemoteRokuApps(slot) {
   }
 }
 
-// Stage: the full sources grid, dimmed (see .remote-stage in staff-theme.css),
-// with exactly one tile lit -- the source this remote is actually driving
-// right now. Read-only; tapping it does nothing, it's context, not a control.
-function renderRemoteStage() {
-  const stage = document.getElementById('remoteStage');
-  stage.innerHTML = `<div class="channel-grid">${SOURCES.map((s) => `
-    <div class="channel-tile${Number(s.slot) === Number(REMOTE_SLOT) ? ' remote-target' : ''}">
-      <span class="cat">slot ${s.slot} · ${escapeHtml(s.qam_channel)}</span>
-      <span class="name">${escapeHtml(s.label)}</span>
-      <span class="live-title">${s.kind === 'roku' ? (s.live && s.live.appId != null ? escapeHtml(s.live.appName || '') : '') : (s.live && s.live.major != null ? `${s.live.major}${s.live.minor != null ? '.' + s.live.minor : ''}` : '')}</span>
-    </div>`).join('')}</div>`;
+// Stage: ONLY the sources of the same kind as the one bound (REMOTE_KIND) --
+// per Scotto's explicit instruction ("when they are opened, only their
+// devices are available") -- e.g. the DirecTV remote's stage shows just the
+// DirecTV receivers, never the Roku boxes or the static/spare slots mixed
+// in. Exactly one tile is ever lit (.remote-target, full brightness) -- the
+// one source this remote is actually driving right now; every other tile in
+// the stage stays dimmed. Read-only; tapping it does nothing, it's context,
+// not a control -- only one device is ever controlled at a time.
+function remoteStageTileHtml(s) {
+  const slot = Number(s.slot);
+  const active = slot === Number(REMOTE_SLOT);
+  let headline;
+  if (s.kind === 'roku') {
+    headline = !s.live || !s.live.ok ? 'Not responding' : (s.live.appId != null ? (s.live.appName || `App ${s.live.appId}`) : 'Idle');
+  } else {
+    headline = !s.live || !s.live.ok ? 'Not responding' : (s.live.active === false ? 'Asleep' : ((SOURCE_TITLES.get(slot) || {}).title || s.label));
+  }
+  return `
+    <div class="remote-stage-tile${active ? ' remote-target' : ''}">
+      <span class="rst-slot">${escapeHtml(s.qam_channel)}</span>
+      <span class="rst-title">${escapeHtml(headline)}</span>
+      <span class="rst-sub">${escapeHtml(s.label)}</span>
+    </div>`;
 }
 
+function renderRemoteStage() {
+  const stage = document.getElementById('remoteStage');
+  const filtered = SOURCES.filter((s) => s.kind === REMOTE_KIND);
+  stage.innerHTML = filtered.map(remoteStageTileHtml).join('');
+}
+
+// Reflects which remote (if any) is currently open on the topbar's own
+// quick-launch button -- lit amber and relabeled to match, same "the button
+// itself shows what's active" pattern as the TVs page's TV Remote toggle.
+function setQuickButtonState(kind) {
+  const btn = document.getElementById('tbQuickRemote');
+  const label = btn.querySelector('.label');
+  if (kind) {
+    btn.classList.add('open');
+    label.textContent = kind === 'roku' ? 'Roku Remote' : 'DirecTV Remote';
+  } else {
+    btn.classList.remove('open');
+    label.textContent = 'DirecTV Remote';
+  }
+}
+
+// Inline swap for #sourcesWrap -- the branded topbar (including the now-lit
+// quick-remote button) stays on screen the whole time, exactly like the TVs
+// page's TV Remote panel.
 function openRemote(slot) {
-  REMOTE_SLOT = slot;
   const source = SOURCES.find((s) => Number(s.slot) === Number(slot));
   if (!source) return;
+  REMOTE_SLOT = slot;
+  REMOTE_KIND = source.kind;
   document.getElementById('remoteTitle').textContent = source.kind === 'roku' ? 'ROKU' : 'DIRECTV';
   document.getElementById('remoteSub').textContent = `${source.label} · ${source.qam_channel}`;
   document.getElementById('remotePanelBody').innerHTML = source.kind === 'roku' ? rokuRemoteHtml() : directvRemoteHtml();
   renderRemoteStage();
+  document.getElementById('sourcesWrap').style.display = 'none';
   document.getElementById('remoteOverlay').classList.add('open');
+  setQuickButtonState(source.kind);
   if (source.kind === 'roku') fillRemoteRokuApps(slot);
 }
 
 function closeRemote() {
   document.getElementById('remoteOverlay').classList.remove('open');
+  document.getElementById('sourcesWrap').style.display = '';
   REMOTE_SLOT = null;
+  REMOTE_KIND = null;
+  setQuickButtonState(null);
 }
 
-// Topbar's persistent "DirecTV Remote" shortcut -- unlike a card's own
-// Remote… button (already scoped to one receiver), this one isn't bound to
-// anything yet, so with more than one DirecTV receiver configured it asks
-// first. With exactly one, it skips straight to that receiver's remote --
-// no pointless single-item picker.
-function openQuickDirectvRemote() {
+// Topbar's single, persistent Remote shortcut (screens/01, 03, 04's header
+// action -- "DirecTV Remote" idle, relabeling to whichever kind is actually
+// open). Tapping it while a remote is already open just closes it, same as
+// the X in the panel header. Tapping it idle asks which device -- grouped
+// DirecTV then Roku, so it doubles as the "only their devices" picker --
+// unless there's only one controllable device total, in which case it skips
+// straight to that device's remote rather than showing a pointless
+// single-item picker.
+function toggleQuickRemote() {
+  if (REMOTE_SLOT != null) { closeRemote(); return; }
+  openQuickRemotePicker();
+}
+
+function openQuickRemotePicker() {
   const directvSources = SOURCES.filter((s) => s.kind === 'directv');
-  if (!directvSources.length) { alert('No DirecTV receivers configured yet.'); return; }
-  if (directvSources.length === 1) { openRemote(directvSources[0].slot); return; }
-  document.getElementById('quickRemoteGrid').innerHTML = directvSources.map((s) => `
-    <button onclick="document.getElementById('quickRemoteDialog').close(); openRemote(${s.slot});">
-      ${escapeHtml(s.label)} <span class="muted">(${escapeHtml(s.qam_channel)})</span>
-    </button>
-  `).join('');
+  const rokuSources = SOURCES.filter((s) => s.kind === 'roku');
+  if (!directvSources.length && !rokuSources.length) { alert('No DirecTV receivers or Roku devices configured yet.'); return; }
+  const all = [...directvSources, ...rokuSources];
+  if (all.length === 1) { openRemote(all[0].slot); return; }
+  const groupHtml = (label, list) => !list.length ? '' : `
+    <div class="remote-pick-group-label">${label}</div>
+    ${list.map((s) => `
+      <button onclick="document.getElementById('quickRemoteDialog').close(); openRemote(${s.slot});">
+        ${escapeHtml(s.label)} <span class="muted">(${escapeHtml(s.qam_channel)})</span>
+      </button>`).join('')}`;
+  document.getElementById('quickRemoteGrid').innerHTML = groupHtml('DirecTV', directvSources) + groupHtml('Roku', rokuSources);
   document.getElementById('quickRemoteDialog').showModal();
 }
 
