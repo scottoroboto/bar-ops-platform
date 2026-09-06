@@ -31,7 +31,7 @@
         <div class="tb-divider"></div>
         <a href="/" title="Agent status"><span class="tb-conn-dot"></span></a>
       </div>
-      <button class="tb-quick" onclick="openQuickDirectvRemote()">
+      <button class="tb-quick" id="tbQuickRemote" onclick="toggleQuickRemote()">
         <svg width="15" height="19" viewBox="0 0 16 20" fill="none"><rect x="1" y="1" width="14" height="18" rx="3" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="5.5" r="1.5" fill="currentColor"/><path d="M4.5 10.5h7M4.5 14h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         <span class="label">DirecTV Remote</span>
       </button>
@@ -49,7 +49,7 @@
     </div>
   </div>
 
-  <div class="wrap">
+  <div class="wrap" id="sourcesWrap">
     <div class="card" id="favCard" style="display:none;">
       <h2>Favorites</h2>
       <div class="fav-grid" id="favGrid"></div>
@@ -58,11 +58,33 @@
     <p class="muted" id="refreshedAt" style="margin: 4px 0 12px;"></p>
     <div class="source-grid" id="sourcesBox"><p class="muted">Loading…</p></div>
   </div>
+
+  <!-- Device-matched remote panels (screens/03-staff-remote-directv.html,
+       screens/04-staff-remote-roku.html): opened from the topbar's single
+       contextual Remote button (toggleQuickRemote() in staff_sources.js).
+       Swaps in for #sourcesWrap in place, same as the TVs page's inline TV
+       Remote swap -- the branded topbar (including this same button, now lit
+       amber) stays visible the whole time, matching the mockups exactly.
+       #remoteStage shows ONLY sources of the same kind as the one bound
+       (REMOTE_KIND) -- per Scotto's explicit instruction, this is filtered
+       to "their devices" only rather than the mockup's literal mixed grid --
+       with exactly one tile lit (the source actually being driven; only one
+       device is ever controlled at a time). -->
+  <div class="wrap remote-overlay" id="remoteOverlay">
+    <div class="remote-stage" id="remoteStage"></div>
+    <div class="remote-panel">
+      <div class="remote-panel-header">
+        <div><span class="title" id="remoteTitle">REMOTE</span> <span class="sub" id="remoteSub"></span></div>
+        <button class="close" onclick="closeRemote()">&times;</button>
+      </div>
+      <div id="remotePanelBody"></div>
+    </div>
+  </div>
 </div>
 
 <dialog id="quickRemoteDialog">
-  <h2 style="margin-top:0;">DirecTV Remote</h2>
-  <p class="muted">Pick a receiver.</p>
+  <h2 style="margin-top:0;">Remote</h2>
+  <p class="muted">Pick a device.</p>
   <div class="remote-pick-grid" id="quickRemoteGrid"></div>
   <div style="margin-top:12px;">
     <button onclick="document.getElementById('quickRemoteDialog').close()">Cancel</button>
@@ -135,22 +157,6 @@
       </div>
     </div>
   </div>
-</div>
-
-<!-- Device-matched remote panels (screens/03-staff-remote-directv.html,
-     screens/04-staff-remote-roku.html): opened per source from its "Remote…"
-     button. #remotePanelBody is filled per-kind by openRemote() in staff_sources.js;
-     #remoteStage shows the full sources grid dimmed behind it, with only the
-     source the remote is bound to highlighted (single highlight, per §6). -->
-<div class="overlay remote-overlay" id="remoteOverlay">
-  <div class="remote-panel">
-    <div class="remote-panel-header">
-      <div><span class="title" id="remoteTitle">REMOTE</span> <span class="sub" id="remoteSub"></span></div>
-      <button class="close" onclick="closeRemote()">&times;</button>
-    </div>
-    <div id="remotePanelBody"></div>
-  </div>
-  <div class="remote-stage" id="remoteStage"></div>
 </div>
 
 <script src="staff_sources.js"></script>
