@@ -259,21 +259,24 @@ function sourceCardHtml(s) {
     </button>`;
 }
 
-// Primary tap action per kind/state -- everything else (Guide/Info/keypad,
-// the full remote, Roku's app grid) still lives one tap further in via the
-// channel picker / apps dialog / remote panel, unchanged from before.
+// Primary tap action per kind/state (round 4, 2026-09-06: a live card now
+// opens the full remote directly -- Scotto's explicit "when user clicks on
+// a source device, it opens the full remote for that device" -- replacing
+// the old channel-picker-first / apps-dialog-first behavior below). Asleep
+// and not-responding taps are unchanged: those still wake/recheck inline
+// rather than opening a remote for a device that isn't actually up yet.
 function cardTap(slot, kind) {
   const s = SOURCES.find((x) => Number(x.slot) === Number(slot));
   if (!s) return;
   if (kind === 'directv') {
     if (!s.live || !s.live.ok) { refreshSources(); return; } // not responding -- tap rechecks now instead of waiting for the next 15s tick
     if (s.live.active === false) { sendKey(slot, 'poweron').then(() => setTimeout(refreshSources, 800)); return; } // asleep -- tap to wake
-    openChannelPicker(slot);
+    openRemote(slot);
     return;
   }
   // roku
   if (!s.live || !s.live.ok) { refreshSources(); return; }
-  openRokuApps(slot);
+  openRemote(slot);
 }
 
 function renderSources() {
@@ -281,27 +284,6 @@ function renderSources() {
   const box = document.getElementById('sourcesBox');
   if (!SOURCES.length) { box.innerHTML = '<p class="muted">No sources configured yet. Add one from TSB Platform: Venue Control &rarr; Sources.</p>'; return; }
   box.innerHTML = SOURCES.map(sourceCardHtml).join('');
-}
-
-function parseChannel(text) {
-  const trimmed = String(text || '').trim();
-  if (!trimmed) return null;
-  const [major, minor] = trimmed.split('.');
-  if (!major || !/^\d+$/.test(major)) return null;
-  return { major: Number(major), minor: minor && /^\d+$/.test(minor) ? Number(minor) : undefined };
-}
-
-async function goToChannel(slot) {
-  const input = document.getElementById(`chan_${slot}`);
-  const parsed = parseChannel(input.value);
-  if (!parsed) { alert('Enter a channel like 206 or 206.1'); return; }
-  try {
-    await api(`/api/sources/${slot}/tune`, { method: 'POST', body: JSON.stringify(parsed) });
-    input.value = '';
-    await refreshSources();
-  } catch (e) {
-    alert(e.message);
-  }
 }
 
 async function sendKey(slot, key) {
@@ -358,6 +340,20 @@ let REMOTE_KIND = null; // 'directv' | 'roku' -- which kind of device this remot
 // Real SHEF key names (DirecTV's documented /remote/processKey vocabulary --
 // same list agent/lib/drivers/directv.js's processKey() passes straight
 // through as a query param, no translation layer needed here).
+//
+// Round 4 (2026-09-06) changes per Scotto's mockup-approval round:
+//  - Rec button removed, Ffwd relabeled "Fwd" (still sends the real 'ffwd'
+//    key -- only the button's label changed, not the command).
+//  - Full numeric keypad added (1-9, Dash, 0, Enter) so a channel can be
+//    dialed directly on this remote -- these are real SHEF digit/dash/enter
+//    keys, the same ones the retired channel-picker's keypad used to send,
+//    just moved onto this panel now that the picker is gone.
+//  - NOT added: a Volume/Mute row. SHEF's real key vocabulary has no
+//    volume/mute command -- DirecTV receivers pass audio straight through
+//    and don't expose volume control over SHEF, that's the *TV's* job (see
+//    the TVs page's own remote). The approved mockup included one for
+//    visual completeness against the physical remote, but wiring it here
+//    would just be dead buttons, so it's left off the real panel.
 function directvRemoteHtml() {
   return `
     <div class="remote-grid cols-2">
@@ -390,18 +386,27 @@ function directvRemoteHtml() {
       <button onclick="remoteKey('prev')">Prev</button>
       <button onclick="remoteKey('chandown')">CH ▼</button>
     </div>
-    <div class="remote-grid cols-5">
-      <button class="small" onclick="remoteKey('rew')">Rew</button>
-      <button class="small" onclick="remoteKey('play')">Play</button>
-      <button class="small" onclick="remoteKey('stop')">Stop</button>
-      <button class="small" onclick="remoteKey('ffwd')">Ffwd</button>
-      <button class="small" onclick="remoteKey('record')">Rec</button>
+    <div class="remote-grid cols-4">
+      <button onclick="remoteKey('rew')"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M11 12L20 6V18L11 12Z"/><path d="M4 12L13 6V18L4 12Z"/></svg>Rew</button>
+      <button onclick="remoteKey('play')"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4L20 12L6 20V4Z"/></svg>Play</button>
+      <button onclick="remoteKey('stop')"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>Stop</button>
+      <button onclick="remoteKey('ffwd')"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M13 12L4 6V18L13 12Z"/><path d="M20 12L11 6V18L20 12Z"/></svg>Fwd</button>
     </div>
-    <div class="remote-grid cols-2">
+    <div class="remote-grid cols-3">
+      <button class="keypad-digit" onclick="remoteKey('1')">1</button>
+      <button class="keypad-digit" onclick="remoteKey('2')">2</button>
+      <button class="keypad-digit" onclick="remoteKey('3')">3</button>
+      <button class="keypad-digit" onclick="remoteKey('4')">4</button>
+      <button class="keypad-digit" onclick="remoteKey('5')">5</button>
+      <button class="keypad-digit" onclick="remoteKey('6')">6</button>
+      <button class="keypad-digit" onclick="remoteKey('7')">7</button>
+      <button class="keypad-digit" onclick="remoteKey('8')">8</button>
+      <button class="keypad-digit" onclick="remoteKey('9')">9</button>
       <button onclick="remoteKey('dash')">Dash</button>
+      <button class="keypad-digit" onclick="remoteKey('0')">0</button>
       <button class="primary" onclick="remoteKey('enter')">Enter</button>
     </div>
-    <div class="remote-footer">Numeric channel entry lives in Channels… — this remote mirrors the physical one.</div>`;
+    <div class="remote-footer">Favorites live in the Favorites button up top — dial a channel directly with the keypad above.</div>`;
 }
 
 // Roku ECP's own key vocabulary (agent/lib/drivers/roku.js's keypress() is a
@@ -409,6 +414,16 @@ function directvRemoteHtml() {
 // not an internal mapping). PowerOn/PowerOff only do anything on a Roku TV;
 // a plain streaming stick/box has no power state and simply ignores them,
 // same as it would from the physical remote.
+//
+// Round 4 (2026-09-06): every physical button unchanged. The old "every app
+// as a small button" grid at the bottom is replaced with a compact
+// "Favorite Apps" row (fillRemoteRokuApps below) -- per Scotto's original
+// request to make the bottom 4 app shortcuts changeable. There's no saved
+// "favorite Roku apps" list in the config yet, so for now this shows this
+// Roku's first 4 real reported apps in the bigger tile style the mockup
+// used, with a "See all" link to the full list (the existing Apps dialog)
+// rather than a non-functional Edit button — a real per-device favorite-apps
+// picker (choose which 4, persisted) is a follow-up, not shipped here.
 function rokuRemoteHtml() {
   return `
     <div class="remote-grid cols-2">
@@ -431,28 +446,43 @@ function rokuRemoteHtml() {
       <button class="blank"></button>
     </div>
     <div class="remote-grid cols-2">
-      <button class="small" onclick="remoteKey('InstantReplay')">Replay</button>
-      <button class="small" onclick="remoteKey('Info')">Options</button>
+      <button onclick="remoteKey('InstantReplay')"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 1 2.5 5.8"/><path d="M4 17v-4h4"/></svg>Replay</button>
+      <button onclick="remoteKey('Info')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v16M4.5 8l15 8M19.5 8l-15 8"/></svg>Options</button>
     </div>
     <div class="remote-grid cols-3">
-      <button class="small" onclick="remoteKey('Rev')">Rev</button>
-      <button class="small" onclick="remoteKey('Play')">Play</button>
-      <button class="small" onclick="remoteKey('Fwd')">Fwd</button>
+      <button onclick="remoteKey('Rev')"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M11 12L20 6V18L11 12Z"/><path d="M4 12L13 6V18L4 12Z"/></svg>Rev</button>
+      <button onclick="remoteKey('Play')"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4L20 12L6 20V4Z"/></svg>Play</button>
+      <button onclick="remoteKey('Fwd')"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M13 12L4 6V18L13 12Z"/><path d="M20 12L11 6V18L20 12Z"/></svg>Fwd</button>
     </div>
-    <div id="remoteRokuApps"><p class="muted" style="margin-top:12px;">Loading apps…</p></div>
-    <div class="remote-footer">Tap an app to launch it. Full list: Apps… on the Sources tab.</div>`;
+    <div class="section-row">
+      <div class="section-label">Favorite Apps</div>
+    </div>
+    <div id="remoteRokuApps"><p class="muted" style="margin-top:8px;">Loading apps…</p></div>
+    <div class="remote-footer" id="remoteRokuFooter">Tap an app to launch it.</div>`;
 }
+
+const FAV_APP_DOT_COLORS = ['var(--amber-bright)', 'var(--blue-fg)', 'var(--on-fg)', 'var(--muted-strong)'];
 
 async function fillRemoteRokuApps(slot) {
   const el = document.getElementById('remoteRokuApps');
+  const footer = document.getElementById('remoteRokuFooter');
   if (!el) return;
   try {
     const { apps } = await api(`/api/sources/${slot}/apps`);
     if (REMOTE_SLOT !== slot) return; // closed/reopened for a different slot while this was in flight
     if (!apps.length) { el.innerHTML = '<p class="muted">No apps reported by this Roku.</p>'; return; }
-    el.innerHTML = `<div class="remote-grid cols-4">${apps.slice(0, 8).map((a) => `
-      <button class="small" onclick="launchRokuApp('${a.id}')">${escapeHtml(a.name)}</button>
+    const shown = apps.slice(0, 4);
+    el.innerHTML = `<div class="remote-grid" style="grid-template-columns:repeat(2,1fr);">${shown.map((a, i) => `
+      <button class="fav-app" onclick="launchRokuApp('${a.id}')">
+        <span class="fa-dot" style="background:${FAV_APP_DOT_COLORS[i % FAV_APP_DOT_COLORS.length]};">${escapeHtml((a.name || '?').slice(0, 1).toUpperCase())}</span>
+        <span class="fa-name">${escapeHtml(a.name)}</span>
+      </button>
     `).join('')}</div>`;
+    if (footer) {
+      footer.innerHTML = apps.length > shown.length
+        ? `Tap an app to launch it. <a href="#" onclick="event.preventDefault(); openRokuApps(${slot});">See all ${apps.length} apps…</a>`
+        : 'Tap an app to launch it.';
+    }
   } catch (e) {
     if (REMOTE_SLOT === slot) el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
@@ -489,33 +519,50 @@ function renderRemoteStage() {
   stage.innerHTML = filtered.map(remoteStageTileHtml).join('');
 }
 
-// Reflects which remote (if any) is currently open on the topbar's own two
-// dedicated buttons -- whichever one matches the open remote's kind lights
-// up amber, same "the button itself shows what's active" pattern as the TVs
-// page's TV Remote toggle. (Two separate always-visible buttons, one per
-// kind, rather than one relabeling button -- Scotto's explicit request.)
-function setQuickButtonState(kind) {
-  const directvBtn = document.getElementById('tbQuickRemoteDirectv');
-  const rokuBtn = document.getElementById('tbQuickRemoteRoku');
-  directvBtn.classList.toggle('open', kind === 'directv');
-  rokuBtn.classList.toggle('open', kind === 'roku');
+// "Now playing" line for a source's remote header / stage tile -- exactly
+// the same headline/callsign a card shows (sourceCardHtml above), just
+// packaged for reuse here and in the Favorites overlay's receiver picker.
+function sourceNowInfo(s) {
+  const slot = Number(s.slot);
+  const live = s.live;
+  if (s.kind === 'roku') {
+    if (!live || !live.ok) return { headline: 'Not responding', sub: s.label };
+    if (live.appId == null) return { headline: 'Idle', sub: 'home screen' };
+    return { headline: live.appName || `App ${live.appId}`, sub: 'streaming' };
+  }
+  if (!live || !live.ok) return { headline: 'Not responding', sub: s.label };
+  if (live.active === false) return { headline: 'Asleep', sub: s.label };
+  const t = SOURCE_TITLES.get(slot) || {};
+  return { headline: t.title || s.label, sub: t.callsign || formatChannel(live) || s.label };
 }
 
-// Inline swap for #sourcesWrap -- the branded topbar (including the now-lit
-// quick-remote button) stays on screen the whole time, exactly like the TVs
-// page's TV Remote panel.
+// Inline swap for #sourcesWrap -- the branded topbar stays on screen the
+// whole time, exactly like the TVs page's TV Remote panel.
+//
+// Header (round 4, 2026-09-06): the old ALL-CAPS "DIRECTV"/"ROKU" title line
+// is gone -- just the receiver name (bigger now) with its QAM slot below it,
+// and, right-justified next to the close button, what it's actually showing
+// right now (Scotto's original "make text for Directv number and current
+// station larger and right justified next to X" request, now implemented
+// for real rather than just in the mockup). There's no per-source "zone" in
+// this app's data model (zones belong to TVs, not sources/receivers) so the
+// second header line uses the receiver's real QAM slot instead of a
+// fabricated zone name.
 function openRemote(slot) {
   const source = SOURCES.find((s) => Number(s.slot) === Number(slot));
   if (!source) return;
   REMOTE_SLOT = slot;
   REMOTE_KIND = source.kind;
-  document.getElementById('remoteTitle').textContent = source.kind === 'roku' ? 'ROKU' : 'DIRECTV';
-  document.getElementById('remoteSub').textContent = `${source.label} · ${source.qam_channel}`;
+  const now = sourceNowInfo(source);
+  document.getElementById('remoteRcvr').textContent = source.label;
+  document.getElementById('remoteZone').textContent = `Channel ${source.qam_channel}`;
+  document.getElementById('remoteNowChan').textContent = now.headline;
+  document.getElementById('remoteNowProg').textContent = now.sub;
+  document.getElementById('remoteBlastRadius').innerHTML = blastRadiusHtml(slot); // §6: shown before the tap, not after
   document.getElementById('remotePanelBody').innerHTML = source.kind === 'roku' ? rokuRemoteHtml() : directvRemoteHtml();
   renderRemoteStage();
   document.getElementById('sourcesWrap').style.display = 'none';
   document.getElementById('remoteOverlay').classList.add('open');
-  setQuickButtonState(source.kind);
   if (source.kind === 'roku') fillRemoteRokuApps(slot);
 }
 
@@ -524,36 +571,6 @@ function closeRemote() {
   document.getElementById('sourcesWrap').style.display = '';
   REMOTE_SLOT = null;
   REMOTE_KIND = null;
-  setQuickButtonState(null);
-}
-
-// Topbar's two dedicated Remote shortcuts, one per kind -- "DirecTV Remote"
-// and "Roku Remote" sit side by side (Scotto's explicit request), each only
-// ever offering "their devices" (per his earlier "only their devices are
-// available" instruction) rather than one combined picker. Tapping a
-// button while that same kind's remote is already open just closes it, same
-// as the X in the panel header. Tapping the *other* kind's button while a
-// remote is open switches straight to it (openRemote() below fully replaces
-// the panel/stage/state, no need to close first). Tapping a button idle
-// asks which device of that kind -- unless there's only one, in which case
-// it skips straight to that device's remote rather than showing a
-// pointless single-item picker.
-function toggleQuickRemote(kind) {
-  if (REMOTE_SLOT != null && REMOTE_KIND === kind) { closeRemote(); return; }
-  openQuickRemotePicker(kind);
-}
-
-function openQuickRemotePicker(kind) {
-  const list = SOURCES.filter((s) => s.kind === kind);
-  if (!list.length) { alert(kind === 'roku' ? 'No Roku devices configured yet.' : 'No DirecTV receivers configured yet.'); return; }
-  if (list.length === 1) { openRemote(list[0].slot); return; }
-  document.getElementById('quickRemoteTitle').textContent = kind === 'roku' ? 'Roku Remote' : 'DirecTV Remote';
-  document.getElementById('quickRemoteSub').textContent = kind === 'roku' ? 'Pick a Roku device.' : 'Pick a DirecTV receiver.';
-  document.getElementById('quickRemoteGrid').innerHTML = list.map((s) => `
-    <button onclick="document.getElementById('quickRemoteDialog').close(); openRemote(${s.slot});">
-      ${escapeHtml(s.label)} <span class="muted">(${escapeHtml(s.qam_channel)})</span>
-    </button>`).join('');
-  document.getElementById('quickRemoteDialog').showModal();
 }
 
 async function remoteKey(key) {
@@ -565,167 +582,87 @@ async function remoteKey(key) {
 async function loadFavorites() {
   try {
     FAVORITES = await api('/api/favorites');
-    renderFavorites();
+    // No inline render here anymore -- favorites now only ever render
+    // inside the Favorites overlay (renderFavoritesOverlay below), built
+    // fresh each time it's opened rather than kept live on the page.
   } catch (e) {
     // Favorites are a convenience on top of manual tuning, which still
     // works -- fail quietly rather than blocking the page on this.
   }
 }
 
-function renderFavorites() {
-  const card = document.getElementById('favCard');
-  if (!FAVORITES.length) { card.style.display = 'none'; return; }
-  card.style.display = '';
-  document.getElementById('favGrid').innerHTML = FAVORITES.map((f, i) => `
-    <button class="fav-btn" style="${f.color ? `border-color:${escapeHtml(f.color)};` : ''}" onclick="openTuneFav(${i})">
-      <span class="cat">${escapeHtml(f.category)}</span>
-      <span>${escapeHtml(f.name)}</span>
-    </button>
-  `).join('');
-}
+// ---------------------------------------------------------------------
+// Favorites overlay (round 4, 2026-09-06), replacing both the old page-top
+// favorites strip + its "which receiver(s)" bulk-tune dialog AND the old
+// per-receiver channel picker's favorites grid. Favorites are DirecTV-only
+// (a favorite is a saved channel, and only DirecTV receivers have
+// channels), so this is one picker: every favorite on the left, every
+// DirecTV receiver on the right. Tap a receiver to select it, then tap a
+// favorite to tune that one receiver straight to it.
+// ---------------------------------------------------------------------
+let FAV_SELECTED_SLOT = null;
 
-let TUNE_FAV = null;
-
-function openTuneFav(i) {
-  TUNE_FAV = FAVORITES[i];
-  document.getElementById('tuneFavTitle').textContent = `Tune to ${TUNE_FAV.name}`;
-  document.getElementById('tuneFavMsg').innerHTML = '';
+function openFavorites() {
   const directvSources = SOURCES.filter((s) => s.kind === 'directv');
-  document.getElementById('tuneFavChecks').innerHTML = directvSources.length
-    ? directvSources.map((s) => `
-        <label style="display:flex; align-items:center; gap:8px; padding:4px 0;">
-          <input type="checkbox" class="tuneFavCheck" value="${s.slot}" checked>
-          ${escapeHtml(s.label)} <span class="muted">(slot ${s.slot})</span>
-        </label>
+  FAV_SELECTED_SLOT = directvSources.length ? Number(directvSources[0].slot) : null;
+  renderFavoritesOverlay();
+  document.getElementById('favOverlay').classList.add('open');
+  loadTvs(); // best-effort refresh so anything blast-radius-related elsewhere stays current
+}
+
+function closeFavorites() {
+  document.getElementById('favOverlay').classList.remove('open');
+}
+
+function selectFavReceiver(slot) {
+  FAV_SELECTED_SLOT = Number(slot);
+  renderFavoritesOverlay();
+}
+
+function renderFavoritesOverlay() {
+  const tileGrid = document.getElementById('favTileGrid');
+  const rcvGrid = document.getElementById('favRcvGrid');
+  const footer = document.getElementById('favFooter');
+  const directvSources = SOURCES.filter((s) => s.kind === 'directv');
+  const selected = directvSources.find((s) => Number(s.slot) === Number(FAV_SELECTED_SLOT));
+
+  tileGrid.innerHTML = FAVORITES.length
+    ? FAVORITES.map((f, i) => `
+        <button class="fav-tile" style="${f.color ? `border-left-color:${escapeHtml(f.color)};` : ''}" onclick="tuneFavoriteToSelected(${i})" ${selected ? '' : 'disabled'}>
+          <span class="cat">${escapeHtml(f.category)}</span>
+          <span class="name">${escapeHtml(f.name)}</span>
+        </button>
       `).join('')
+    : '<p class="muted">No favorites saved yet.</p>';
+
+  rcvGrid.innerHTML = directvSources.length
+    ? directvSources.map((s) => {
+        const now = sourceNowInfo(s);
+        const isSelected = Number(s.slot) === Number(FAV_SELECTED_SLOT);
+        return `
+          <button type="button" class="rcv-tile${isSelected ? ' selected' : ''}${s.live && s.live.ok === false ? ' alert' : ''}" onclick="selectFavReceiver(${s.slot})">
+            <span class="rt-slot">${escapeHtml(s.qam_channel)}</span>
+            <span class="rt-title">${escapeHtml(now.headline)}</span>
+            <span class="rt-sub">${escapeHtml(s.label)}</span>
+          </button>`;
+      }).join('')
     : '<p class="muted">No DirecTV receivers configured yet.</p>';
-  document.getElementById('tuneFavDialog').showModal();
-}
 
-async function submitTuneFav() {
-  const slots = Array.from(document.querySelectorAll('.tuneFavCheck:checked')).map((el) => Number(el.value));
-  if (!slots.length) { document.getElementById('tuneFavMsg').innerHTML = '<div class="msg error">Pick at least one receiver.</div>'; return; }
-  try {
-    const { results } = await api('/api/sources/bulk/tune', {
-      method: 'POST',
-      body: JSON.stringify({ slots, major: TUNE_FAV.major, minor: TUNE_FAV.minor }),
-    });
-    const failed = results.filter((r) => !r.ok);
-    if (failed.length) {
-      document.getElementById('tuneFavMsg').innerHTML = `<div class="msg error">${failed.length} of ${results.length} failed: ${escapeHtml(failed.map((f) => `slot ${f.slot} (${f.error})`).join(', '))}</div>`;
-    } else {
-      document.getElementById('tuneFavDialog').close();
-    }
-    await refreshSources();
-  } catch (e) {
-    document.getElementById('tuneFavMsg').innerHTML = `<div class="msg error">${escapeHtml(e.message)}</div>`;
+  if (!selected) {
+    footer.textContent = 'Pick a DirecTV receiver on the right, then tap a favorite to tune it.';
+  } else {
+    const affected = tvsOnSlot(selected.slot).length;
+    const blastNote = affected ? ` — affects ${affected} TV${affected === 1 ? '' : 's'} right now` : '';
+    footer.textContent = `Selected: ${selected.label} — tap a favorite on the left to tune it here${blastNote}.`;
   }
 }
 
-// ---------------------------------------------------------------------
-// Channel picker overlay (screens/02-staff-channel-picker.html). Scoped to
-// one receiver (PICKER_SLOT) at a time -- opened from that receiver's
-// "Channels…" button. Favorites grid sourced from the same /api/favorites
-// data as the on-page favorites strip (no separate/fixed channel guide);
-// live titles are fetched per-favorite via the existing proginfo endpoint
-// and filled in progressively rather than blocking the grid on all of them.
-// ---------------------------------------------------------------------
-let PICKER_SLOT = null;
-let pickerFillToken = 0;
-
-function openChannelPicker(slot) {
-  PICKER_SLOT = slot;
-  const source = SOURCES.find((s) => Number(s.slot) === Number(slot));
-  document.getElementById('pickerTitle').textContent = source ? `${source.label} — slot ${source.slot}` : `Slot ${slot}`;
-  document.getElementById('pickerBlastRadius').innerHTML = blastRadiusHtml(slot);
-  document.getElementById('pickerKeypadInput').value = '';
-  renderPickerFavorites();
-  document.getElementById('channelPicker').classList.add('open');
-  loadTvs(); // refresh in the background so blast radius is current next time it's shown
-}
-
-function closeChannelPicker() {
-  document.getElementById('channelPicker').classList.remove('open');
-  PICKER_SLOT = null;
-  pickerFillToken++; // stop any in-flight progressive fill from this session
-}
-
-function renderPickerFavorites() {
-  const grid = document.getElementById('pickerFavGrid');
-  if (!FAVORITES.length) { grid.innerHTML = '<p class="muted">No favorites saved yet — use the keypad below.</p>'; return; }
-  grid.innerHTML = FAVORITES.map((f, i) => `
-    <button class="channel-tile" style="${f.color ? `border-left-color:${escapeHtml(f.color)};` : ''}" onclick="tuneToFavorite(${i})">
-      <span class="cat">${escapeHtml(f.category)}</span>
-      <span class="name">${escapeHtml(f.name)}</span>
-      ${f.major != null ? `<span class="live-title loading" id="pickerLive_${i}">Loading…</span>` : ''}
-    </button>
-  `).join('');
-  fillPickerLiveTitles();
-}
-
-// Sequential on purpose -- DirecTV SHEF is single-threaded per receiver with
-// a ~350ms minimum gap between calls (Phase 2), so firing every favorite's
-// proginfo call at once wouldn't be faster, it would just queue behind
-// itself while the whole grid sat on "Loading…". One at a time means each
-// tile lights up with its real title as soon as that one call resolves.
-async function fillPickerLiveTitles() {
-  const myToken = ++pickerFillToken;
-  const slot = PICKER_SLOT;
-  for (let i = 0; i < FAVORITES.length; i++) {
-    const f = FAVORITES[i];
-    if (f.major == null) continue;
-    if (myToken !== pickerFillToken) return; // overlay closed or reopened for a different slot
-    const el = document.getElementById(`pickerLive_${i}`);
-    if (!el) continue;
-    try {
-      const info = await api(`/api/sources/${slot}/proginfo?major=${encodeURIComponent(f.major)}${f.minor != null ? `&minor=${encodeURIComponent(f.minor)}` : ''}`);
-      if (myToken !== pickerFillToken) return;
-      const title = (info && (info.title || info.callsign)) || '';
-      if (title) {
-        el.textContent = title;
-        el.classList.remove('loading');
-      } else {
-        el.remove(); // nothing usable came back -- drop the line rather than show a blank/wrong guess
-      }
-    } catch (e) {
-      if (myToken !== pickerFillToken) return;
-      el.remove();
-    }
-  }
-}
-
-async function tuneToFavorite(i) {
+async function tuneFavoriteToSelected(i) {
   const f = FAVORITES[i];
+  if (!f || FAV_SELECTED_SLOT == null) return;
   try {
-    await api(`/api/sources/${PICKER_SLOT}/tune`, { method: 'POST', body: JSON.stringify({ major: f.major, minor: f.minor }) });
-    closeChannelPicker();
-    await refreshSources();
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
-async function pickerSendKey(key) {
-  try {
-    await api(`/api/sources/${PICKER_SLOT}/key`, { method: 'POST', body: JSON.stringify({ key }) });
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
-function pickerKeypadPress(ch) {
-  const input = document.getElementById('pickerKeypadInput');
-  if (ch === 'clear') { input.value = ''; return; }
-  if (ch === 'back') { input.value = input.value.slice(0, -1); return; }
-  input.value += ch;
-}
-
-async function pickerKeypadTune() {
-  const parsed = parseChannel(document.getElementById('pickerKeypadInput').value);
-  if (!parsed) { alert('Enter a channel like 206 or 206.1'); return; }
-  try {
-    await api(`/api/sources/${PICKER_SLOT}/tune`, { method: 'POST', body: JSON.stringify(parsed) });
-    closeChannelPicker();
+    await api(`/api/sources/${FAV_SELECTED_SLOT}/tune`, { method: 'POST', body: JSON.stringify({ major: f.major, minor: f.minor }) });
+    closeFavorites();
     await refreshSources();
   } catch (e) {
     alert(e.message);

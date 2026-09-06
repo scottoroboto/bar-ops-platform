@@ -205,26 +205,13 @@ body.staff {
 }
 .staff .blast-radius .count { color: var(--amber-bright); font-weight: 700; }
 
-/* Full-screen channel-picker overlay (screens/02-staff-channel-picker.html). */
-.staff .overlay {
-  position: fixed; inset: 0; background: var(--base); z-index: 50;
-  display: none; flex-direction: column; overflow-y: auto;
-}
-.staff .overlay.open { display: flex; }
-.staff .overlay-header {
-  position: sticky; top: 0; background: var(--base); border-bottom: 1px solid var(--border);
-  padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; z-index: 1;
-}
-.staff .overlay-body { padding: 16px 20px 40px; }
-.staff .channel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.staff .channel-tile {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
-  min-height: 72px; text-align: left; border-left: 4px solid var(--border-strong);
-}
-.staff .channel-tile .cat { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-.staff .channel-tile .name { font-size: 15px; font-weight: 600; }
-.staff .channel-tile .live-title { font-size: 12px; color: var(--muted-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.staff .channel-tile .live-title.loading { color: var(--muted); font-style: italic; }
+/* Numeric keypad grid -- shared by the TVs page's TV remote keypad
+   (staff_tvs.js). The old full-screen channel-picker overlay that used to
+   live in this spot (screens/02-staff-channel-picker.html) was retired
+   round 4, 2026-09-06: its two jobs -- tuning a favorite, and dialing a
+   channel directly -- now live in the Favorites overlay and the DirecTV
+   remote panel's own keypad (.remote-grid button.keypad-digit below)
+   respectively. */
 .staff .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 320px; }
 .staff .keypad button { min-height: 60px; font-size: 20px; }
 
@@ -251,19 +238,15 @@ body.staff {
   .staff .wrap { padding: 14px 12px 70px; }
   .staff .card { padding: 14px 14px; }
   .staff .tv-grid { grid-template-columns: 1fr; }
-  .staff .channel-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
   .staff .keypad { max-width: 100%; }
-  .staff .overlay-body { padding: 14px 14px 32px; }
-  .staff .overlay-header { padding: 14px 14px; }
 }
 
 /* Device-matched remote panels (screens 03/04/06 of the design-pack round --
    docs/venue-control-gui-reconciliation.md's last open staff-UI item: "three
    dedicated remotes ... don't exist -- today's controls are the bare button
    lists"). Per screens/03 and 04 exactly: this is an INLINE swap for
-   #sourcesWrap, not a full-viewport overlay -- the branded topbar (with this
-   same remote lit amber, see .tb-quick.open above) stays visible the whole
-   time. The relevant device grid stays visible, dimmed, on the left (context
+   #sourcesWrap, not a full-viewport overlay -- the branded topbar stays
+   visible the whole time. The relevant device grid stays visible, dimmed, on the left (context
    -- "what am I actually driving"), with a fixed remote-button panel on the
    right, same shape screens 03/04 use. #remoteStage's own tiles carry their
    own dim/lit opacity individually (see .remote-stage-tile below) rather
@@ -304,19 +287,49 @@ body.staff {
 .staff .remote-panel-header .title { font-size: 17px; font-weight: 800; letter-spacing: 0.1em; }
 .staff .remote-panel-header .sub { font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .staff .remote-panel-header button.close { background: none; border: none; color: var(--muted); font-size: 22px; min-height: 0; padding: 0 4px; }
+
+/* Sources page's own remote header (round 4, 2026-09-06): #remoteOverlay only
+   -- the TVs page's TV Remote keeps the plain .title/.sub header above.
+   No more ALL-CAPS "DIRECTV"/"ROKU" kicker line -- just the receiver name
+   (bigger, no title line competing for space) with its QAM slot below, and
+   what it's showing right now, right-justified next to the close button
+   (Scotto's original "larger and right justified next to X" request). */
+#remoteOverlay .remote-panel-header { align-items: flex-start; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+#remoteOverlay .remote-panel-header .rcvr { font-size: 21px; font-weight: 800; letter-spacing: -0.01em; color: var(--text); line-height: 1.15; }
+#remoteOverlay .remote-panel-header .zone { font-size: 13.5px; color: var(--muted-strong); font-weight: 700; margin-top: 3px; }
+#remoteOverlay .remote-panel-header .now-row { display: flex; align-items: flex-start; gap: 10px; }
+#remoteOverlay .remote-panel-header .now { text-align: right; }
+#remoteOverlay .remote-panel-header .now-chan { font-size: 19px; font-weight: 800; color: var(--amber-bright); line-height: 1.15; letter-spacing: -0.01em; max-width: 190px; }
+#remoteOverlay .remote-panel-header .now-prog { font-size: 12.5px; color: var(--muted-strong); font-weight: 700; margin-top: 3px; }
+
 .staff .remote-grid { display: grid; gap: 8px; margin-top: 8px; }
 .staff .remote-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
 .staff .remote-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
 .staff .remote-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
 .staff .remote-grid.cols-5 { grid-template-columns: repeat(5, 1fr); }
+/* Bigger/bolder (round 3-4): every remote button's label and hit area grew
+   from the original 12.5px/56px per Scotto's explicit "all the text to be
+   bigger and bolder... it's hard to read" feedback. */
 .staff .remote-grid button {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 3px; font-size: 12.5px; letter-spacing: 0.03em; min-height: 56px;
+  gap: 4px; font-size: 15.5px; font-weight: 800; letter-spacing: 0.01em; min-height: 62px;
 }
 .staff .remote-grid button.blank { visibility: hidden; pointer-events: none; }
 .staff .remote-grid button svg { flex-shrink: 0; }
-.staff .remote-grid button.keypad-digit { font-size: 22px; font-weight: 600; }
-.staff .remote-footer { margin-top: auto; padding-top: 12px; font-size: 12px; color: var(--muted); text-align: center; }
+.staff .remote-grid button.keypad-digit { font-size: 25px; font-weight: 800; }
+.staff .remote-footer { margin-top: auto; padding-top: 12px; font-size: 12.5px; font-weight: 600; color: var(--muted-strong); text-align: center; }
+.staff .remote-footer a { font-weight: 700; }
+
+/* Roku remote's "Favorite Apps" section (round 4) -- replaces the old plain
+   grid-of-every-app-as-a-small-button. */
+.staff .section-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
+.staff .section-label { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; color: var(--muted-strong); text-transform: uppercase; }
+.staff .fav-app {
+  display: flex !important; flex-direction: row !important; align-items: center !important;
+  gap: 10px !important; justify-content: flex-start !important; min-height: 56px !important; padding: 8px 10px !important; text-align: left;
+}
+.staff .fa-dot { width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: var(--base); }
+.staff .fa-name { font-size: 14.5px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Single-highlight rule (§6: "one highlight, one meaning per screen") -- the
    remote's stage shows exactly one lit tile: the source or TV(s) actually
@@ -349,27 +362,19 @@ body.staff {
 .staff-topbar .tb-conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--on-fg); flex-shrink: 0; }
 .staff-topbar .tb-conn-dot[title] { cursor: help; }
 
-/* Two dedicated remote buttons (DirecTV Remote, Roku Remote) sitting side by
-   side, rather than one button that relabels itself -- Scotto's explicit
-   request. Wrapped so the pair counts as a single flex child of
-   .staff-topbar-inner (which is justify-content:space-between) -- otherwise
-   the two buttons would space apart from each other instead of sitting
-   together. */
-.staff-topbar .tb-quick-group { display: flex; align-items: center; gap: 10px; }
-
-.staff-topbar .tb-quick {
-  display: flex; align-items: center; gap: 8px; background: none;
-  border: 1.5px solid var(--border-mid); border-radius: 8px; padding: 10px 16px;
-  font-size: 13.5px; font-weight: 700; letter-spacing: 0.05em; color: var(--muted-strong);
-  min-height: 0; text-transform: uppercase;
+/* Favorites button (round 4, 2026-09-06), right next to the logo -- replaces
+   the two dedicated DirecTV/Roku "Remote" buttons that used to sit here
+   (tapping a source card now opens its full remote directly, so a separate
+   remote-launcher button is no longer needed; only the favorites picker
+   still needs a persistent entry point). Opens #favOverlay. */
+.staff-topbar .tb-fav-btn {
+  display: flex; align-items: center; gap: 7px; font-family: inherit;
+  font-size: 14px; font-weight: 800; letter-spacing: 0.02em; color: var(--amber-bright);
+  background: var(--amber-dim); border: 1px solid var(--amber-dim-strong);
+  padding: 10px 16px; border-radius: 8px; min-height: 0; cursor: pointer;
 }
-.staff-topbar .tb-quick:hover { background: #2b241a; border-color: var(--border-strong); }
-.staff-topbar .tb-quick svg { flex-shrink: 0; }
-/* Active state while a remote panel is open (screens 03/04) -- same lit-amber
-   treatment as the TVs page's .tva-remote.open, so the button itself shows
-   which remote is currently driving, and doubles as an obvious close toggle. */
-.staff-topbar .tb-quick.open { color: var(--base); background: var(--amber); border-color: var(--amber); }
-.staff-topbar .tb-quick.open:hover { background: var(--amber); }
+.staff-topbar .tb-fav-btn:hover { background: var(--amber-dim-strong); }
+.staff-topbar .tb-fav-btn svg { flex-shrink: 0; }
 
 .staff-topbar .tb-nav { display: flex; align-items: center; gap: 8px; }
 .staff-topbar .tb-nav a {
@@ -386,7 +391,7 @@ body.staff {
 .staff-topbar .tb-clock .date { font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; color: var(--text); }
 
 @media (max-width: 900px) {
-  .staff-topbar .tb-quick span.label { display: none; } /* icon-only when the bar gets tight */
+  .staff-topbar .tb-fav-btn span.label { display: none; } /* icon-only when the bar gets tight */
   .staff-topbar .tb-nav a { padding: 10px 12px; }
 }
 
@@ -395,13 +400,20 @@ body.staff {
    for exactly which fields feed which piece of text. No time-remaining
    progress bar: real DirecTV/Roku data gives a title and a channel, not a
    live game clock, so that element was dropped rather than faked. */
+/* Round 4 (2026-09-06): tiles bumped up from minmax(255px)/148px min-height
+   -- with the old page-top Favorites card gone (favorites moved to their
+   own overlay, see .fav-backdrop below) there's more headroom before
+   scrolling kicks in on an iPad, so the freed space goes into bigger tiles
+   rather than just blank margin, per Scotto's "bigger" request. Kept
+   responsive (auto-fill) rather than a hard-coded column/row count, so this
+   still holds up if a venue's source count isn't exactly today's 16. */
 .staff .source-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
-  gap: 16px; margin-top: 4px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: 18px; margin-top: 4px;
 }
 .staff .source-card {
   background: var(--card-alt); border: 1px solid var(--border-strong); border-radius: 10px;
-  padding: 14px 16px; min-height: 148px; display: flex; flex-direction: column;
+  padding: 15px 17px; min-height: 160px; display: flex; flex-direction: column;
   justify-content: space-between; text-align: left; font-family: inherit;
   cursor: pointer;
 }
@@ -464,16 +476,76 @@ body.staff {
 .staff .source-card.sc-open .sc-headline { font-size: 19px; font-weight: 600; color: var(--border-strong); }
 .staff .source-card.sc-open .sc-sub { color: var(--border-strong); }
 
-/* Remote-picker dialog (header's single quick-launch button, when more than
-   one DirecTV receiver / Roku device exists and it needs to ask which one --
-   grouped by kind so it doubles as the "only their devices" picker). */
-.staff .remote-pick-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
-.staff .remote-pick-grid button { text-align: left; justify-content: flex-start; }
-.staff .remote-pick-group-label {
-  font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--muted); margin: 10px 0 -2px;
+/* Favorites overlay (round 4, 2026-09-06) -- opened from the topbar's
+   Favorites button. A fixed, dimmed-backdrop modal (unlike the inline
+   remote-overlay swap above) since it's reachable from anywhere on the
+   page, not scoped to one card. Two columns: every saved favorite on the
+   left in its own warm-tinted panel, every DirecTV receiver on the right
+   in a neutral panel, a divider between -- tap a receiver, then tap a
+   favorite to tune it there. */
+.staff .fav-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 55;
+  display: none; align-items: center; justify-content: center; padding: 20px;
 }
-.staff .remote-pick-group-label:first-child { margin-top: 0; }
+.staff .fav-backdrop.open { display: flex; }
+.staff .fav-panel {
+  width: 100%; max-width: 1040px; max-height: 100%; background: var(--card);
+  border: 1px solid var(--border-strong); border-radius: 14px; padding: 18px 22px;
+  display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.staff .fav-panel-header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.staff .fav-panel-header h1 { font-size: 20px; font-weight: 800; margin: 0; color: var(--text); }
+.staff .fav-panel-header button.close { background: none; border: none; color: var(--muted); font-size: 26px; min-height: 0; padding: 0; line-height: 1; cursor: pointer; }
+
+.staff .fav-panel-cols { flex: 1; min-height: 0; display: flex; gap: 0; overflow-y: auto; }
+
+.staff .col-favs {
+  width: 380px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0;
+  background: #241C12; border: 1px solid var(--amber-dim); border-radius: 12px; padding: 12px 14px;
+}
+.staff .col-favs h2 { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--amber-bright); margin: 0 0 10px; }
+.staff .col-favs h2 svg { color: var(--amber); flex-shrink: 0; }
+.staff .fav-tile-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; align-content: start; }
+.staff .fav-tile {
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px;
+  min-height: 54px; border-left: 3px solid var(--border-strong); border-radius: 8px;
+  background: var(--card-raised); border-top: 1px solid var(--border-strong); border-right: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong);
+  padding: 8px 12px; cursor: pointer; text-align: left; font-family: inherit;
+}
+.staff .fav-tile:disabled { opacity: 0.45; cursor: not-allowed; }
+.staff .fav-tile .cat { font-size: 10.5px; font-weight: 700; color: var(--muted-strong); text-transform: uppercase; letter-spacing: 0.03em; }
+.staff .fav-tile .name { font-size: 13.5px; font-weight: 800; color: var(--text); line-height: 1.15; }
+
+.staff .col-divider { width: 1px; align-self: stretch; background: var(--border-strong); margin: 0 18px; flex-shrink: 0; }
+
+.staff .col-directv {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0;
+  background: var(--card-alt); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+}
+.staff .col-directv h2 { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-strong); margin: 0 0 10px; }
+.staff .col-directv h2 svg { color: var(--muted-strong); flex-shrink: 0; }
+.staff .rcv-tile-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; align-content: start; }
+.staff .rcv-tile {
+  border-radius: 9px; background: var(--card-raised); border: 1px solid var(--border-strong);
+  padding: 12px 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 6px;
+  min-height: 92px; cursor: pointer; text-align: left; font-family: inherit;
+}
+.staff .rcv-tile .rt-slot { font-size: 12.5px; font-weight: 800; color: var(--muted); }
+.staff .rcv-tile .rt-title { font-size: 16px; font-weight: 800; color: var(--muted-strong); line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staff .rcv-tile .rt-sub { font-size: 12px; font-weight: 700; color: var(--muted); }
+.staff .rcv-tile.selected { background: #2A2013; border: 2px solid var(--amber); }
+.staff .rcv-tile.selected .rt-slot { color: var(--amber); }
+.staff .rcv-tile.selected .rt-title { color: var(--text); }
+.staff .rcv-tile.alert { border-color: var(--off-bg); }
+.staff .rcv-tile.alert .rt-title { color: #F0BAB0; }
+
+.staff .fav-panel-footer { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--muted-strong); text-align: center; }
+
+@media (max-width: 900px) {
+  .staff .fav-panel-cols { flex-direction: column; }
+  .staff .col-favs { width: 100%; }
+  .staff .col-divider { display: none; }
+}
 
 /* ---------------------------------------------------------------------
    TVs page rebuild (screens/05-staff-tvs.html + screens/06-staff-remote-tv.html,
