@@ -61,8 +61,14 @@ header.topbar .topnav .crumb-sep { color: var(--line); }
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px;
   font-size: 13.5px; font-weight: 600; color: #C6D4F2; margin-bottom: 2px; cursor: pointer;
   background: transparent; border: none; text-align: left; width: 100%; font-family: inherit;
+  position: relative;
 }
 #sidebarNav button.nav-item .dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; flex-shrink: 0; }
+/* Icon: hidden on desktop (Concept A's approved look uses the dot only) — the two mobile
+   breakpoints below turn it on and hide the dot instead, since a text-only nav item doesn't
+   work in a bottom tab bar or a collapsed icon rail. */
+#sidebarNav button.nav-item .nav-icon { display: none; flex-shrink: 0; }
+#sidebarNav button.nav-item .nav-icon svg { width: 20px; height: 20px; display: block; }
 #sidebarNav button.nav-item.active { background: linear-gradient(90deg, var(--ink3), var(--ink2)); color: #fff; }
 #sidebarNav button.nav-item.active .dot { background: var(--gold); }
 #sidebarNav .nav-badge { margin-left: auto; background: var(--danger); color: #fff; border-radius: 999px; font-size: 10px; font-weight: 700; padding: 1px 6px; }
@@ -147,10 +153,57 @@ table th, table td { border-bottom: 1px solid var(--line); }
 .chip .p { font-weight: 700; }
 .add-link { font-size: 11px; color: var(--ink3); font-weight: 700; cursor: pointer; text-decoration: none; }
 
+/* ---- narrow baseline: applies under both mobile breakpoints below, and to any
+   in-between tablet width that matches neither ---- */
 @media (max-width: 860px) {
-  .wrap.wide#app { flex-direction: column; }
-  #sidebarNav { width: 100%; flex-direction: row; flex-wrap: wrap; padding: 12px; }
-  #sidebarNav .brand-row { padding: 4px 8px; width: 100%; }
-  #sidebarNav .pending-banner { margin-top: 8px; width: 100%; }
-  .sched-main { padding: 18px 16px 60px; }
+  .sched-main { padding: 18px 16px 84px; }
+}
+
+/* ---- mobile portrait (phone held upright): bottom tab bar, single-column content,
+   matches the approved "Scheduling Mobile Mockups" portrait design ---- */
+@media (max-width: 640px) and (orientation: portrait) {
+  .wrap.wide#app { flex-direction: column; min-height: calc(100vh - 56px); }
+  #sidebarNav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+    width: 100%; height: 68px; flex-direction: row; align-items: stretch;
+    padding: 0; background: var(--card); color: var(--ink);
+    border-top: 1px solid var(--line); box-shadow: 0 -2px 12px rgba(22,35,63,0.06);
+  }
+  #sidebarNav .brand-row, #sidebarNav .pending-banner { display: none; }
+  #sidebarNav button.nav-item {
+    flex: 1; flex-direction: column; justify-content: center; gap: 3px;
+    padding: 0; margin-bottom: 0; border-radius: 0; color: var(--muted); font-size: 10px;
+  }
+  #sidebarNav button.nav-item .dot { display: none; }
+  #sidebarNav button.nav-item .nav-icon { display: block; }
+  #sidebarNav button.nav-item.active { background: none; color: var(--ink3); }
+  #sidebarNav .nav-badge { position: absolute; top: 2px; left: 50%; margin-left: 8px; }
+  .sched-topline h1 { font-size: 16px; }
+  #schedWho { display: none; }
+  .sched-main { padding-bottom: 84px; }
+}
+
+/* ---- mobile landscape (phone rotated sideways): collapsed icon-only rail, and the
+   My Schedule cards laid out 2-up to use the extra width instead of more scrolling —
+   matches the approved "Scheduling Mobile Mockups" landscape design ---- */
+@media (max-height: 500px) and (orientation: landscape) {
+  .wrap.wide#app { min-height: 100vh; }
+  #sidebarNav { width: 64px; padding: 12px 0; align-items: center; }
+  #sidebarNav .brand-row { padding: 0; margin-bottom: 12px; justify-content: center; }
+  #sidebarNav .brand-row .brand-name, #sidebarNav .brand-row .brand-sub { display: none; }
+  #sidebarNav .pending-banner { display: none; }
+  #sidebarNav button.nav-item { width: 44px; justify-content: center; padding: 10px 0; gap: 0; }
+  #sidebarNav button.nav-item .dot { display: none; }
+  #sidebarNav button.nav-item .nav-icon { display: block; }
+  #sidebarNav button.nav-item .nav-label { display: none; }
+  #sidebarNav .nav-badge {
+    position: absolute; top: 6px; right: 6px; margin-left: 0;
+    width: 8px; height: 8px; padding: 0; font-size: 0;
+  }
+  .sched-main { padding: 14px 18px; overflow-y: auto; }
+  .sched-topline { margin-bottom: 10px; }
+  .sched-topline h1 { font-size: 15px; }
+  #schedWho { display: none; }
+  #panelMine { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  #panelMine .card { padding: 12px; }
 }
