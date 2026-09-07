@@ -20,6 +20,8 @@
     <input id="email" type="email">
     <label for="phone">Phone</label>
     <input id="phone" type="tel">
+    <label for="address">Address</label>
+    <input id="address" placeholder="Street, city, state, ZIP">
     <button class="primary" onclick="saveProfile()">Save changes</button>
   </div>
 
@@ -46,9 +48,10 @@
     const name = document.getElementById('name').value.trim();
     const email = document.getElementById('email').value.trim();
     const phone = document.getElementById('phone').value.trim();
+    const address = document.getElementById('address').value.trim();
     if (!name) { showMsg('Name is required.', 'error'); return; }
     try {
-      const result = await api('/api/me/profile', { method: 'POST', body: { name, email, phone } });
+      const result = await api('/api/me/profile', { method: 'POST', body: { name, email, phone, address } });
       const person = getPerson();
       if (person && result.person) {
         person.name = result.person.name;
@@ -71,6 +74,7 @@
       document.getElementById('name').value = me.person.name || '';
       document.getElementById('email').value = me.person.email || '';
       document.getElementById('phone').value = me.person.phone || '';
+      document.getElementById('address').value = me.person.address || '';
     } catch (e) {
       // fall back to whatever was cached locally
     }

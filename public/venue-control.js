@@ -14,12 +14,16 @@ function showMsg(text, kind) {
   document.getElementById('msgBox').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
 }
 
+let ME = null;
+let TRUSTED_DEVICE = null;
+
 (async function init() {
   const person = requireAuth();
   if (!person) return;
+  ME = person;
 
-  const trustedDevice = await getTrustedDeviceInfo();
-  const allowed = person.role === 'owner' || !!trustedDevice;
+  TRUSTED_DEVICE = await getTrustedDeviceInfo();
+  const allowed = person.role === 'owner' || !!TRUSTED_DEVICE;
 
   if (!allowed) {
     document.getElementById('app').innerHTML =
@@ -31,8 +35,8 @@ function showMsg(text, kind) {
   renderTopbar('Venue Control');
 
   const noteEl = document.getElementById('deviceNote');
-  if (trustedDevice) {
-    noteEl.textContent = `This device is trusted for ${trustedDevice.locationName}.`;
+  if (TRUSTED_DEVICE) {
+    noteEl.textContent = `This device is trusted for ${TRUSTED_DEVICE.locationName}.`;
   } else if (person.role === 'owner') {
     noteEl.textContent = 'Viewing as owner — this browser is not a trusted device.';
   }
@@ -52,9 +56,51 @@ function showMsg(text, kind) {
   if (person.role === 'owner') {
     document.getElementById('adminArea').style.display = '';
     initVcTabs();
+    renderThisDeviceStatus();
     await loadSites();
   }
 })();
+
+// ---- This device / trust this browser ----------------------------------
+// Ported from the Employees app's old "Shared device" card (removed from
+// there 2026-09-07) into Venue Control, since Venue Control is the only
+// thing that actually depends on device trust — see
+// getTrustedDeviceInfo()'s doc comment in common.js. Same
+// POST /api/devices flow as before; only the UI moved.
+function renderThisDeviceStatus() {
+  const el = document.getElementById('thisDeviceStatus');
+  if (TRUSTED_DEVICE) {
+    el.textContent = `This browser is trusted for ${TRUSTED_DEVICE.locationName}.`;
+  } else {
+    el.textContent = 'This browser is not currently a trusted device.';
+  }
+}
+
+function populateDeviceLocationSelect() {
+  const select = document.getElementById('deviceLocation');
+  if (!select) return;
+  const prevValue = select.value;
+  select.innerHTML = SITES.map((s) => `<option value="${s.location_id}">${escapeHtml(s.location_name)}</option>`).join('');
+  const stillValid = SITES.some((s) => String(s.location_id) === prevValue);
+  if (stillValid) select.value = prevValue;
+}
+
+async function trustThisDevice() {
+  const label = document.getElementById('deviceLabel').value.trim() || 'Shared device';
+  const locationId = document.getElementById('deviceLocation').value;
+  const resultEl = document.getElementById('deviceResult');
+  if (!locationId) { resultEl.innerHTML = '<p class="msg error">Pick a location first.</p>'; return; }
+  try {
+    const result = await withStepUp(() => api('/api/devices', { method: 'POST', body: { label, locationId } }));
+    setDeviceToken(result.deviceToken);
+    TRUSTED_DEVICE = await getTrustedDeviceInfo();
+    renderThisDeviceStatus();
+    const site = SITES.find((s) => String(s.location_id) === String(locationId));
+    resultEl.innerHTML = `<p class="msg success">This browser is now a trusted device for ${escapeHtml(site ? site.location_name : 'this location')}. Staff can open Venue Control here without signing in individually.</p>`;
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
 
 // ---- Section tabs (docs/venue-control-gui-reconciliation.md §5 item 5:
 // "Admin page restructure — sidebar/sections instead of one scroll"). Purely
@@ -88,6 +134,7 @@ async function loadSites() {
     SITES = await api('/api/venue-control/sites');
     renderSitesList();
     populateSourcesLocationSelect();
+    populateDeviceLocationSelect();
   } catch (e) {
     document.getElementById('sitesList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }

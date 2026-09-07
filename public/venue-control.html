@@ -39,6 +39,18 @@
     </nav>
 
   <section class="vc-panel" data-panel="sites">
+  <div class="card" id="thisDeviceCard" style="margin-bottom:16px;">
+    <h2>This device</h2>
+    <p class="muted" id="thisDeviceStatus">Checking…</p>
+    <p class="muted">Trusting this browser lets staff open Venue Control on it without signing in individually — e.g. a shared iPad mounted at the bar. Anyone using this browser afterward can reach Venue Control for the location below; this doesn't change who can sign in to anything else.</p>
+    <label for="deviceLabel">Device label</label>
+    <input id="deviceLabel" placeholder="e.g. Bar iPad — Downtown">
+    <label for="deviceLocation">Location</label>
+    <select id="deviceLocation"></select>
+    <button class="secondary" onclick="trustThisDevice()">Trust this device (this browser)</button>
+    <div id="deviceResult"></div>
+  </div>
+
   <div class="card" id="sitesCard">
     <h2>Sites</h2>
     <p class="muted">Turn Venue Control on or off per location. A location with

@@ -38,8 +38,10 @@ function getDeviceToken() { return localStorage.getItem('bp_deviceToken'); }
 function setDeviceToken(t) { if (t) localStorage.setItem('bp_deviceToken', t); else localStorage.removeItem('bp_deviceToken'); }
 
 // Whether THIS BROWSER (not the logged-in person) has ever been trusted via
-// "Trust this device" (see trustThisDevice() in employees.js and the
-// devices table) — independent of who's currently signed in on it. Used to
+// "Trust this device" (see trustThisDevice() in venue-control.js — moved
+// here from employees.js 2026-09-07, since Venue Control is the only thing
+// that actually depends on it — and the devices table) — independent of
+// who's currently signed in on it. Used to
 // gate anything that should only be reachable from one specific physical
 // device (e.g. Venue Control on the location's iPad), as opposed to normal
 // role-based gating. Returns null if untrusted/unverifiable, or
@@ -219,6 +221,17 @@ function fmtDateTime(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
   return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+// Date-only (no time) — hire dates, certification-acquired dates. Appends
+// noon UTC to a bare 'YYYY-MM-DD' (what a <input type=date> and Postgres
+// `date` column both send) so it doesn't roll back a day in timezones west
+// of UTC, the way `new Date('2024-01-08')` (parsed as midnight UTC) can.
+function fmtDate(value) {
+  if (!value) return '—';
+  const s = String(value);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + 'T12:00:00') : new Date(s);
+  return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function renderTopbar(activeLabel) {
