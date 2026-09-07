@@ -1,10 +1,17 @@
 // Cloud <-> agent transport (docs/venue-control.md §3/§8.1): outbound HTTPS
 // only, per-site bearer token, simple polling since staff use the local UI
-// and cloud->agent commands are rare. Phase 0 wires register/config/
-// heartbeat only -- /api/venue/agent/commands and /results (queued remote
-// actions) land once there's something on the agent worth commanding.
+// and cloud->agent commands are rare. Phase 0 wired register/config/
+// heartbeat only; pollCommands() below is that "once there's something on
+// the agent worth commanding" queue arriving -- the remote Discovery &
+// Adopt trigger (claude/venue-control-gui-reconciliation.md §4, Option B)
+// is the first thing that needed it. Piggybacks on this same 30s tick
+// rather than a separate timer, same "poll is rare and cheap" posture as
+// pullConfig/heartbeat -- a scan request can sit for up to one tick before
+// an agent notices it, which the cloud admin UI shows honestly rather than
+// pretending it's instant.
 const os = require('os');
 const cache = require('./cache');
+const discovery = require('./discovery');
 const { CLOUD_URL, AGENT_TOKEN } = require('../config');
 
 const AGENT_VERSION = require('../package.json').version;
@@ -169,6 +176,59 @@ async function pushActivity(entries) {
   return data;
 }
 
+// The cloud-admin Discovery & Adopt tab's "Scan network" button enqueues a
+// vc_agent_commands row (server/index.js's POST .../discovery/scan) rather
+// than calling the agent directly -- there's no inbound path to do that.
+// This claims any pending commands for this site (the UPDATE...RETURNING
+// on the cloud side marks them 'running' atomically, so a restart mid-poll
+// can't cause two ticks to both pick up and double-run the same one) and
+// runs each in turn. Only 'discovery_scan' exists today; an unknown type
+// reports back as an error rather than being silently skipped, so a future
+// command type added cloud-side-only-so-far fails loudly instead of just
+// sitting there forever looking "picked up" with nothing happening.
+async function pollCommands() {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/commands`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`commands poll failed: ${res.status} ${await res.text()}`);
+  const { commands } = await res.json();
+  for (const cmd of commands || []) {
+    await runCommand(cmd);
+  }
+}
+
+async function runCommand(cmd) {
+  try {
+    let result;
+    if (cmd.type === 'discovery_scan') {
+      const payload = cmd.payload || {};
+      const config = cache.get('config') || {};
+      const ranges = Array.isArray(payload.ranges) && payload.ranges.length
+        ? payload.ranges
+        : config.site && config.site.scan_ranges;
+      if (!Array.isArray(ranges) || !ranges.length) {
+        throw new Error('No scan ranges given and none configured for this site -- set scan_ranges on the site, or pass ranges when starting the scan.');
+      }
+      const run = await discovery.runScan({ ranges, deep: !!payload.deep });
+      result = { localRunId: run.id, cloudRunId: run.cloud_run_id, deviceCount: run.devices.length, synced: run.synced };
+      if (!run.synced) throw new Error(`Scan completed locally but failed to sync to the cloud: ${run.sync_error || 'unknown error'}. It will show up once resynced.`);
+    } else {
+      throw new Error(`Unknown command type "${cmd.type}" -- this agent build doesn't know how to run it.`);
+    }
+    await reportCommandResult(cmd.id, 'done', result, null);
+  } catch (err) {
+    console.error(`[sync] command #${cmd.id} (${cmd.type}) failed:`, err.message);
+    await reportCommandResult(cmd.id, 'error', null, err.message).catch((reportErr) => {
+      console.error(`[sync] also failed to report command #${cmd.id}'s error back to the cloud:`, reportErr.message);
+    });
+  }
+}
+
+async function reportCommandResult(commandId, status, result, error) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/commands/${commandId}/result`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ status, result, error }),
+  });
+  if (!res.ok) throw new Error(`command result push failed: ${res.status} ${await res.text()}`);
+}
+
 // Once-a-day nightly backup (§6), driven off the existing 30s poll loop
 // rather than a second timer -- checked on every heartbeat tick, but only
 // actually fires when at least 23h have passed since the last successful
@@ -201,6 +261,7 @@ function start() {
       await register();
       await pullConfig();
       await heartbeat();
+      await pollCommands();
     } catch (err) {
       console.error('[sync] startup sequence failed:', err.message);
       cache.set('lastHeartbeatOk', false);
@@ -211,6 +272,7 @@ function start() {
     try {
       await pullConfig();
       await heartbeat();
+      await pollCommands();
       await maybeTakeNightlyBackup();
     } catch (err) {
       console.error('[sync] poll failed:', err.message);
@@ -228,4 +290,5 @@ module.exports = {
   register, pullConfig, heartbeat, start, stop,
   reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems,
   takeBackupNow, listBackups, restoreBackup, pushActivity, pushHealth,
+  pollCommands,
 };
