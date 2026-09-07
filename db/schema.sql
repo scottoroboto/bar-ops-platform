@@ -362,7 +362,7 @@ CREATE TABLE notifications_log (
   related_id     uuid NOT NULL,
   channel        text NOT NULL CHECK (channel IN ('email','sms','push')),
   recipient      text NOT NULL,
-  status         text NOT NULL,   -- sent / simulated / failed / not_configured
+  status         text NOT NULL,   -- sent / simulated / failed / not_configured / disabled (master toggle off)
   detail         text,
   sent_at        timestamptz NOT NULL DEFAULT now()
 );
