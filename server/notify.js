@@ -1,7 +1,11 @@
 // Notification service — same pattern as the earlier Service Call prototype.
 // Email/SMS work today in "simulated" mode (logged, not actually sent) until
 // real SMTP/Twilio credentials are added to .env. Push is a placeholder seam
-// for later, per the plan doc.
+// for later, per the plan doc. Independent of that, there's also a master
+// on/off switch (see notificationsEnabled() below) that owners can flip from
+// the Employees app to force EVERY send into that same simulated/logged path
+// even with real credentials configured — for testing against real data
+// (e.g. a real employee CSV import) without actually notifying anyone.
 //
 // Email goes out through Resend's HTTPS API rather than SMTP. Render's
 // outbound network is HTTP(S)-first — an SMTP connection to smtp.resend.com:587
@@ -34,7 +38,29 @@ async function logNotification(client, relatedTable, relatedId, channel, recipie
   );
 }
 
+// Master on/off switch for every outbound email/sms, platform-wide — added
+// so Scotto can import a real employee list and click through Scheduling
+// Publish, onboarding invites, etc. without actually texting/emailing real
+// people while testing. Piggybacks on the existing owner_notes generic
+// key/body table (see server/employees.js's getOwnerNote/setOwnerNote)
+// instead of a new table+migration — exactly the "reusable anywhere else a
+// short standing note is useful" case that table's patch comment called
+// out. A missing row or any body other than the literal 'off' means
+// notifications stay ON (today's real behavior, unchanged); the switch has
+// to be explicitly turned off, it never silently defaults to off. Edited
+// from the Employees app's Notifications tab (owner only), read here
+// through the same generic /api/owner-notes/notifications_enabled route.
+async function notificationsEnabled(client) {
+  const { rows } = await client.query("SELECT body FROM owner_notes WHERE note_key = 'notifications_enabled'");
+  return !rows.length || rows[0].body !== 'off';
+}
+
 async function sendEmail(client, relatedTable, relatedId, to, subject, text) {
+  if (!(await notificationsEnabled(client))) {
+    console.log(`[notify][email][DISABLED] to=${to} subject="${subject}" (master notifications toggle is off — nothing sent)`);
+    await logNotification(client, relatedTable, relatedId, 'email', to, 'disabled', subject);
+    return { ok: true, simulated: true };
+  }
   const apiKey = process.env.RESEND_API_KEY || process.env.SMTP_PASS;
   const from = process.env.SMTP_FROM;
   if (!apiKey || !from) {
@@ -77,6 +103,11 @@ async function sendEmail(client, relatedTable, relatedId, to, subject, text) {
 }
 
 async function sendSms(client, relatedTable, relatedId, to, body) {
+  if (!(await notificationsEnabled(client))) {
+    console.log(`[notify][sms][DISABLED] to=${to} body="${body}" (master notifications toggle is off — nothing sent)`);
+    await logNotification(client, relatedTable, relatedId, 'sms', to, 'disabled', body);
+    return { ok: true, simulated: true };
+  }
   const twilioClient = getTwilioClient();
   if (!twilioClient) {
     console.log(`[notify][sms][SIMULATED] to=${to} body="${body}"`);
@@ -94,4 +125,4 @@ async function sendSms(client, relatedTable, relatedId, to, body) {
   }
 }
 
-module.exports = { sendEmail, sendSms, emailConfigured, smsConfigured };
+module.exports = { sendEmail, sendSms, emailConfigured, smsConfigured, notificationsEnabled };
