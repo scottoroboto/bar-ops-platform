@@ -28,6 +28,7 @@
 
     <nav class="vc-tabs" id="vcTabs">
       <button class="vc-tab" data-panel="sites" onclick="showVcPanel('sites')">Sites</button>
+      <button class="vc-tab" data-panel="discovery" onclick="showVcPanel('discovery')">Discovery &amp; Adopt</button>
       <button class="vc-tab" data-panel="sources" onclick="showVcPanel('sources')">Sources</button>
       <button class="vc-tab" data-panel="zones-favorites" onclick="showVcPanel('zones-favorites')">Zones &amp; Favourites</button>
       <button class="vc-tab" data-panel="tvs" onclick="showVcPanel('tvs')">TVs</button>
@@ -44,6 +45,20 @@
       Venue Control off just doesn't have a site set up yet — nothing else
       about it changes.</p>
     <div id="sitesList"><p class="muted">Loading…</p></div>
+  </div>
+  </section>
+
+  <section class="vc-panel" data-panel="discovery">
+  <div class="card" id="discoveryCard">
+    <h2>Discovery &amp; Adopt</h2>
+    <p class="muted">Scans this location's network for DirecTV receivers, Rokus and Samsung TVs, and lets you add a found device straight into Sources or TVs — no typing in IP addresses by hand. Read-only: nothing is tuned, changed or powered by a scan.</p>
+    <p class="muted">This runs on the on-site box, not from here — the box checks in about every 30 seconds, so a scan can take a little while to start, and longer to finish on a full network.</p>
+    <label for="discoveryRanges">Network range to scan (optional — leave blank to use this site's configured range)</label>
+    <input id="discoveryRanges" placeholder="e.g. 192.168.1.0/24">
+    <button class="secondary" id="discoveryScanBtn" onclick="startDiscoveryScan()">Scan network</button>
+    <div id="discoveryStatus"></div>
+    <div id="discoverySummary" style="margin-top:14px;"></div>
+    <div id="discoveryResults"><p class="muted">Loading…</p></div>
   </div>
   </section>
 

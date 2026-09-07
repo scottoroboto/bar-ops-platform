@@ -212,6 +212,9 @@ function onSourcesLocationChange() {
   editingTvId = null;
   TV_SELECTED.clear();
   TV_ZONE_FILTER = 'all';
+  DISCOVERY_ADOPT_OPEN_ID = null;
+  if (DISCOVERY_POLL_TIMER) { clearTimeout(DISCOVERY_POLL_TIMER); DISCOVERY_POLL_TIMER = null; }
+  loadDiscoveryAdmin(locationId);
 
   // Several tabs now cross-reference each other's data (Zones shows a TV
   // count, TVs joins in Device Health's live status, Activity resolves
@@ -1429,5 +1432,253 @@ async function loadActivityAdmin(locationId) {
       </table>`;
   } catch (e) {
     el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// ---- Discovery & Adopt (A1/A2/A4 of the design pack, Option B of the
+// placement question in claude/venue-control-gui-reconciliation.md §4).
+// The scan itself runs on the on-site box against its own LAN, triggered
+// here by enqueuing a vc_agent_commands row rather than calling the agent
+// directly -- there's no inbound path to do that (agent/lib/sync.js only
+// ever calls out, every 30s). So this deliberately does NOT try to
+// reproduce A1's live phase-by-phase ticker (Announce/Sweep/Interrogate/
+// device-by-device streaming) -- that assumes a connection this transport
+// doesn't have. Instead it polls command status honestly: queued (the box
+// hasn't checked in yet) -> scanning -> done/error, with a running elapsed
+// clock so a real wait doesn't look like a hang.
+//
+// Deliberately out of scope this round, same "disclose the cut, don't fake
+// it" posture as Device Health's missing remedy buttons: A3's per-device
+// SAFE/VISIBLE/DISRUPTIVE test panel (two of its three disruptive tests --
+// power_cycle, set_channel -- have no real driver behind them yet either,
+// per lib/discovery/index.js's own runOneTest), and A4's dedicated
+// bulk-adopt screen with slot/QAM auto-fill sequencing. Adopting one device
+// at a time via the inline form below covers the actual "find it, name it,
+// it's in inventory" need Scotto asked for.
+let DISCOVERY_RUN = null;
+let DISCOVERY_DEVICES = [];
+let DISCOVERY_COMMAND_ID = null;
+let DISCOVERY_POLL_TIMER = null;
+let DISCOVERY_POLL_STARTED_AT = null;
+let DISCOVERY_ADOPT_OPEN_ID = null;
+
+async function loadDiscoveryAdmin(locationId) {
+  const el = document.getElementById('discoveryResults');
+  try {
+    const data = await api(`/api/venue-control/sites/${locationId}/discovery/runs/latest`);
+    DISCOVERY_RUN = data.run;
+    DISCOVERY_DEVICES = data.devices || [];
+    renderDiscoveryResults();
+  } catch (e) {
+    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function startDiscoveryScan() {
+  const locationId = document.getElementById('sourcesLocationSelect').value;
+  if (!locationId) return;
+  const rangesRaw = (document.getElementById('discoveryRanges').value || '').trim();
+  const ranges = rangesRaw ? rangesRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+  const statusEl = document.getElementById('discoveryStatus');
+  const btn = document.getElementById('discoveryScanBtn');
+  btn.disabled = true;
+  statusEl.innerHTML = '<p class="msg info">Queuing the scan…</p>';
+  try {
+    const res = await api(`/api/venue-control/sites/${locationId}/discovery/scan`, { method: 'POST', body: { ranges } });
+    DISCOVERY_COMMAND_ID = res.commandId;
+    DISCOVERY_POLL_STARTED_AT = Date.now();
+    pollDiscoveryCommand(locationId);
+  } catch (e) {
+    statusEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+    btn.disabled = false;
+  }
+}
+
+async function pollDiscoveryCommand(locationId) {
+  if (DISCOVERY_POLL_TIMER) { clearTimeout(DISCOVERY_POLL_TIMER); DISCOVERY_POLL_TIMER = null; }
+  const statusEl = document.getElementById('discoveryStatus');
+  const btn = document.getElementById('discoveryScanBtn');
+  const elapsed = Math.round((Date.now() - DISCOVERY_POLL_STARTED_AT) / 1000);
+  try {
+    const res = await api(`/api/venue-control/sites/${locationId}/discovery/commands/${DISCOVERY_COMMAND_ID}`);
+    const cmd = res.command;
+    if (cmd.status === 'pending') {
+      statusEl.innerHTML = `<p class="msg info">Queued — waiting for the on-site box to check in (usually within 30 seconds)… ${elapsed}s</p>`;
+    } else if (cmd.status === 'running') {
+      statusEl.innerHTML = `<p class="msg info">Scanning the network now — this can take a minute or two on a full subnet… ${elapsed}s</p>`;
+    } else if (cmd.status === 'done') {
+      const r = cmd.result || {};
+      statusEl.innerHTML = `<p class="msg success">Done — ${r.deviceCount != null ? r.deviceCount : '?'} device${r.deviceCount === 1 ? '' : 's'} found (${elapsed}s).</p>`;
+      btn.disabled = false;
+      await loadDiscoveryAdmin(locationId);
+      return;
+    } else if (cmd.status === 'error') {
+      statusEl.innerHTML = `<p class="msg error">${escapeHtml(cmd.error || 'The scan failed.')}</p>`;
+      btn.disabled = false;
+      return;
+    }
+  } catch (e) {
+    statusEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+    btn.disabled = false;
+    return;
+  }
+  DISCOVERY_POLL_TIMER = setTimeout(() => pollDiscoveryCommand(locationId), 3000);
+}
+
+const DISCOVERY_KIND_LABEL = {
+  directv_receiver: 'DirecTV receivers', samsung_tv: 'Samsung TVs',
+  samsung_tv_legacy: 'Samsung TVs (legacy)', roku: 'Rokus', unknown: 'Other',
+};
+const DISCOVERY_ADOPT_AS = {
+  directv_receiver: 'source', roku: 'source', samsung_tv: 'tv', samsung_tv_legacy: 'tv',
+};
+
+function discoveryDeviceLabel(d) {
+  const identity = d.identity || {};
+  return identity.model || identity.friendlyName || d.oui_vendor || (d.mac ? `by MAC ${d.mac}` : 'unidentified device');
+}
+
+function discoveryControlBadges(d) {
+  const methods = Array.isArray(d.control_methods) ? d.control_methods : [];
+  if (!methods.length) return '<span class="badge off">no known control method</span>';
+  return methods.map((m) => {
+    const cls = m.status === 'available' ? (m.needs_pairing ? 'stale' : 'on') : 'off';
+    const label = m.needs_pairing ? `${m.method} (needs pairing)` : m.method;
+    return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
+  }).join(' ');
+}
+
+function renderDiscoveryResults() {
+  const el = document.getElementById('discoveryResults');
+  const summaryEl = document.getElementById('discoverySummary');
+  if (!DISCOVERY_RUN) {
+    summaryEl.innerHTML = '';
+    el.innerHTML = '<p class="muted">No scan has been run yet for this location. Enter the network range above (or leave it blank to use the site\'s configured range) and scan.</p>';
+    return;
+  }
+  const scannedAt = new Date(DISCOVERY_RUN.started_at).toLocaleString();
+  const secs = DISCOVERY_RUN.finished_at
+    ? Math.max(0, Math.round((new Date(DISCOVERY_RUN.finished_at) - new Date(DISCOVERY_RUN.started_at)) / 1000))
+    : null;
+  summaryEl.innerHTML = `<p class="muted" style="margin:0 0 12px;">${(DISCOVERY_RUN.ranges || []).join(', ') || 'default range'} · scanned ${scannedAt}${secs != null ? ` · ${secs}s` : ''} · ${DISCOVERY_DEVICES.length} device${DISCOVERY_DEVICES.length === 1 ? '' : 's'} found</p>`;
+
+  if (!DISCOVERY_DEVICES.length) {
+    el.innerHTML = '<p class="muted">No devices answered on that range.</p>';
+    return;
+  }
+
+  const groups = {};
+  DISCOVERY_DEVICES.forEach((d) => {
+    const key = d.classified_as || 'unknown';
+    (groups[key] = groups[key] || []).push(d);
+  });
+  const order = ['directv_receiver', 'roku', 'samsung_tv', 'samsung_tv_legacy', 'unknown'];
+
+  el.innerHTML = order.filter((k) => groups[k] && groups[k].length).map((k) => `
+    <h3 style="font-size:13px;color:var(--muted);margin:16px 0 6px;">${escapeHtml(DISCOVERY_KIND_LABEL[k] || k)} — ${groups[k].length}</h3>
+    ${groups[k].map((d) => renderDiscoveryRow(d)).join('')}
+  `).join('');
+}
+
+function renderDiscoveryRow(d) {
+  const adoptAs = DISCOVERY_ADOPT_AS[d.classified_as];
+  const alreadyAdopted = !!d.adopted_type;
+  const formOpen = DISCOVERY_ADOPT_OPEN_ID === d.id;
+  // .list-row is a one-line flex row by default (name | badges | actions side
+  // by side) -- fine with three short children, but the adopt form below is
+  // a tall block that needs to stack underneath instead of squeezing into
+  // that same row. Same "switch to column layout while expanded" technique
+  // renderZonesList() already uses for its own inline edit form.
+  return `
+    <div class="list-row"${formOpen ? ' style="flex-direction:column; align-items:stretch;"' : ''}>
+      <div class="name">${escapeHtml(d.ip)} <span class="badge off">${escapeHtml(discoveryDeviceLabel(d))}</span>
+        ${alreadyAdopted ? `<span class="badge on">adopted as ${escapeHtml(d.adopted_type)}</span>` : ''}
+      </div>
+      <p class="muted" style="margin:4px 0;">${discoveryControlBadges(d)}</p>
+      ${!alreadyAdopted && adoptAs
+        ? `<div class="stack-actions" style="margin-top:0;">
+             <button class="small ${formOpen ? 'ghost' : 'secondary'}" style="margin-top:0;" onclick="toggleDiscoveryAdoptForm(${d.id})">${formOpen ? 'Cancel' : 'Adopt'}</button>
+           </div>`
+        : (!alreadyAdopted ? '<p class="muted" style="margin:2px 0 0;font-size:12px;">Not controllable — no matching driver for this device.</p>' : '')}
+      ${formOpen ? renderDiscoveryAdoptForm(d, adoptAs) : ''}
+    </div>`;
+}
+
+function toggleDiscoveryAdoptForm(deviceId) {
+  DISCOVERY_ADOPT_OPEN_ID = DISCOVERY_ADOPT_OPEN_ID === deviceId ? null : deviceId;
+  renderDiscoveryResults();
+}
+
+function renderDiscoveryAdoptForm(d, adoptAs) {
+  if (adoptAs === 'tv') {
+    const method = (d.control_methods || []).find((m) => m.status === 'available');
+    const zoneOptions = ZONES_ADMIN.map((z) => `<option value="${z.id}">${escapeHtml(z.name)}</option>`).join('');
+    return `
+      <div class="card" style="margin:8px 0 4px;background:rgba(255,255,255,0.03);">
+        <label>Name</label>
+        <input id="discAdoptName_${d.id}" value="${escapeHtml((d.identity || {}).friendlyName || '')}" placeholder="e.g. Main Bar 3">
+        <label>Tag shown on the chip</label>
+        <input id="discAdoptTag_${d.id}" placeholder="e.g. MB3">
+        <label>Zone</label>
+        <select id="discAdoptZone_${d.id}"><option value="">Unassigned</option>${zoneOptions}</select>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+          <input type="checkbox" id="discAdoptWol_${d.id}" style="width:auto;" ${d.mac ? 'checked' : 'disabled'}> Wake-on-LAN enabled
+        </label>
+        <p class="muted" style="margin:8px 0 0;font-size:12px;">Control method: ${escapeHtml(method ? method.method : 'unknown')} (from the scan).</p>
+        <div class="stack-actions">
+          <button class="small" onclick="submitDiscoveryAdopt(${d.id}, 'tv')">Adopt this TV</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="card" style="margin:8px 0 4px;background:rgba(255,255,255,0.03);">
+      <label>Label</label>
+      <input id="discAdoptLabel_${d.id}" value="${escapeHtml(discoveryDeviceLabel(d))}" placeholder="e.g. DirecTV 14">
+      <label>Slot</label>
+      <input id="discAdoptSlot_${d.id}" type="number" placeholder="e.g. 14">
+      <label>QAM channel</label>
+      <input id="discAdoptQam_${d.id}" placeholder="e.g. 14.1">
+      <div class="stack-actions">
+        <button class="small" onclick="submitDiscoveryAdopt(${d.id}, 'source')">Adopt this source</button>
+      </div>
+    </div>`;
+}
+
+async function submitDiscoveryAdopt(deviceId, as) {
+  const locationId = document.getElementById('sourcesLocationSelect').value;
+  const d = DISCOVERY_DEVICES.find((x) => x.id === deviceId);
+  let fields;
+  if (as === 'tv') {
+    const method = (d.control_methods || []).find((m) => m.status === 'available');
+    fields = {
+      name: document.getElementById(`discAdoptName_${deviceId}`).value.trim() || undefined,
+      tag: document.getElementById(`discAdoptTag_${deviceId}`).value.trim() || undefined,
+      zoneId: document.getElementById(`discAdoptZone_${deviceId}`).value || undefined,
+      wolEnabled: document.getElementById(`discAdoptWol_${deviceId}`).checked,
+      controlMethod: method ? method.method : undefined,
+      ip: d.ip, mac: d.mac,
+    };
+  } else {
+    fields = {
+      label: document.getElementById(`discAdoptLabel_${deviceId}`).value.trim() || undefined,
+      slot: Number(document.getElementById(`discAdoptSlot_${deviceId}`).value) || undefined,
+      qamChannel: document.getElementById(`discAdoptQam_${deviceId}`).value.trim() || undefined,
+      kind: d.classified_as === 'roku' ? 'roku' : 'directv',
+      ip: d.ip, mac: d.mac,
+    };
+  }
+  try {
+    await api(`/api/venue-control/sites/${locationId}/discovery/adopt`, { method: 'POST', body: { discoveryDeviceId: deviceId, as, ...fields } });
+    DISCOVERY_ADOPT_OPEN_ID = null;
+    await loadDiscoveryAdmin(locationId);
+    // Adopting writes straight to vc_tvs/vc_sources, so the tabs that list
+    // them need a refresh too -- same "adoption shows up immediately"
+    // promise A4's own mockup makes.
+    loadSourcesAdmin(locationId);
+    const zonesP = loadZonesAdmin(locationId);
+    const tvsP = loadTvsAdmin(locationId);
+    Promise.all([zonesP, tvsP]).then(() => { renderZonesList(); renderTvZoneChips(); renderTvsList(); });
+  } catch (e) {
+    document.getElementById('discoveryStatus').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
 }
