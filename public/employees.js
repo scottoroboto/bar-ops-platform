@@ -106,7 +106,7 @@ function fillPositionSelect(sel, currentValue) {
 function renderTabs() {
   const tabs = [{ key: 'list', label: 'Employee List' }, { key: 'onboard', label: 'Onboard Review' }];
   if (ME.role === 'owner') {
-    tabs.push({ key: 'payrate', label: 'Pay Rate Requests' }, { key: 'reset', label: 'Reset Requests' });
+    tabs.push({ key: 'payrate', label: 'Pay Rate Requests' }, { key: 'reset', label: 'Reset Requests' }, { key: 'notifications', label: 'Notifications' });
   }
   document.getElementById('tabs').innerHTML = tabs.map(t =>
     `<button data-tab="${t.key}" onclick="setTab('${t.key}')">${t.label}<span class="tab-badge" id="badge-${t.key}" style="display:none;"></span></button>`
@@ -119,7 +119,9 @@ function setTab(which) {
   document.getElementById('panelOnboard').style.display = which === 'onboard' ? '' : 'none';
   document.getElementById('panelPayRate').style.display = which === 'payrate' ? '' : 'none';
   document.getElementById('panelReset').style.display = which === 'reset' ? '' : 'none';
+  document.getElementById('panelNotifications').style.display = which === 'notifications' ? '' : 'none';
   Array.from(document.querySelectorAll('#tabs button')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
+  if (which === 'notifications') loadNotificationsToggle();
 }
 
 function setBadge(key, n) {
@@ -615,6 +617,38 @@ async function savePayRateMemo() {
     resultEl.innerHTML = '<span class="msg success">Saved.</span>';
     setTimeout(() => { resultEl.innerHTML = ''; }, 2000);
   } catch (e) {
+    resultEl.innerHTML = `<span class="msg error">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+// ---- Master notifications toggle (owner only) — see server/notify.js ----
+function renderNotificationsStatus(enabled) {
+  const statusEl = document.getElementById('notificationsStatus');
+  statusEl.innerHTML = enabled
+    ? ''
+    : '<p class="msg info" style="margin-top:10px;">Test mode — no real emails or texts will go out platform-wide until this is switched back on.</p>';
+}
+async function loadNotificationsToggle() {
+  try {
+    const note = await api('/api/owner-notes/notifications_enabled');
+    const enabled = note.body !== 'off';
+    document.getElementById('notificationsToggle').checked = enabled;
+    renderNotificationsStatus(enabled);
+  } catch (e) {
+    document.getElementById('notificationsResult').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+async function submitNotificationsToggle() {
+  const checkbox = document.getElementById('notificationsToggle');
+  const enabled = checkbox.checked;
+  const resultEl = document.getElementById('notificationsResult');
+  try {
+    await withStepUp(() => api('/api/owner-notes/notifications_enabled', { method: 'POST', body: { body: enabled ? 'on' : 'off' } }));
+    renderNotificationsStatus(enabled);
+    resultEl.innerHTML = '<span class="msg success">Saved.</span>';
+    setTimeout(() => { resultEl.innerHTML = ''; }, 2000);
+  } catch (e) {
+    checkbox.checked = !enabled; // revert the flip — the save didn't take
     resultEl.innerHTML = `<span class="msg error">${escapeHtml(e.message)}</span>`;
   }
 }

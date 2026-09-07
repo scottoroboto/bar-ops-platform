@@ -20,6 +20,7 @@ let PUBLISH_OVERRIDES = {};    // draftId -> override reason, accumulated across
 let ADMIN_SCHEDULES = [];      // Setup tab: every schedule incl. archived
 let PENDING_TIMEOFF_COUNT = 0; // sidebar badge + pending-review nudge (bootstrap-provided)
 let SCHED_PICKER_OPEN = false; // schedule-picker popover open/closed (Scheduler tab)
+let NOTIFICATIONS_ENABLED = true; // master email/text switch — Employees > Notifications (server/notify.js)
 
 // ---------------- Date helpers (calendar-date-only, local time — these
 // dates carry no time-of-day meaning, so plain local Date math is fine and
@@ -567,8 +568,11 @@ async function submitCopyWeekForward() {
 // ---- Publish (plain "are you sure?" confirm — no step-up gate, per Scotto) ----
 function openPublishModal() {
   PUBLISH_OVERRIDES = {};
+  const testModeNote = NOTIFICATIONS_ENABLED === false
+    ? '<p class="msg info">Test mode is on (Employees &gt; Notifications) — nothing will actually be emailed or texted.</p>'
+    : '';
   document.getElementById('publishBody').innerHTML = DRAFT_COUNT
-    ? `<p>Publish ${DRAFT_COUNT} pending draft${DRAFT_COUNT === 1 ? '' : 's'}? This updates the live schedule and notifies every affected employee by email/text. Are you sure?</p>`
+    ? `<p>Publish ${DRAFT_COUNT} pending draft${DRAFT_COUNT === 1 ? '' : 's'}? This updates the live schedule and notifies every affected employee by email/text. Are you sure?</p>${testModeNote}`
     : '<p class="muted">Nothing to publish — no drafts pending.</p>';
   document.getElementById('publishConfirmBtn').style.display = DRAFT_COUNT ? '' : 'none';
   document.getElementById('publishModal').style.display = '';
@@ -893,6 +897,12 @@ async function submitQual() {
       MANAGEABLE_SCHEDULES = boot.manageableSchedules;
       EMPLOYEES = boot.employees;
       PENDING_TIMEOFF_COUNT = boot.pendingTimeOffCount || 0;
+      // Non-critical — if this fails for any reason, default to true (today's
+      // real behavior) rather than block the page on it.
+      try {
+        const note = await api('/api/owner-notes/notifications_enabled');
+        NOTIFICATIONS_ENABLED = note.body !== 'off';
+      } catch (e) {}
     }
     renderTabs();
   } catch (e) {

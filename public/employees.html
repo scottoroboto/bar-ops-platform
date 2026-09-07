@@ -71,6 +71,20 @@
       <div id="resetRequestsList"><p class="muted">Loading…</p></div>
     </div>
   </div>
+
+  <!-- Notifications panel (owner only) -->
+  <div id="panelNotifications" style="display:none;">
+    <div class="card">
+      <h2>Notifications</h2>
+      <p class="muted">A master switch for every email and text this platform sends — schedule publishes, onboarding invites, pay rate decisions, reset requests, monitoring alerts, all of it. Turn it off while you're testing (like importing a real employee list) so nothing actually goes out; every send is still logged, just marked "disabled" instead of sent.</p>
+      <div class="toggle-row">
+        <span class="label">Send real emails &amp; texts</span>
+        <label class="switch"><input type="checkbox" id="notificationsToggle" onchange="submitNotificationsToggle()"><span class="slider"></span></label>
+      </div>
+      <div id="notificationsStatus"></div>
+      <div id="notificationsResult"></div>
+    </div>
+  </div>
 </div>
 
 <!-- Review modal -->
