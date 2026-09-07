@@ -341,7 +341,14 @@ function renderSchedPicker() {
     : `No schedules assigned <span class="chev">▾</span>`;
 
   const pop = document.getElementById('schedPickerPopover');
-  pop.innerHTML = `<div class="pp-title">Choose schedules</div>` + (MANAGEABLE_SCHEDULES.length
+  const allChecked = MANAGEABLE_SCHEDULES.length > 0 && SELECTED_SCHEDULE_IDS.length === MANAGEABLE_SCHEDULES.length;
+  const allRow = MANAGEABLE_SCHEDULES.length
+    ? `<div class="pp-row" onclick="toggleAllSchedules(${!allChecked})" style="border-bottom:1px solid var(--line); margin-bottom:4px; padding-bottom:10px;">
+        <div class="pp-check ${allChecked ? 'checked' : ''}">${allChecked ? '✓' : ''}</div>
+        <div class="lbl"><b>ALL</b></div>
+      </div>`
+    : '';
+  pop.innerHTML = `<div class="pp-title">Choose schedules</div>` + allRow + (MANAGEABLE_SCHEDULES.length
     ? MANAGEABLE_SCHEDULES.map(s => {
         const checked = SELECTED_SCHEDULE_IDS.includes(s.id);
         return `<div class="pp-row" onclick="toggleSchedule('${s.id}', ${!checked})">
@@ -376,6 +383,11 @@ function closeSchedPickerOnOutsideClick(evt) {
 function toggleSchedule(id, checked) {
   if (checked && !SELECTED_SCHEDULE_IDS.includes(id)) SELECTED_SCHEDULE_IDS.push(id);
   if (!checked) SELECTED_SCHEDULE_IDS = SELECTED_SCHEDULE_IDS.filter(x => x !== id);
+  renderSchedPicker();
+  loadSchedGrid();
+}
+function toggleAllSchedules(checked) {
+  SELECTED_SCHEDULE_IDS = checked ? MANAGEABLE_SCHEDULES.map(s => s.id) : [];
   renderSchedPicker();
   loadSchedGrid();
 }
@@ -418,9 +430,13 @@ async function loadSchedGrid() {
     DRAFT_COUNT = summary.count;
     renderDraftBanner();
 
-    const roster = EMPLOYEES.filter(e => e.schedule_ids.some(id => SELECTED_SCHEDULE_IDS.includes(id)));
+    // Every employee shows up as a row now, whether or not they have a shift
+    // this week — per Scotto, dropped the old "checked into this schedule"
+    // filter (Sep 2026). The schedule picker above now only scopes which
+    // schedules' shifts are pulled in, not who appears.
+    const roster = EMPLOYEES.slice().sort((a, b) => a.name.localeCompare(b.name));
     const dates = weekDatesFrom(WEEK_START);
-    if (!roster.length) { el.innerHTML = '<p class="muted">Nobody is checked into the selected schedule(s) yet — add them under Setup.</p>'; return; }
+    if (!roster.length) { el.innerHTML = '<p class="muted">No employees yet.</p>'; return; }
     el.innerHTML = `<table><thead><tr><th>Employee</th>${dates.map(d => `<th>${dayLabel(d)}</th>`).join('')}</tr></thead><tbody>
       ${roster.map(emp => `<tr><td>${escapeHtml(emp.name)}</td>${dates.map(date => schedCellHtml(emp, date)).join('')}</tr>`).join('')}
     </tbody></table>`;
@@ -431,7 +447,7 @@ async function loadSchedGrid() {
 
 function schedCellHtml(emp, date) {
   const shifts = WEEK_SHIFTS.filter(s => s.person_id === emp.id && s.shift_date === date);
-  const defaultScheduleId = emp.schedule_ids.find(id => SELECTED_SCHEDULE_IDS.includes(id)) || SELECTED_SCHEDULE_IDS[0];
+  const defaultScheduleId = SELECTED_SCHEDULE_IDS[0];
   const chips = shifts.map(s => {
     const cls = s.draftAction === 'cancel' ? 'cancel' : (s.isDraft ? 'draft' : 'live');
     const label = s.draftAction === 'cancel' ? `<s>${formatTime12(s.start_time)}–${formatTime12(s.end_time)}</s>` : `${formatTime12(s.start_time)}–${formatTime12(s.end_time)}`;
@@ -622,13 +638,14 @@ function closePrintModal() {
   document.getElementById('modalBackdrop').style.display = 'none';
 }
 function refreshPrintEmployeeList() {
-  const scheduleIds = Array.from(document.querySelectorAll('.printSchedCb:checked')).map(el => el.value);
-  const roster = EMPLOYEES.filter(e => e.schedule_ids.some(id => scheduleIds.includes(id)));
+  // Every employee is listable for print now, same as the grid — no longer
+  // gated by which schedule(s) are checked above.
+  const roster = EMPLOYEES.slice().sort((a, b) => a.name.localeCompare(b.name));
   const empEl = document.getElementById('printEmpPicker');
   const prevChecked = new Set(Array.from(document.querySelectorAll('.printEmpCb:checked')).map(el => el.value));
   empEl.innerHTML = roster.length
     ? roster.map(e => `<label class="sc-checkbox"><input type="checkbox" class="printEmpCb" value="${e.id}" ${prevChecked.has(String(e.id)) || !prevChecked.size ? 'checked' : ''}> ${escapeHtml(e.name)}</label>`).join('')
-    : '<p class="muted">Pick a schedule above first.</p>';
+    : '<p class="muted">No employees yet.</p>';
 }
 async function submitPrint() {
   const resultEl = document.getElementById('printResult');
@@ -749,8 +766,8 @@ async function renderSetup() {
       <div id="schedResult"></div>` : ''}
     </div>
     <div class="card">
-      <h2>Employees</h2>
-      <p class="muted">Which schedules and positions each person is checked into. ${IS_OWNER ? 'Click Edit to change.' : 'Only the owner can change this.'}</p>
+      <h2>Managers</h2>
+      <p class="muted">Which schedules each manager can build and publish for. (Owners always manage every schedule.) ${IS_OWNER ? 'Click Edit to change.' : 'Only the owner can change this.'}</p>
       <div id="setupEmployees"><p class="muted">Loading…</p></div>
     </div>`;
   if (IS_OWNER) {
@@ -810,11 +827,12 @@ async function renderSetupEmployees() {
   const el = document.getElementById('setupEmployees');
   try {
     EMPLOYEES = await api('/api/scheduling/employees');
-    el.innerHTML = EMPLOYEES.map(e => `<div class="list-row">
-      <div><div class="name">${escapeHtml(e.name)} <span class="muted">(${escapeHtml(e.role)})</span></div>
-      <div class="sub">${e.schedule_ids.length} schedule${e.schedule_ids.length === 1 ? '' : 's'} · ${e.position_ids.length} position${e.position_ids.length === 1 ? '' : 's'}${e.role === 'manager' ? ` · manages ${e.manager_schedule_ids.length}` : ''}</div></div>
+    const managers = EMPLOYEES.filter(e => e.role === 'manager');
+    el.innerHTML = managers.length ? managers.map(e => `<div class="list-row">
+      <div><div class="name">${escapeHtml(e.name)}</div>
+      <div class="sub">manages ${e.manager_schedule_ids.length} schedule${e.manager_schedule_ids.length === 1 ? '' : 's'}</div></div>
       <button class="small ghost" onclick="openQualModal('${e.id}')">${IS_OWNER ? 'Edit' : 'View'}</button>
-    </div>`).join('');
+    </div>`).join('') : '<p class="muted">No managers yet — owners already manage every schedule.</p>';
   } catch (e) {
     el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
@@ -826,11 +844,6 @@ function openQualModal(personId) {
   document.getElementById('qualPersonId').value = personId;
   document.getElementById('qualModalTitle').textContent = emp.name;
   const disabled = IS_OWNER ? '' : 'disabled';
-  document.getElementById('qualSchedules').innerHTML = ALL_SCHEDULES.map(s =>
-    `<label class="sc-checkbox"><input type="checkbox" ${disabled} value="${s.id}" ${emp.schedule_ids.includes(s.id) ? 'checked' : ''}> ${escapeHtml(s.name)}</label>`).join('');
-  document.getElementById('qualPositions').innerHTML = POSITIONS.map(p =>
-    `<label class="sc-checkbox"><input type="checkbox" ${disabled} value="${p.id}" ${emp.position_ids.includes(p.id) ? 'checked' : ''}> ${escapeHtml(p.name)}</label>`).join('');
-  document.getElementById('qualManagerWrap').style.display = emp.role === 'manager' ? '' : 'none';
   document.getElementById('qualManagerSchedules').innerHTML = ALL_SCHEDULES.map(s =>
     `<label class="sc-checkbox"><input type="checkbox" ${disabled} value="${s.id}" ${emp.manager_schedule_ids.includes(s.id) ? 'checked' : ''}> ${escapeHtml(s.name)}</label>`).join('');
   document.getElementById('qualSaveBtn').style.display = IS_OWNER ? '' : 'none';
@@ -844,16 +857,10 @@ function closeQualModal() {
 }
 async function submitQual() {
   const personId = document.getElementById('qualPersonId').value;
-  const scheduleIds = Array.from(document.querySelectorAll('#qualSchedules input:checked')).map(i => i.value);
-  const positionIds = Array.from(document.querySelectorAll('#qualPositions input:checked')).map(i => i.value);
   const managerScheduleIds = Array.from(document.querySelectorAll('#qualManagerSchedules input:checked')).map(i => i.value);
   const resultEl = document.getElementById('qualResult');
   try {
-    await withStepUp(() => api(`/api/scheduling/employees/${personId}/schedules`, { method: 'POST', body: { scheduleIds } }));
-    await withStepUp(() => api(`/api/scheduling/employees/${personId}/positions`, { method: 'POST', body: { positionIds } }));
-    if (document.getElementById('qualManagerWrap').style.display !== 'none') {
-      await withStepUp(() => api(`/api/scheduling/employees/${personId}/managed-schedules`, { method: 'POST', body: { scheduleIds: managerScheduleIds } }));
-    }
+    await withStepUp(() => api(`/api/scheduling/employees/${personId}/managed-schedules`, { method: 'POST', body: { scheduleIds: managerScheduleIds } }));
     closeQualModal();
     showMsg('Saved.', 'success');
     renderSetupEmployees();

@@ -94,16 +94,10 @@
 
 <!-- Employee qualification matrix modal (Setup tab, owner only edits) -->
 <div class="card" id="qualModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:460px; max-height:86vh; overflow-y:auto; height:fit-content; top:6%; z-index:20;">
-  <h2 id="qualModalTitle">Employee</h2>
+  <h2 id="qualModalTitle">Manager</h2>
   <input type="hidden" id="qualPersonId">
-  <label>Checked into these schedules</label>
-  <div id="qualSchedules" class="sc-checkbox-grid"></div>
-  <label style="margin-top:12px;">Qualified for these positions</label>
-  <div id="qualPositions" class="sc-checkbox-grid"></div>
-  <div id="qualManagerWrap">
-    <label style="margin-top:12px;">Manages these schedules</label>
-    <div id="qualManagerSchedules" class="sc-checkbox-grid"></div>
-  </div>
+  <label>Manages these schedules</label>
+  <div id="qualManagerSchedules" class="sc-checkbox-grid"></div>
   <div id="qualResult"></div>
   <div class="stack-actions">
     <button class="ghost" onclick="closeQualModal()">Close</button>
