@@ -815,12 +815,15 @@ res.json({ ok: true, runId: result.runId, devices: result.deviceRows });
 // (§9.4) knows not to flag it as new. Scoped to the calling agent's own
 // site -- a device id from another site's run is rejected, not just
 // trusted from the request body.
-app.post('/api/venue/agent/discovery/adopt', requireAgentAuth(), async (req, res) => {
-const { discoveryDeviceId, as, ...fields } = req.body || {};
-if (!discoveryDeviceId) return res.status(400).json({ error: 'Missing "discoveryDeviceId".' });
-if (as !== 'tv' && as !== 'source') return res.status(400).json({ error: '"as" must be "tv" or "source".' });
-try {
-const created = await withServiceClient(async (client) => {
+// Shared by both the agent-authenticated route below (the on-site
+// discovery.html flow) and the owner-session route further down (the new
+// remote Discovery & Adopt cloud-admin tab, Option B of the placement
+// question in claude/venue-control-gui-reconciliation.md §4) -- same
+// insert logic either way, just a different caller identity and a
+// different site-scoping check around it.
+async function adoptDiscoveryDevice(client, siteId, { discoveryDeviceId, as, fields }) {
+if (!discoveryDeviceId) throw Object.assign(new Error('Missing "discoveryDeviceId".'), { status: 400 });
+if (as !== 'tv' && as !== 'source') throw Object.assign(new Error('"as" must be "tv" or "source".'), { status: 400 });
 const { rows: deviceRows } = await client.query(
 `SELECT dd.id, dr.site_id FROM vc_discovery_devices dd
    JOIN vc_discovery_runs dr ON dr.id = dd.run_id
@@ -829,7 +832,7 @@ const { rows: deviceRows } = await client.query(
 );
 const device = deviceRows[0];
 if (!device) throw Object.assign(new Error('Discovery device not found.'), { status: 404 });
-if (device.site_id !== req.vcSite.site_id) throw Object.assign(new Error('That discovery device belongs to a different site.'), { status: 403 });
+if (device.site_id !== siteId) throw Object.assign(new Error('That discovery device belongs to a different site.'), { status: 403 });
 
 let record;
 if (as === 'tv') {
@@ -837,7 +840,7 @@ const { rows } = await client.query(
 `INSERT INTO vc_tvs (site_id, zone_id, name, tag, ip, mac, control_method, wol_enabled, default_source_slot)
    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
    RETURNING *`,
-[req.vcSite.site_id, fields.zoneId || null, fields.name || 'Unnamed TV', fields.tag || null, fields.ip || null,
+[siteId, fields.zoneId || null, fields.name || 'Unnamed TV', fields.tag || null, fields.ip || null,
  fields.mac || null, fields.controlMethod || 'unknown', !!fields.wolEnabled, fields.defaultSourceSlot || null]
 );
 record = rows[0];
@@ -851,18 +854,155 @@ const { rows } = await client.query(
 `INSERT INTO vc_sources (site_id, slot, qam_channel, label, kind, ip, port, mac)
    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
    RETURNING *`,
-[req.vcSite.site_id, fields.slot, fields.qamChannel, fields.label || 'Unnamed source', fields.kind || 'directv',
+[siteId, fields.slot, fields.qamChannel, fields.label || 'Unnamed source', fields.kind || 'directv',
  fields.ip || null, fields.port || defaultSourcePort(fields.kind), fields.mac || null]
 );
 record = rows[0];
 }
 await client.query('UPDATE vc_discovery_devices SET adopted_type=$1, adopted_id=$2 WHERE id=$3', [as, record.id, discoveryDeviceId]);
 return record;
+}
+
+app.post('/api/venue/agent/discovery/adopt', requireAgentAuth(), async (req, res) => {
+const { discoveryDeviceId, as, ...fields } = req.body || {};
+try {
+const created = await withServiceClient((client) =>
+adoptDiscoveryDevice(client, req.vcSite.site_id, { discoveryDeviceId, as, fields })
+);
+res.json({ ok: true, ...created });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+// ---------------- Venue Control — remote Discovery & Adopt (cloud admin) ----------------
+// Option B from claude/venue-control-gui-reconciliation.md §4: rather than
+// re-skinning agent/public/discovery.html in place (Option A -- still
+// walk-up-to-the-box only), the cloud admin gets a real Discovery & Adopt
+// tab that works from anywhere with a login, including a phone off the
+// venue's own Wi-Fi. Two different needs, two different mechanisms:
+//
+// - Viewing results and adopting a found device are pure reads/writes
+//   against Supabase -- vc_discovery_runs/vc_discovery_devices already
+//   fill in from the agent's existing local-scan-then-push flow (see
+//   POST /api/venue/agent/discovery/runs above), so these routes need no
+//   agent round-trip at all.
+// - Triggering a NEW scan on demand is the one piece that genuinely
+//   requires the agent to do something right now, and the agent has never
+//   had an inbound path -- it only ever calls out (register/config-pull/
+//   heartbeat, agent/lib/sync.js). vc_agent_commands (patch_020) is that
+//   missing piece: the owner session enqueues a row here, the agent's
+//   existing 30s poll loop claims it next time it checks in and runs the
+//   scan for real, then reports back. A scan can take noticeably longer
+//   than 30s on a full subnet, and the agent might not even be due to
+//   check in for up to 30s after the tap -- the cloud admin UI polls
+//   commandStatus below to show that honestly (queued -> picked up ->
+//   done) rather than pretending it's instant.
+function requireOwnerSite() {
+return async (req, res, next) => {
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT vs.id AS site_id, vs.enabled FROM vc_sites vs WHERE vs.location_id = $1`,
+[req.params.locationId]
+));
+if (!rows[0]) return res.status(404).json({ error: 'No Venue Control site found for that location.' });
+if (!rows[0].enabled) return res.status(403).json({ error: 'Venue Control is turned off for this location.' });
+req.vcSiteId = rows[0].site_id;
+next();
+};
+}
+
+app.post('/api/venue-control/sites/:locationId/discovery/scan', auth.requireSession('full'), requireOwnerSite(), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { ranges, deep } = req.body || {};
+const command = await withServiceClient(async (client) => {
+// Don't queue a second scan on top of one that hasn't been picked up or
+// finished yet -- hand back the existing in-flight command instead, so a
+// second tap (or a phone with a slow connection retrying) doesn't leave
+// two scans racing on the agent.
+const { rows: existing } = await client.query(
+`SELECT * FROM vc_agent_commands WHERE site_id = $1 AND type = 'discovery_scan' AND status IN ('pending','running')
+   ORDER BY created_at DESC LIMIT 1`,
+[req.vcSiteId]
+);
+if (existing[0]) return existing[0];
+const { rows } = await client.query(
+`INSERT INTO vc_agent_commands (site_id, type, payload, created_by)
+   VALUES ($1, 'discovery_scan', $2, $3) RETURNING *`,
+[req.vcSiteId, JSON.stringify({ ranges: Array.isArray(ranges) && ranges.length ? ranges : null, deep: !!deep }), req.person.name || req.person.username || null]
+);
+return rows[0];
+});
+res.json({ ok: true, commandId: command.id, status: command.status });
+});
+
+app.get('/api/venue-control/sites/:locationId/discovery/commands/:commandId', auth.requireSession('light'), requireOwnerSite(), async (req, res) => {
+const { rows } = await withServiceClient((client) => client.query(
+'SELECT id, status, result, error, created_at, picked_up_at, finished_at FROM vc_agent_commands WHERE id = $1 AND site_id = $2',
+[req.params.commandId, req.vcSiteId]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Command not found for this site.' });
+res.json({ ok: true, command: rows[0] });
+});
+
+app.get('/api/venue-control/sites/:locationId/discovery/runs/latest', auth.requireSession('light'), requireOwnerSite(), async (req, res) => {
+const { rows: runRows } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_discovery_runs WHERE site_id = $1 ORDER BY started_at DESC LIMIT 1',
+[req.vcSiteId]
+));
+if (!runRows[0]) return res.json({ ok: true, run: null, devices: [] });
+const { rows: devices } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_discovery_devices WHERE run_id = $1 ORDER BY classified_as, ip',
+[runRows[0].id]
+));
+res.json({ ok: true, run: runRows[0], devices });
+});
+
+app.post('/api/venue-control/sites/:locationId/discovery/adopt', auth.requireSession('full'), requireOwnerSite(), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { discoveryDeviceId, as, ...fields } = req.body || {};
+try {
+const created = await withServiceClient(async (client) => {
+const record = await adoptDiscoveryDevice(client, req.vcSiteId, { discoveryDeviceId, as, fields });
+await recordActivity(client, req.vcSiteId, {
+actor: req.person.name || req.person.username, origin: 'cloud', action: 'discovery_adopt',
+targetType: as, targetId: record.id, detail: { discoveryDeviceId }, result: 'ok',
+});
+return record;
 });
 res.json({ ok: true, ...created });
 } catch (err) {
 res.status(err.status || 400).json({ error: err.message });
 }
+});
+
+// Agent-facing side of vc_agent_commands: the agent's existing 30s poll
+// loop (agent/lib/sync.js) claims any pending command for its own site --
+// the UPDATE...RETURNING claims atomically so a restart mid-poll can never
+// cause two in-flight fetches to both pick up (and double-run) the same
+// command. Only ever returns commands for the caller's own site, same
+// scoping as every other requireAgentAuth() route.
+app.get('/api/venue/agent/commands', requireAgentAuth(), async (req, res) => {
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_agent_commands SET status = 'running', picked_up_at = now()
+   WHERE id IN (
+     SELECT id FROM vc_agent_commands WHERE site_id = $1 AND status = 'pending' ORDER BY created_at LIMIT 5
+   )
+   RETURNING *`,
+[req.vcSite.site_id]
+));
+res.json({ ok: true, commands: rows });
+});
+
+app.post('/api/venue/agent/commands/:id/result', requireAgentAuth(), async (req, res) => {
+const { status, result, error } = req.body || {};
+if (status !== 'done' && status !== 'error') return res.status(400).json({ error: '"status" must be "done" or "error".' });
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_agent_commands SET status=$1, result=$2, error=$3, finished_at=now()
+   WHERE id=$4 AND site_id=$5 RETURNING id`,
+[status, result ? JSON.stringify(result) : null, error || null, req.params.id, req.vcSite.site_id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Command not found for this site.' });
+res.json({ ok: true });
 });
 
 // Phase 3's two small agent->cloud pushes (docs/venue-control.md §3 calls
