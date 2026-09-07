@@ -1902,6 +1902,15 @@ const result = await employees.ownerUpdateEmployee({ personId: req.params.id, po
 res.json(result);
 });
 
+// Owner-only role assignment — staff/manager/maintenance/owner. Previously
+// the only way to change a person's role was a direct database edit; see
+// server/employees.js's ownerUpdateRole for the last-owner guard.
+app.post('/api/employees/:id/role', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change a role.' });
+const result = await employees.ownerUpdateRole({ personId: req.params.id, role: req.body.role, updatedBy: req.person.id });
+res.json(result);
+});
+
 // Certifications shown on the employee data card — owner-only add/remove
 // (see server/employees.js and db/patch_022).
 app.post('/api/employees/:id/certifications', auth.requireSession('full'), async (req, res) => {

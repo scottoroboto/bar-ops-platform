@@ -288,6 +288,34 @@ async function ownerUpdateEmployee({ personId, position, locationId, payRate, ad
   });
 }
 
+const VALID_ROLES = ['staff', 'manager', 'maintenance', 'owner'];
+
+// Owner-only role assignment — until this, promoting someone to
+// manager/maintenance/owner (or demoting them) required a direct database
+// edit; there was no in-app path (see claude/scheduling-app-discovery.md's
+// "Roles" finding, 2026-09-07). Guards against removing the very last owner,
+// which would lock the platform's owner-only actions (step-up, activation,
+// etc.) out entirely.
+async function ownerUpdateRole({ personId, role, updatedBy }) {
+  if (!VALID_ROLES.includes(role)) return { ok: false, error: 'Not a valid role.' };
+  return withServiceClient(async (client) => {
+    const { rows: existingRows } = await client.query('SELECT id, name, role FROM people WHERE id = $1', [personId]);
+    const existing = existingRows[0];
+    if (!existing) return { ok: false, error: 'Not found.' };
+    if (existing.role === 'owner' && role !== 'owner') {
+      const { rows: ownerCountRows } = await client.query(`SELECT count(*)::int AS n FROM people WHERE role = 'owner' AND status = 'active'`);
+      if ((ownerCountRows[0] && ownerCountRows[0].n) <= 1) {
+        return { ok: false, error: "Can't remove the platform's last owner." };
+      }
+    }
+    const { rows } = await client.query(
+      `UPDATE people SET role = $1, updated_at = now() WHERE id = $2 RETURNING id, name, role`,
+      [role, personId]
+    );
+    return { ok: true, person: rows[0] };
+  });
+}
+
 // A manager can't change pay directly — they submit a request, the owner
 // decides. pay_rate_requests has RLS FORCE-enabled with zero policies (same
 // situation as devices/locations/positions before them), so every touch of
@@ -398,7 +426,7 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 
 module.exports = {
   createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, setAppAccess,
-  listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee,
+  listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
   requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,
-  addCertification, removeCertification, APP_KEYS, MANAGER_ONLY_APP_KEYS,
+  addCertification, removeCertification, APP_KEYS, MANAGER_ONLY_APP_KEYS, VALID_ROLES,
 };
