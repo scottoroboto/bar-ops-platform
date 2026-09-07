@@ -1,4 +1,16 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// pg's default parser turns a Postgres `date` column (OID 1082) into a JS
+// Date object. Nothing in this app wants that: every date-string helper
+// across scheduling.js/timeclock.js/etc. expects the plain 'YYYY-MM-DD'
+// text Postgres actually sends over the wire, and a silently-substituted
+// Date object breaks both string equality checks (a shift never matching
+// its day column) and .split()-based parsing (the "dateStr.split is not a
+// function" crash out of Publish). Overriding the parser to pass the raw
+// text through fixes every `date` column app-wide, not just scheduling's.
+// Scoped to OID 1082 only — timestamp/timestamptz columns (clock_in,
+// created_at, etc.) are untouched and still parse as Date objects.
+types.setTypeParser(1082, (val) => val);
 
 // Two separate connections, matching the two Postgres roles created in
 // db/schema.sql (see the "TWO APP-LEVEL ROLES" section there):

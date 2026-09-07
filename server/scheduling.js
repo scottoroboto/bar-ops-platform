@@ -39,6 +39,19 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // ---------------------------------------------------------------------
 const BUSINESS_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
 
+// pg returns a Postgres `date` column as a native JS Date object, not the
+// 'YYYY-MM-DD' string every date helper below expects — that mismatch is
+// exactly what threw "dateStr.split is not a function" out of Publish
+// (any DB-sourced shift_date, e.g. an existing shift being checked for
+// overlap, or a draft row read back for publish, hit this; a client-supplied
+// date string never did, which is why creating a shift worked fine).
+// toDateStr() normalizes either shape to the plain calendar-date string —
+// call it once at the top of every function below that does dateStr.split.
+function toDateStr(d) {
+  if (d instanceof Date) return d.toISOString().slice(0, 10);
+  return typeof d === 'string' ? d.slice(0, 10) : d;
+}
+
 function tzOffsetMinutes(timeZone, date) {
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone, hourCycle: 'h23',
@@ -52,6 +65,7 @@ function tzOffsetMinutes(timeZone, date) {
 }
 
 function zonedTimeToUtc(dateStr, timeStr) {
+  dateStr = toDateStr(dateStr);
   const guessUtcMs = Date.UTC(...dateStr.split('-').map(Number).map((n, i) => i === 1 ? n - 1 : n), ...timeStr.split(':').map(Number));
   const offsetMin = tzOffsetMinutes(BUSINESS_TZ, new Date(guessUtcMs));
   return new Date(guessUtcMs - offsetMin * 60000);
@@ -72,14 +86,14 @@ function rangesOverlap(r1, r2) {
 }
 
 function addDaysToDateStr(dateStr, days) {
-  const [y, m, d] = dateStr.split('-').map(Number);
+  const [y, m, d] = toDateStr(dateStr).split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
   dt.setUTCDate(dt.getUTCDate() + days);
   return dt.toISOString().slice(0, 10);
 }
 
 function dayNameForDate(dateStr) {
-  const [y, m, d] = dateStr.split('-').map(Number);
+  const [y, m, d] = toDateStr(dateStr).split('-').map(Number);
   return DAY_NAMES[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
 }
 
@@ -278,15 +292,12 @@ async function checkShiftConflicts(shift, options = {}) {
       return conflicts;
     }
 
-    const { rows: schedQual } = await client.query('SELECT 1 FROM employee_schedules WHERE person_id = $1 AND schedule_id = $2', [shift.personId, shift.scheduleId]);
-    if (!schedQual.length) {
-      conflicts.push({ type: 'qualification_schedule', hardBlock: true, message: `${person.name} is not checked in for this Schedule.` });
-    }
-    const { rows: posQual } = await client.query('SELECT 1 FROM employee_positions WHERE person_id = $1 AND position_id = $2', [shift.personId, shift.positionId]);
-    if (!posQual.length) {
-      const { rows: posRows } = await client.query('SELECT name FROM positions WHERE id = $1', [shift.positionId]);
-      conflicts.push({ type: 'qualification_position', hardBlock: true, message: `${person.name} is not checked for the ${posRows[0] ? posRows[0].name : 'selected'} position.` });
-    }
+    // Per Scotto: dropped the "checked into this schedule / qualified for
+    // this position" hard-block gate (Sep 2026) — any employee can be put
+    // on any schedule/position now. That bookkeeping is meant to move to
+    // the Employee data file instead of living here. The employee_schedules
+    // / employee_positions tables and their routes are left in place
+    // (unused by this app) rather than dropped, in case that move needs them.
 
     // Overlaps another active shift for this person, any schedule.
     const { rows: liveShifts } = await client.query(
@@ -408,7 +419,7 @@ async function getWeekShiftsWithDrafts(scheduleIds, weekStartISO, personId) {
   const drafts = await getMyDrafts(personId);
   return withServiceClient(async (client) => {
     for (const d of drafts) {
-      if (!ids.includes(String(d.schedule_id)) || !dates.includes(d.shift_date)) continue;
+      if (!ids.includes(String(d.schedule_id)) || !dates.includes(toDateStr(d.shift_date))) continue;
       if (d.action === 'create') {
         const [{ rows: pr }, { rows: sr }, { rows: por }] = await Promise.all([
           client.query('SELECT name FROM people WHERE id = $1', [d.person_id]),
@@ -583,7 +594,7 @@ async function publishMyDrafts(overrideReasons, personId) {
     if (hardBlocks.length > 0 || (softBlocks.length > 0 && !hasReason)) {
       const emp = employees.find((e) => String(e.id) === String(d.person_id));
       conflictsByDraft.push({
-        draftId: d.id, employeeName: emp ? emp.name : 'Unknown', date: d.shift_date,
+        draftId: d.id, employeeName: emp ? emp.name : 'Unknown', date: toDateStr(d.shift_date),
         canOverride: hardBlocks.length === 0,
         hardMessages: hardBlocks.map((c) => c.message),
         softMessages: softBlocks.map((c) => c.message),
@@ -627,11 +638,11 @@ async function publishMyDrafts(overrideReasons, personId) {
     ]);
     let notifiedCount = 0;
     for (const pid of Object.keys(notifyByPerson)) {
-      const items = notifyByPerson[pid].slice().sort((a, b) => a.shift_date.localeCompare(b.shift_date));
+      const items = notifyByPerson[pid].slice().sort((a, b) => toDateStr(a.shift_date).localeCompare(toDateStr(b.shift_date)));
       const lines = items.map((d) => {
         const sched = schedules.find((s) => s.id === d.schedule_id);
         const label = d.action === 'create' ? 'Added' : (d.action === 'cancel' ? 'Cancelled' : 'Updated');
-        return `${label}: ${sched ? sched.name : ''} ${d.shift_date} ${formatTime12hr(d.start_time)}–${formatTime12hr(d.end_time)}`;
+        return `${label}: ${sched ? sched.name : ''} ${toDateStr(d.shift_date)} ${formatTime12hr(d.start_time)}–${formatTime12hr(d.end_time)}`;
       });
       const { rows: personRows } = await client.query('SELECT * FROM people WHERE id = $1', [pid]);
       const person = personRows[0];
