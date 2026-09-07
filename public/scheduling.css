@@ -1,0 +1,156 @@
+/* Scheduling app — Concept A visual language ("match the reference as-is"):
+   light theme, charcoal-blue/gold palette, sidebar nav, chip-style shifts,
+   a proper draft/publish banner, and a schedule picker popover. Deliberately
+   diverges from the rest of the platform's dark theme (styles.css) — this
+   page opts out of most of those shared component colors by redeclaring the
+   same class names below, scoped to this page only, so scheduling.js's
+   existing markup (which emits .card/.badge/.msg/button classes etc.)
+   restyles without needing a rewrite of every template string. */
+
+:root {
+  --ink: #16233F;
+  --ink2: #1657D6;
+  --ink3: #2E6FF2;
+  --gold: #FFB703;
+  --gold-ink: #3A2900;
+  --paper: #F7FAFF;
+  --card: #FFFFFF;
+  --line: #E1E8F5;
+  --muted: #6B7A99;
+  --danger: #D64545;
+  --danger-bg: #FDEAEA;
+  --danger-line: #F3C4C4;
+  --success: #1E9E6B;
+  --success-bg: #E8F7EF;
+  --warn-bg: #FFF3D6;
+  --warn-ink: #8A5B00;
+  --warn-line: #E8A400;
+}
+
+body { background: var(--paper); color: var(--ink); }
+
+/* ---- shared platform topbar — kept for Apps Home / sign-out, restyled thin & light ---- */
+header.topbar { background: var(--card); border-bottom: 1px solid var(--line); }
+header.topbar .topbar-row { padding: 10px 20px; }
+header.topbar .brand { color: var(--ink); font-size: 15px; }
+header.topbar .who { color: var(--muted); }
+header.topbar .who b, header.topbar .who { color: var(--muted); }
+header.topbar a.logout { color: var(--ink3); }
+header.topbar .topnav { padding: 0 20px 8px; }
+header.topbar .topnav .crumb-link { color: var(--muted); }
+header.topbar .topnav .crumb-current { color: var(--ink); }
+header.topbar .topnav .crumb-sep { color: var(--line); }
+
+/* ---- shell: sidebar + main, replaces the centered .wrap column on this page ---- */
+.wrap.wide#app {
+  max-width: none;
+  padding: 0;
+  display: flex;
+  align-items: stretch;
+  min-height: calc(100vh - 56px);
+}
+#sidebarNav {
+  width: 216px; flex-shrink: 0; background: var(--ink); color: #EAF0FF;
+  padding: 20px 14px; display: flex; flex-direction: column;
+}
+#sidebarNav .brand-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px 20px; }
+#sidebarNav .brand-mark { width: 30px; height: 30px; border-radius: 8px; background: var(--gold); display: flex; align-items: center; justify-content: center; font-weight: 800; color: var(--gold-ink); font-size: 15px; flex-shrink: 0; }
+#sidebarNav .brand-name { font-weight: 700; font-size: 14px; }
+#sidebarNav .brand-sub { font-size: 10.5px; color: #9FB3E0; }
+#sidebarNav button.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px;
+  font-size: 13.5px; font-weight: 600; color: #C6D4F2; margin-bottom: 2px; cursor: pointer;
+  background: transparent; border: none; text-align: left; width: 100%; font-family: inherit;
+}
+#sidebarNav button.nav-item .dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; flex-shrink: 0; }
+#sidebarNav button.nav-item.active { background: linear-gradient(90deg, var(--ink3), var(--ink2)); color: #fff; }
+#sidebarNav button.nav-item.active .dot { background: var(--gold); }
+#sidebarNav .nav-badge { margin-left: auto; background: var(--danger); color: #fff; border-radius: 999px; font-size: 10px; font-weight: 700; padding: 1px 6px; }
+#sidebarNav .pending-banner {
+  margin-top: auto; background: rgba(255,183,3,0.16); border: 1px solid rgba(255,183,3,0.45);
+  border-radius: 10px; padding: 11px 12px; font-size: 12px; color: var(--warn-ink); line-height: 1.5;
+}
+#sidebarNav .pending-banner b { color: var(--warn-ink); }
+
+.sched-main { flex: 1; padding: 24px 30px 60px; min-width: 0; }
+.sched-topline { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.sched-topline h1 { font-size: 20px; margin: 0; color: var(--ink); }
+
+/* ---- cards, tables, forms — light reskin of the shared classes ---- */
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 1px 2px rgba(22,35,63,0.04); }
+.card h2 { color: var(--ink); }
+label { color: var(--muted); }
+input, select, textarea { background: var(--paper); border: 1px solid var(--line); color: var(--ink); }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink3); outline-offset: 1px; }
+
+button.primary { background: var(--ink3); color: #fff; }
+button.secondary { background: transparent; color: var(--ink3); border: 1px solid var(--ink3); }
+button.ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
+button.danger { background: var(--danger); color: #fff; }
+
+table th { color: var(--muted); background: #EFF4FF; }
+table th, table td { border-bottom: 1px solid var(--line); }
+
+.msg.error { background: var(--danger-bg); color: #9C2B2B; border: 1px solid var(--danger-line); }
+.msg.success { background: var(--success-bg); color: #146B47; border: 1px solid rgba(30,158,107,0.35); }
+.msg.info { background: rgba(46,111,242,0.08); color: var(--ink2); border: 1px solid rgba(46,111,242,0.25); }
+
+.badge.on { background: var(--success-bg); color: #146B47; }
+.badge.off { background: #EEF1F8; color: var(--muted); }
+.badge.stale { background: var(--warn-bg); color: var(--warn-ink); }
+.badge.danger { background: var(--danger-bg); color: #9C2B2B; }
+
+.list-row { border-bottom: 1px solid var(--line); }
+.list-row .sub { color: var(--muted); }
+.muted { color: var(--muted); }
+
+.sc-checkbox-grid { }
+.sc-checkbox { color: var(--ink); }
+
+/* ---- schedule picker: button + popover (replaces the old inline checkbox grid) ---- */
+.picker-btn {
+  display: inline-flex; align-items: center; gap: 8px; background: var(--paper); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 14px; font-size: 13.5px; font-weight: 600; color: var(--ink); cursor: pointer;
+}
+.picker-btn .chev { color: var(--ink3); font-size: 11px; }
+.picker-popover {
+  position: absolute; width: 300px; background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 12px 32px rgba(22,35,63,0.18); padding: 14px; z-index: 25;
+}
+.picker-popover .pp-title { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+.pp-row { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; font-size: 13.5px; cursor: pointer; }
+.pp-row:hover { background: var(--paper); }
+.pp-check { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid #B9C6E8; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #fff; }
+.pp-check.checked { background: var(--ink3); border-color: var(--ink3); }
+.pp-row .lbl b { display: block; color: var(--ink); }
+.pp-row .lbl span { font-size: 11px; color: var(--muted); }
+.pp-empty { font-size: 13px; color: var(--muted); padding: 4px 6px; }
+
+/* ---- draft/publish banner ---- */
+.draft-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  border-radius: 12px; padding: 12px 16px; font-size: 13.5px; font-weight: 600;
+}
+.draft-banner.has-drafts { background: var(--danger-bg); border: 1px solid var(--danger-line); color: #9C2B2B; }
+.draft-banner.no-drafts { background: var(--paper); border: 1px solid var(--line); color: var(--muted); font-weight: 500; }
+.draft-banner .n { font-weight: 800; }
+.draft-banner .actions { display: flex; gap: 8px; }
+.draft-banner .btn-discard { background: #fff; color: #9C2B2B; border: 1px solid var(--danger-line); border-radius: 8px; padding: 8px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.draft-banner .btn-publish { background: var(--danger); color: #fff; border: none; border-radius: 8px; padding: 8px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.draft-banner .btn-discard:disabled, .draft-banner .btn-publish:disabled { opacity: 0.4; cursor: default; }
+
+/* ---- shift chips (scheduler grid cells) ---- */
+.chip { display: block; border-radius: 7px; padding: 5px 7px; font-size: 11.3px; font-weight: 600; margin-bottom: 4px; line-height: 1.35; cursor: pointer; }
+.chip.live { background: rgba(46,111,242,0.1); color: var(--ink2); border: 1px solid rgba(46,111,242,0.22); }
+.chip.draft { background: var(--warn-bg); color: var(--warn-ink); border: 1.5px dashed var(--warn-line); }
+.chip.cancel { background: var(--danger-bg); color: #9C2B2B; text-decoration: line-through; border: 1px dashed var(--danger-line); }
+.chip .p { font-weight: 700; }
+.add-link { font-size: 11px; color: var(--ink3); font-weight: 700; cursor: pointer; text-decoration: none; }
+
+@media (max-width: 860px) {
+  .wrap.wide#app { flex-direction: column; }
+  #sidebarNav { width: 100%; flex-direction: row; flex-wrap: wrap; padding: 12px; }
+  #sidebarNav .brand-row { padding: 4px 8px; width: 100%; }
+  #sidebarNav .pending-banner { margin-top: 8px; width: 100%; }
+  .sched-main { padding: 18px 16px 60px; }
+}

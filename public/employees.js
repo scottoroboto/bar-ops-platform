@@ -429,6 +429,16 @@ function openEmployeeDetail(id) {
     document.getElementById('detailAddress').value = p.address || '';
   }
   document.getElementById('detailResult').innerHTML = '';
+
+  // Role is deliberately a separate section/action from the fields above —
+  // see saveEmployeeRole(). Owner can't demote themselves (would leave the
+  // page with no way to complete owner-only actions) or edit a still-pending
+  // applicant's role (they aren't a real account yet).
+  const roleEditable = isOwner && p.id !== ME.id && p.status === 'active';
+  document.getElementById('detailRoleFields').style.display = roleEditable ? '' : 'none';
+  if (roleEditable) document.getElementById('detailRole').value = p.role;
+  document.getElementById('detailRoleResult').innerHTML = '';
+
   document.getElementById('employeeDetailModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
 }
@@ -496,6 +506,26 @@ async function saveEmployeeDetail() {
     closeEmployeeDetail();
     showMsg('Employee updated.', 'success');
     await loadAllEmployees();
+  } catch (e) {
+    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// Role assignment — deliberately its own action/endpoint (POST
+// /api/employees/:id/role), separate from saveEmployeeDetail()'s
+// position/location/pay/address save, since it changes what this person can
+// access platform-wide rather than just their profile fields.
+async function saveEmployeeRole() {
+  const id = document.getElementById('detailPersonId').value;
+  const role = document.getElementById('detailRole').value;
+  const resultEl = document.getElementById('detailRoleResult');
+  try {
+    const result = await withStepUp(() => api(`/api/employees/${id}/role`, { method: 'POST', body: { role } }));
+    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
+    resultEl.innerHTML = '';
+    showMsg('Role updated.', 'success');
+    await loadAllEmployees();
+    openEmployeeDetail(id);
   } catch (e) {
     resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }

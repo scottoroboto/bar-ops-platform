@@ -5,17 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Scheduling — Bar Ops</title>
 <link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/scheduling.css">
 </head>
 <body>
 <header class="topbar" id="topbar"></header>
 <div class="wrap wide" id="app">
-  <div id="msgBox"></div>
-  <div class="tabs" id="tabs"></div>
+  <nav id="sidebarNav"></nav>
+  <main class="sched-main">
+    <div class="sched-topline">
+      <h1 id="schedPageTitle">Scheduler</h1>
+      <div class="who muted" id="schedWho"></div>
+    </div>
+    <div id="msgBox"></div>
 
-  <div id="panelMine"></div>
-  <div id="panelScheduler" style="display:none;"></div>
-  <div id="panelTimeOff" style="display:none;"></div>
-  <div id="panelSetup" style="display:none;"></div>
+    <div id="panelMine"></div>
+    <div id="panelScheduler" style="display:none;"></div>
+    <div id="panelTimeOff" style="display:none;"></div>
+    <div id="panelSetup" style="display:none;"></div>
+  </main>
 </div>
 
 <!-- Add/Edit shift modal (Scheduler tab) -->

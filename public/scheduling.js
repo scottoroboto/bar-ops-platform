@@ -18,6 +18,8 @@ let WEEK_SHIFTS = [];          // this week's live shifts + my draft overlay
 let DRAFT_COUNT = 0;
 let PUBLISH_OVERRIDES = {};    // draftId -> override reason, accumulated across a Publish retry
 let ADMIN_SCHEDULES = [];      // Setup tab: every schedule incl. archived
+let PENDING_TIMEOFF_COUNT = 0; // sidebar badge + pending-review nudge (bootstrap-provided)
+let SCHED_PICKER_OPEN = false; // schedule-picker popover open/closed (Scheduler tab)
 
 // ---------------- Date helpers (calendar-date-only, local time — these
 // dates carry no time-of-day meaning, so plain local Date math is fine and
@@ -60,13 +62,17 @@ function personName(id) { const p = EMPLOYEES.find(e => e.id === id); return p ?
 function scheduleName(id) { const s = ALL_SCHEDULES.find(s => s.id === id) || ADMIN_SCHEDULES.find(s => s.id === id); return s ? s.name : '—'; }
 function positionName(id) { const p = POSITIONS.find(p => p.id === id); return p ? p.name : '—'; }
 
-// ---------------- Tabs ----------------
+// ---------------- Sidebar nav (Concept A: left rail instead of a tab bar) ----------------
+const TAB_TITLES = { mine: 'My Schedule', scheduler: 'Scheduler', timeoff: 'Time Off', setup: 'Setup' };
+
 function setTab(which) {
   document.getElementById('panelMine').style.display = which === 'mine' ? '' : 'none';
   document.getElementById('panelScheduler').style.display = which === 'scheduler' ? '' : 'none';
   document.getElementById('panelTimeOff').style.display = which === 'timeoff' ? '' : 'none';
   document.getElementById('panelSetup').style.display = which === 'setup' ? '' : 'none';
-  Array.from(document.querySelectorAll('#tabs button')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
+  Array.from(document.querySelectorAll('#sidebarNav button.nav-item')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
+  document.getElementById('schedPageTitle').textContent = TAB_TITLES[which] || 'Scheduling';
+  closeSchedPicker();
   if (which === 'mine') renderMine();
   if (which === 'scheduler') renderScheduler();
   if (which === 'timeoff') renderTimeOffAdmin();
@@ -74,14 +80,29 @@ function setTab(which) {
 }
 function renderTabs() {
   const tabs = [{ key: 'mine', label: 'My Schedule' }];
-  if (IS_MGR_OR_OWNER) tabs.push({ key: 'scheduler', label: 'Scheduler' }, { key: 'timeoff', label: 'Time Off' }, { key: 'setup', label: 'Setup' });
-  document.getElementById('tabs').innerHTML = tabs.map(t =>
-    `<button data-tab="${t.key}" onclick="setTab('${t.key}')">${t.label}</button>`).join('');
+  if (IS_MGR_OR_OWNER) {
+    tabs.push({ key: 'scheduler', label: 'Scheduler' });
+    tabs.push({ key: 'timeoff', label: 'Time Off', badge: PENDING_TIMEOFF_COUNT });
+    tabs.push({ key: 'setup', label: 'Setup' });
+  }
+  const navHtml = tabs.map(t =>
+    `<button type="button" class="nav-item" data-tab="${t.key}" onclick="setTab('${t.key}')">
+      <span class="dot"></span>${t.label}
+      ${t.badge ? `<span class="nav-badge">${t.badge}</span>` : ''}
+    </button>`).join('');
+  const pendingBanner = (IS_MGR_OR_OWNER && PENDING_TIMEOFF_COUNT)
+    ? `<div class="pending-banner"><b>${PENDING_TIMEOFF_COUNT} time-off request${PENDING_TIMEOFF_COUNT === 1 ? '' : 's'}</b> pending your review.</div>`
+    : '';
+  document.getElementById('sidebarNav').innerHTML = `
+    <div class="brand-row"><div class="brand-mark">T</div><div><div class="brand-name">TSB Scheduling</div><div class="brand-sub">Ticket Sports Bar</div></div></div>
+    ${navHtml}
+    ${pendingBanner}`;
+  document.getElementById('schedWho').innerHTML = ME ? `Signed in as <b>${escapeHtml(ME.name)}</b><br>${escapeHtml(ME.role)}` : '';
   setTab(IS_MGR_OR_OWNER ? 'scheduler' : 'mine');
 }
 
 function closeAllModals() {
-  closeShiftModal(); closePublishModal(); closeTimeOffModal(); closeQualModal(); closePrintModal();
+  closeShiftModal(); closePublishModal(); closeTimeOffModal(); closeQualModal(); closePrintModal(); closeSchedPicker();
 }
 
 // =========================================================
@@ -262,9 +283,10 @@ async function renderScheduler() {
   if (!WEEK_START) WEEK_START = startOfWeekISO(todayISO());
   if (!SELECTED_SCHEDULE_IDS.length) SELECTED_SCHEDULE_IDS = MANAGEABLE_SCHEDULES.map(s => s.id);
   el.innerHTML = `
-    <div class="card">
+    <div class="card" style="position:relative;">
       <label>Schedules</label>
-      <div id="schedPicker" class="sc-checkbox-grid"></div>
+      <div class="picker-btn" id="schedPickerBtn" onclick="toggleSchedPicker(event)"></div>
+      <div class="picker-popover" id="schedPickerPopover" style="display:none;"></div>
     </div>
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
@@ -277,13 +299,7 @@ async function renderScheduler() {
           <button class="small secondary" onclick="openShiftModal({})">+ Add shift</button>
         </div>
       </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:8px;">
-        <span class="badge ${DRAFT_COUNT ? 'stale' : 'off'}" id="draftCountBadge">${DRAFT_COUNT} draft${DRAFT_COUNT === 1 ? '' : 's'} pending</span>
-        <div class="stack-actions" style="margin:0; gap:6px;">
-          <button class="small ghost" onclick="discardDrafts()">Discard my drafts</button>
-          <button class="small primary" style="margin-top:0;" onclick="openPublishModal()">Publish</button>
-        </div>
-      </div>
+      <div id="draftBanner" class="draft-banner no-drafts" style="margin-top:10px;"></div>
       <div id="schedGrid" style="margin-top:14px; overflow-x:auto;"><p class="muted">Loading…</p></div>
     </div>
     <div class="card">
@@ -296,9 +312,7 @@ async function renderScheduler() {
       <div id="copyResult"></div>
     </div>`;
 
-  document.getElementById('schedPicker').innerHTML = MANAGEABLE_SCHEDULES.length
-    ? MANAGEABLE_SCHEDULES.map(s => `<label class="sc-checkbox"><input type="checkbox" value="${s.id}" ${SELECTED_SCHEDULE_IDS.includes(s.id) ? 'checked' : ''} onchange="toggleSchedule('${s.id}', this.checked)"> ${escapeHtml(s.name)} <span class="muted">(${escapeHtml(s.location_name)})</span></label>`).join('')
-    : '<p class="muted">No schedules assigned to you yet — ask the owner to set one up under Setup.</p>';
+  renderSchedPicker();
 
   const copySel = document.getElementById('copyEmployee');
   copySel.innerHTML = EMPLOYEES.map(e => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('');
@@ -306,10 +320,73 @@ async function renderScheduler() {
   loadSchedGrid();
 }
 
+// ---- Schedule picker: a "N schedules selected" button that opens a
+// checklist popover, replacing the old always-visible checkbox grid. ----
+function renderSchedPicker() {
+  const btn = document.getElementById('schedPickerBtn');
+  if (!btn) return;
+  const n = SELECTED_SCHEDULE_IDS.length;
+  btn.innerHTML = MANAGEABLE_SCHEDULES.length
+    ? `${n} schedule${n === 1 ? '' : 's'} selected <span class="chev">▾</span>`
+    : `No schedules assigned <span class="chev">▾</span>`;
+
+  const pop = document.getElementById('schedPickerPopover');
+  pop.innerHTML = `<div class="pp-title">Choose schedules</div>` + (MANAGEABLE_SCHEDULES.length
+    ? MANAGEABLE_SCHEDULES.map(s => {
+        const checked = SELECTED_SCHEDULE_IDS.includes(s.id);
+        return `<div class="pp-row" onclick="toggleSchedule('${s.id}', ${!checked})">
+          <div class="pp-check ${checked ? 'checked' : ''}">${checked ? '✓' : ''}</div>
+          <div class="lbl"><b>${escapeHtml(s.name)}</b><span>${escapeHtml(s.location_name)}</span></div>
+        </div>`;
+      }).join('')
+    : '<p class="pp-empty">No schedules assigned to you yet — ask the owner to set one up under Setup.</p>');
+}
+function toggleSchedPicker(evt) {
+  if (evt) evt.stopPropagation();
+  SCHED_PICKER_OPEN = !SCHED_PICKER_OPEN;
+  const pop = document.getElementById('schedPickerPopover');
+  if (!pop) return;
+  pop.style.display = SCHED_PICKER_OPEN ? '' : 'none';
+  if (SCHED_PICKER_OPEN) {
+    document.addEventListener('click', closeSchedPickerOnOutsideClick);
+  }
+}
+function closeSchedPicker() {
+  SCHED_PICKER_OPEN = false;
+  const pop = document.getElementById('schedPickerPopover');
+  if (pop) pop.style.display = 'none';
+  document.removeEventListener('click', closeSchedPickerOnOutsideClick);
+}
+function closeSchedPickerOnOutsideClick(evt) {
+  const pop = document.getElementById('schedPickerPopover');
+  const btn = document.getElementById('schedPickerBtn');
+  if (!pop || (pop.contains(evt.target)) || (btn && btn.contains(evt.target))) return;
+  closeSchedPicker();
+}
 function toggleSchedule(id, checked) {
   if (checked && !SELECTED_SCHEDULE_IDS.includes(id)) SELECTED_SCHEDULE_IDS.push(id);
   if (!checked) SELECTED_SCHEDULE_IDS = SELECTED_SCHEDULE_IDS.filter(x => x !== id);
+  renderSchedPicker();
   loadSchedGrid();
+}
+
+// ---- Draft/publish banner — replaces the old small "N drafts pending"
+// badge with a proper banner + inline Discard/Publish actions. ----
+function renderDraftBanner() {
+  const el = document.getElementById('draftBanner');
+  if (!el) return;
+  if (DRAFT_COUNT) {
+    el.className = 'draft-banner has-drafts';
+    el.innerHTML = `
+      <div><span class="n">${DRAFT_COUNT} draft${DRAFT_COUNT === 1 ? '' : 's'}</span> pending — nothing is live or notified until you publish.</div>
+      <div class="actions">
+        <button class="btn-discard" onclick="discardDrafts()">Discard my drafts</button>
+        <button class="btn-publish" onclick="openPublishModal()">Publish</button>
+      </div>`;
+  } else {
+    el.className = 'draft-banner no-drafts';
+    el.innerHTML = `<div>No drafts pending.</div>`;
+  }
 }
 function shiftSchedWeek(days) {
   WEEK_START = addDaysISO(WEEK_START, days);
@@ -329,9 +406,7 @@ async function loadSchedGrid() {
     WEEK_SHIFTS = await api(`/api/scheduling/week?scheduleIds=${SELECTED_SCHEDULE_IDS.join(',')}&weekStart=${WEEK_START}`);
     const summary = await api('/api/scheduling/my-drafts/summary');
     DRAFT_COUNT = summary.count;
-    const badge = document.getElementById('draftCountBadge');
-    badge.textContent = `${DRAFT_COUNT} draft${DRAFT_COUNT === 1 ? '' : 's'} pending`;
-    badge.className = `badge ${DRAFT_COUNT ? 'stale' : 'off'}`;
+    renderDraftBanner();
 
     const roster = EMPLOYEES.filter(e => e.schedule_ids.some(id => SELECTED_SCHEDULE_IDS.includes(id)));
     const dates = weekDatesFrom(WEEK_START);
@@ -348,16 +423,16 @@ function schedCellHtml(emp, date) {
   const shifts = WEEK_SHIFTS.filter(s => s.person_id === emp.id && s.shift_date === date);
   const defaultScheduleId = emp.schedule_ids.find(id => SELECTED_SCHEDULE_IDS.includes(id)) || SELECTED_SCHEDULE_IDS[0];
   const chips = shifts.map(s => {
-    const cls = s.draftAction === 'cancel' ? 'danger' : (s.isDraft ? 'stale' : 'on');
+    const cls = s.draftAction === 'cancel' ? 'cancel' : (s.isDraft ? 'draft' : 'live');
     const label = s.draftAction === 'cancel' ? `<s>${formatTime12(s.start_time)}–${formatTime12(s.end_time)}</s>` : `${formatTime12(s.start_time)}–${formatTime12(s.end_time)}`;
     const payload = JSON.stringify({
       personId: s.person_id, scheduleId: s.schedule_id, positionId: s.position_id, date: s.shift_date,
       startTime: s.start_time, endTime: s.end_time, draftId: s.draftId, shiftId: s.id,
     }).replace(/"/g, '&quot;');
-    return `<div class="badge ${cls}" style="display:block; margin-bottom:3px; cursor:pointer;" onclick='openShiftModal(${payload})'>${escapeHtml(s.position_name)} ${label}</div>`;
+    return `<div class="chip ${cls}" onclick='openShiftModal(${payload})'><span class="p">${escapeHtml(s.position_name)}</span> ${label}</div>`;
   }).join('');
   const addPayload = JSON.stringify({ personId: emp.id, scheduleId: defaultScheduleId, date }).replace(/"/g, '&quot;');
-  return `<td style="min-width:120px; vertical-align:top;">${chips}<a href="#" onclick='event.preventDefault(); openShiftModal(${addPayload})' style="font-size:12px;">+ add</a></td>`;
+  return `<td style="min-width:120px; vertical-align:top;">${chips}<a href="#" class="add-link" onclick='event.preventDefault(); openShiftModal(${addPayload})'>+ add</a></td>`;
 }
 
 // ---- Shift modal (create/update/cancel a draft) ----
@@ -800,6 +875,7 @@ async function submitQual() {
       ALL_SCHEDULES = boot.schedules;
       MANAGEABLE_SCHEDULES = boot.manageableSchedules;
       EMPLOYEES = boot.employees;
+      PENDING_TIMEOFF_COUNT = boot.pendingTimeOffCount || 0;
     }
     renderTabs();
   } catch (e) {

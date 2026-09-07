@@ -179,6 +179,22 @@
     </div>
     <div id="detailResult"></div>
   </div>
+
+  <div id="detailRoleFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">
+    <div class="detail-label" style="margin-bottom:10px;">Role (owner)</div>
+    <p class="muted" style="margin-top:-6px;">Controls what this person can access across every app — change this deliberately.</p>
+    <label for="detailRole">Role</label>
+    <select id="detailRole">
+      <option value="staff">Staff</option>
+      <option value="manager">Manager</option>
+      <option value="maintenance">Maintenance</option>
+      <option value="owner">Owner</option>
+    </select>
+    <div class="stack-actions">
+      <button class="secondary" style="margin-top:0;" id="detailRoleSaveBtn" onclick="saveEmployeeRole()">Change role</button>
+    </div>
+    <div id="detailRoleResult"></div>
+  </div>
 </div>
 
 <!-- Request pay raise modal (manager) -->
