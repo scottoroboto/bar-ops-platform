@@ -187,7 +187,7 @@ if (!token) return res.status(401).json({ error: 'Not signed in.' });
 const tokenHash = hashToken(token);
 const result = await withServiceClient(async (client) => {
 const { rows } = await client.query(
-`SELECT s.*, p.id AS p_id, p.name, p.role, p.location_id, p.status, p.email, p.phone
+`SELECT s.*, p.id AS p_id, p.name, p.role, p.location_id, p.status, p.email, p.phone, p.address
 FROM auth_sessions s JOIN people p ON p.id = s.person_id
 WHERE s.token_hash = $1`,
 [tokenHash]
@@ -201,7 +201,7 @@ if (rank[result.session_tier] < rank[minTier]) {
 return res.status(403).json({ error: 'STEP_UP_REQUIRED', message: 'This needs you to re-enter your password first.' });
 }
 
-req.person = { id: result.p_id, name: result.name, role: result.role, location_id: result.location_id, email: result.email, phone: result.phone };
+req.person = { id: result.p_id, name: result.name, role: result.role, location_id: result.location_id, email: result.email, phone: result.phone, address: result.address };
 req.withAuthedClient = (fn) => withAuthedClient(req.person, fn);
 next();
 };

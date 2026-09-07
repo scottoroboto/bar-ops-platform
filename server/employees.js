@@ -12,7 +12,14 @@ const notify = require('./notify');
 // in server/index.js) — but it also meant server/monitoring.js's
 // recipientsFor() found nobody to notify, ever, since that query required
 // an enabled row here. Fixed alongside the alert-routing work (2026-09-01).
-const APP_KEYS = ['time_clock', 'service_calls', 'scheduling', 'monitoring'];
+//
+// 'employees' (patch_022) is the newest addition — the roster redesign's
+// "Employees (managers only)" toggle. MANAGER_ONLY_APP_KEYS below is what
+// actually enforces the "only managers" half; it's tracked the same way
+// as the other four but does not yet gate access to this app the way the
+// other four gate their own (see setAppAccess/activateEmployee).
+const APP_KEYS = ['time_clock', 'service_calls', 'scheduling', 'monitoring', 'employees'];
+const MANAGER_ONLY_APP_KEYS = ['employees'];
 
 function slugUsername(name) {
   return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '');
@@ -51,12 +58,12 @@ async function createPendingEmployee({ name, email, phone, position, requestedLo
 // handler passing req.person.id, never a client-supplied id). Anything
 // sensitive (tax/banking/SSN) never lives here — that stays in Jotform;
 // the app just points people at the hire-pack form to update it.
-async function updateOwnProfile({ personId, name, email, phone }) {
+async function updateOwnProfile({ personId, name, email, phone, address }) {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `UPDATE people SET name = $1, email = $2, phone = $3, updated_at = now()
-       WHERE id = $4 RETURNING id, name, email, phone, role, location_id, status`,
-      [name, email || null, phone || null, personId]
+      `UPDATE people SET name = $1, email = $2, phone = $3, address = $4, updated_at = now()
+       WHERE id = $5 RETURNING id, name, email, phone, address, role, location_id, status`,
+      [name, email || null, phone || null, address || null, personId]
     );
     return rows[0] || null;
   });
@@ -128,7 +135,12 @@ async function activateEmployee({ personId, appAccess, activatedBy }) {
     );
 
     for (const key of APP_KEYS) {
-      const enabled = !!(appAccess && appAccess[key]);
+      // A manager-only key (currently just 'employees') can never be
+      // switched on for anyone but a manager — a staff/maintenance hire
+      // being activated here just gets it force-disabled regardless of
+      // what appAccess said, rather than 403ing the whole activation.
+      const requested = !!(appAccess && appAccess[key]);
+      const enabled = MANAGER_ONLY_APP_KEYS.includes(key) ? (requested && person.role === 'manager') : requested;
       await client.query(
         `INSERT INTO employee_apps (person_id, app_key, enabled, updated_by)
          VALUES ($1,$2,$3,$4)
@@ -152,6 +164,12 @@ async function activateEmployee({ personId, appAccess, activatedBy }) {
 async function setAppAccess({ personId, appKey, enabled, updatedBy }) {
   if (!APP_KEYS.includes(appKey)) return { ok: false, error: 'Unknown app.' };
   return withServiceClient(async (client) => {
+    if (enabled && MANAGER_ONLY_APP_KEYS.includes(appKey)) {
+      const { rows } = await client.query('SELECT role FROM people WHERE id = $1', [personId]);
+      if (!rows[0] || rows[0].role !== 'manager') {
+        return { ok: false, error: 'Only a manager can be granted Employees access.' };
+      }
+    }
     await client.query(
       `INSERT INTO employee_apps (person_id, app_key, enabled, updated_by)
        VALUES ($1,$2,$3,$4)
@@ -165,6 +183,12 @@ async function setAppAccess({ personId, appKey, enabled, updatedBy }) {
 // locationFilter is set for a manager (their own location only, enforced by
 // the route handler passing req.person.location_id, never a client-supplied
 // value); left undefined for the owner, who sees every location.
+//
+// hire_date is derived (COALESCE(activated_at, created_at)) rather than a
+// stored column — same reasoning/precedent as listPayRateRequests' own
+// hire_date, kept in sync here rather than adding a redundant column.
+// certifications is attached the same way appAccess already was: one extra
+// query across every row rather than N+1, keyed by person_id.
 async function listAllWithAccess(locationFilter) {
   return withServiceClient(async (client) => {
     const params = [];
@@ -174,14 +198,46 @@ async function listAllWithAccess(locationFilter) {
       where += ` AND location_id = $${params.length}`;
     }
     const { rows: people } = await client.query(
-      `SELECT id, name, role, location_id, username, email, phone, status, position, pay_rate, activated_at
+      `SELECT id, name, role, location_id, username, email, phone, address, status, position, pay_rate,
+              activated_at, COALESCE(activated_at, created_at) AS hire_date
        FROM people WHERE ${where} ORDER BY name`,
       params
     );
     const { rows: access } = await client.query('SELECT * FROM employee_apps');
     const byPerson = {};
     access.forEach(a => { (byPerson[a.person_id] ||= {})[a.app_key] = a.enabled; });
-    return people.map(p => ({ ...p, appAccess: byPerson[p.id] || {} }));
+    const { rows: certs } = await client.query(
+      'SELECT * FROM employee_certifications ORDER BY acquired_on ASC NULLS LAST, created_at ASC'
+    );
+    const certsByPerson = {};
+    certs.forEach(c => { (certsByPerson[c.person_id] ||= []).push(c); });
+    return people.map(p => ({ ...p, appAccess: byPerson[p.id] || {}, certifications: certsByPerson[p.id] || [] }));
+  });
+}
+
+// ---------------------------------------------------------------------
+// Certifications — owner-only add/remove, shown on the employee data
+// card. Free-text name (no fixed enum — new cert types shouldn't need a
+// migration, same reasoning as monitored_systems.kind).
+// ---------------------------------------------------------------------
+async function addCertification({ personId, name, acquiredOn, addedBy }) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return { ok: false, error: 'Certification name is required.' };
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query(
+      `INSERT INTO employee_certifications (person_id, name, acquired_on, added_by)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [personId, trimmed, acquiredOn || null, addedBy]
+    );
+    return { ok: true, certification: rows[0] };
+  });
+}
+
+async function removeCertification({ certificationId }) {
+  return withServiceClient(async (client) => {
+    const { rowCount } = await client.query('DELETE FROM employee_certifications WHERE id = $1', [certificationId]);
+    if (!rowCount) return { ok: false, error: 'Not found.' };
+    return { ok: true };
   });
 }
 
@@ -220,12 +276,12 @@ async function sendOnboardingInvite({ toEmail, toName, sentBy }) {
 // Owner-only full edit — unlike managerReview (which only works while
 // status = 'pending_review'), this works on any employee at any time, since
 // only the owner can call it.
-async function ownerUpdateEmployee({ personId, position, locationId, payRate }) {
+async function ownerUpdateEmployee({ personId, position, locationId, payRate, address }) {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `UPDATE people SET position = $1, location_id = $2, pay_rate = $3, updated_at = now()
-       WHERE id = $4 RETURNING id, name, role, location_id, position, pay_rate, status`,
-      [position || null, locationId || null, payRate ?? null, personId]
+      `UPDATE people SET position = $1, location_id = $2, pay_rate = $3, address = $4, updated_at = now()
+       WHERE id = $5 RETURNING id, name, role, location_id, position, pay_rate, address, status`,
+      [position || null, locationId || null, payRate ?? null, address || null, personId]
     );
     if (!rows[0]) return { ok: false, error: 'Not found.' };
     return { ok: true, person: rows[0] };
@@ -343,5 +399,6 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 module.exports = {
   createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, setAppAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee,
-  requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote, APP_KEYS,
+  requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,
+  addCertification, removeCertification, APP_KEYS, MANAGER_ONLY_APP_KEYS,
 };

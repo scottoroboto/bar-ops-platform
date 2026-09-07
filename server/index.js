@@ -1848,7 +1848,7 @@ app.post('/api/webhooks/jotform-new-hire', jotform.parseBody, jotform.handleWebh
 app.post('/api/me/profile', auth.requireSession('light'), async (req, res) => {
 const name = (req.body.name || '').trim();
 if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
-const person = await employees.updateOwnProfile({ personId: req.person.id, name, email: req.body.email, phone: req.body.phone });
+const person = await employees.updateOwnProfile({ personId: req.person.id, name, email: req.body.email, phone: req.body.phone, address: req.body.address });
 res.json({ ok: true, person });
 });
 
@@ -1894,11 +1894,24 @@ const result = await employees.setAppAccess({ personId: req.params.id, appKey: r
 res.json(result);
 });
 
-// Owner-only full edit — position/location/pay rate, any time, any employee.
+// Owner-only full edit — position/location/pay rate/address, any time, any employee.
 app.post('/api/employees/:id/update', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can edit an employee directly.' });
-const { position, locationId, payRate } = req.body;
-const result = await employees.ownerUpdateEmployee({ personId: req.params.id, position, locationId, payRate: payRate === '' || payRate == null ? null : Number(payRate) });
+const { position, locationId, payRate, address } = req.body;
+const result = await employees.ownerUpdateEmployee({ personId: req.params.id, position, locationId, payRate: payRate === '' || payRate == null ? null : Number(payRate), address });
+res.json(result);
+});
+
+// Certifications shown on the employee data card — owner-only add/remove
+// (see server/employees.js and db/patch_022).
+app.post('/api/employees/:id/certifications', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can add a certification.' });
+const result = await employees.addCertification({ personId: req.params.id, name: req.body.name, acquiredOn: req.body.acquiredOn || null, addedBy: req.person.id });
+res.json(result);
+});
+app.delete('/api/employees/:id/certifications/:certId', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can remove a certification.' });
+const result = await employees.removeCertification({ certificationId: req.params.certId });
 res.json(result);
 });
 
