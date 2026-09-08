@@ -256,6 +256,17 @@
 
 <div id="modalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10;" onclick="closeAllModals()"></div>
 
+<!-- Inline confirm bubble — safeguard before an app-access or Active/Inactive
+     toggle actually fires, so a stray click on a long roster doesn't change
+     anything without a second, explicit tap. -->
+<div id="confirmPopover" class="confirm-popover" style="display:none;">
+  <div id="confirmPopoverText"></div>
+  <div class="confirm-popover-actions">
+    <button class="small ghost" onclick="cancelPopoverConfirm()">Cancel</button>
+    <button class="small primary" onclick="submitPopoverConfirm()">Yes</button>
+  </div>
+</div>
+
 <script src="/common.js"></script>
 <script src="/employees.js"></script>
 </body>

@@ -358,6 +358,19 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .emp-status-tgl .lbl { font-size: 8px; font-weight: 700; letter-spacing: 0.02em; color: var(--muted); text-transform: uppercase; }
 .switch.is-disabled .slider { opacity: 0.45; cursor: not-allowed; }
 
+.confirm-popover {
+  position: fixed;
+  z-index: 50;
+  width: 240px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  padding: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+.confirm-popover #confirmPopoverText { font-size: 13px; line-height: 1.4; margin-bottom: 10px; }
+.confirm-popover-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
 @media (max-width: 760px) {
   .emp-row { flex-wrap: wrap; }
   .emp-row .emp-roleinfo { width: auto; }

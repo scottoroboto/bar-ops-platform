@@ -308,7 +308,7 @@ function empStatusToggleHtml(p) {
   return `<div class="emp-status-divider"></div>
     <div class="emp-status-tgl" onclick="event.stopPropagation();" title="${escapeHtml(title)}">
       <label class="switch${isSelf ? ' is-disabled' : ''}">
-        <input type="checkbox" ${active ? 'checked' : ''} ${isSelf ? 'disabled' : ''} onchange="toggleEmployeeStatus('${p.id}', this.checked)">
+        <input type="checkbox" ${active ? 'checked' : ''} ${isSelf ? 'disabled' : ''} onclick="event.preventDefault(); confirmToggleStatus(event, '${p.id}', ${!active})">
         <span class="slider"></span>
       </label>
       <span class="lbl">Active</span>
@@ -333,10 +333,77 @@ async function toggleEmployeeStatus(personId, makeActive) {
 // label instead of relying on a shared column header.
 function empToggleHtml(person, def) {
   const on = !!(person.appAccess && person.appAccess[def.key]);
-  return `<div class="emp-tgl ${on ? 'on' : 'off'}" onclick="event.stopPropagation(); toggleAccess('${person.id}','${def.key}',${!on})" title="${escapeHtml(def.label)}">
+  return `<div class="emp-tgl ${on ? 'on' : 'off'}" onclick="event.stopPropagation(); confirmToggleAccess(event, '${person.id}','${def.key}',${!on})" title="${escapeHtml(def.label)}">
     <div class="ic">${def.icon}</div>
     <span class="lbl">${def.label}</span>
   </div>`;
+}
+
+// ---- Inline confirm bubble (safeguard against mis-clicks on a long roster) ----
+// A single shared popover reused by both the app-access toggles and the
+// Active/Inactive switch. Deliberately does NOT touch the DOM checkbox/toggle
+// state until the user confirms — nothing changes, no request is sent, until
+// they click Yes. Confirming still goes through the existing toggleAccess()/
+// toggleEmployeeStatus() functions unchanged, so the withStepUp() password
+// re-check still applies on top of this.
+let PENDING_TOGGLE_CONFIRM = null;
+
+function openToggleConfirm(anchorEl, text, onConfirm) {
+  const pop = document.getElementById('confirmPopover');
+  document.getElementById('confirmPopoverText').textContent = text;
+  PENDING_TOGGLE_CONFIRM = onConfirm;
+
+  pop.style.display = 'block';
+  const rect = anchorEl.getBoundingClientRect();
+  const popW = 240;
+  let left = rect.left + rect.width / 2 - popW / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - popW - 8));
+  let top = rect.bottom + 8;
+  if (top + 120 > window.innerHeight) top = rect.top - 128; // flip above if it'd run off the bottom
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+
+  setTimeout(() => document.addEventListener('click', dismissPopoverOnOutsideClick), 0);
+}
+
+function dismissPopoverOnOutsideClick(evt) {
+  const pop = document.getElementById('confirmPopover');
+  if (pop.contains(evt.target)) return;
+  cancelPopoverConfirm();
+}
+
+function closeToggleConfirm() {
+  document.getElementById('confirmPopover').style.display = 'none';
+  document.removeEventListener('click', dismissPopoverOnOutsideClick);
+  PENDING_TOGGLE_CONFIRM = null;
+}
+
+function cancelPopoverConfirm() {
+  closeToggleConfirm();
+}
+
+function submitPopoverConfirm() {
+  const fn = PENDING_TOGGLE_CONFIRM;
+  closeToggleConfirm();
+  if (fn) fn();
+}
+
+function confirmToggleAccess(evt, personId, appKey, enabled) {
+  const person = ALL_EMPLOYEES.find(p => p.id === personId);
+  const def = empToggleDefs(person || {}).find(d => d.key === appKey);
+  const label = def ? def.label : appKey.replace('_', ' ');
+  const name = person ? person.name : 'this person';
+  const text = enabled ? `Turn on ${label} for ${name}?` : `Turn off ${label} for ${name}?`;
+  openToggleConfirm(evt.currentTarget, text, () => toggleAccess(personId, appKey, enabled));
+}
+
+function confirmToggleStatus(evt, personId, makeActive) {
+  const person = ALL_EMPLOYEES.find(p => p.id === personId);
+  const name = person ? person.name : 'this person';
+  const text = makeActive
+    ? `Set ${name} to Active? They'll show up everywhere again.`
+    : `Set ${name} to Inactive? They'll stop showing up as a pick anywhere else.`;
+  openToggleConfirm(evt.currentTarget.closest('.emp-status-tgl'), text, () => toggleEmployeeStatus(personId, makeActive));
 }
 
 async function toggleAccess(personId, appKey, enabled) {
