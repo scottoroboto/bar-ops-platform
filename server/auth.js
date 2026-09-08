@@ -4,8 +4,27 @@ const { withServiceClient, withAuthedClient } = require('./db');
 const notify = require('./notify');
 
 const LIGHT_SESSION_DAYS = 14; // everyday PIN login — operational scope only
-const FULL_SESSION_MINUTES = 20; // step-up window — enough to finish one sensitive task
 const CODE_TTL_MINUTES = 10;
+
+// Step-up ("full") session window — how long a re-entered password lasts
+// before the next sensitive action needs it again. Owner-adjustable (see
+// getFullSessionMinutes below) since 2026-09-08 — was a flat 20-minute
+// constant before that. Reuses the same generic owner_notes key/body table
+// as the master notifications toggle (server/notify.js's
+// notificationsEnabled) rather than a new migration — queried directly
+// here, not through server/employees.js's getOwnerNote, to avoid a
+// cross-module require for one SELECT. A missing row (nobody's touched the
+// setting yet, or an out-of-range/garbage value) falls back to the
+// shortest, most conservative option rather than the old 20 — this is a
+// security-relevant timeout, so an unrecognized state should never
+// silently land on a *longer* window than intended.
+const VALID_FULL_SESSION_MINUTES = [15, 30, 60, 120, 1440];
+const DEFAULT_FULL_SESSION_MINUTES = 15;
+async function getFullSessionMinutes(client) {
+  const { rows } = await client.query("SELECT body FROM owner_notes WHERE note_key = 'full_session_minutes'");
+  const n = rows.length ? parseInt(rows[0].body, 10) : NaN;
+  return VALID_FULL_SESSION_MINUTES.includes(n) ? n : DEFAULT_FULL_SESSION_MINUTES;
+}
 
 function randomToken() {
 return crypto.randomBytes(32).toString('base64url');
@@ -159,7 +178,7 @@ return { ok: true };
 async function mintSession(client, person, tier, deviceId) {
 const token = randomToken();
 const days = tier === 'light' ? LIGHT_SESSION_DAYS : 0;
-const minutes = tier === 'full' ? FULL_SESSION_MINUTES : 0;
+const minutes = tier === 'full' ? await getFullSessionMinutes(client) : 0;
 await client.query(
 `INSERT INTO auth_sessions (person_id, session_tier, token_hash, device_id, expires_at)
 VALUES ($1,$2,$3,$4, now() + ($5 || ' days')::interval + ($6 || ' minutes')::interval)`,
