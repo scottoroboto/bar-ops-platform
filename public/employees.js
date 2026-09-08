@@ -248,6 +248,17 @@ function applyLocFilter(list) {
   return list.filter(p => p.location_id === LOC_FILTER);
 }
 
+// Status filter — a plain select like Sort by, not a chip row like
+// LOC_FILTER, so it's read straight from the DOM rather than tracked in a
+// separate global. Exclusive, not a dim/highlight: picking "Active" hides
+// inactive people from the list entirely (and vice versa) — only "All"
+// shows both mixed together, per Scotto's approved mockup.
+function applyStatusFilter(list) {
+  const val = document.getElementById('employeeStatusFilter').value;
+  if (val === 'all') return list;
+  return list.filter(p => p.status === val);
+}
+
 function applySort(list) {
   const mode = document.getElementById('employeeSort').value;
   const arr = list.slice();
@@ -261,15 +272,15 @@ function applySort(list) {
 function renderAllEmployees() {
   const el = document.getElementById('employeeList');
   if (!ALL_EMPLOYEES.length) { el.innerHTML = '<p class="muted">No active employees yet.</p>'; return; }
-  const rows = applySort(applyLocFilter(ALL_EMPLOYEES));
-  if (!rows.length) { el.innerHTML = '<p class="muted">Nobody at this location.</p>'; return; }
+  const rows = applySort(applyStatusFilter(applyLocFilter(ALL_EMPLOYEES)));
+  if (!rows.length) { el.innerHTML = '<p class="muted">Nobody matches this filter.</p>'; return; }
   el.innerHTML = rows.map(empRowHtml).join('');
 }
 
 function empRowHtml(p) {
   let rightHtml = '';
   if (ME.role === 'owner') {
-    rightHtml = `<div class="emp-toggles">${empToggleDefs(p).map(t => empToggleHtml(p, t)).join('')}</div>`;
+    rightHtml = `<div class="emp-toggles">${empToggleDefs(p).map(t => empToggleHtml(p, t)).join('')}${empStatusToggleHtml(p)}</div>`;
   } else if (ME.role === 'manager') {
     rightHtml = `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button>`;
   }
@@ -280,6 +291,39 @@ function empRowHtml(p) {
       <div class="emp-locs">${locChipsHtml(p)}</div>
       ${rightHtml}
     </div>`;
+}
+
+// Active/Inactive switch — owner only (see empRowHtml above), a thin
+// divider then the same generic .switch pill used everywhere else in the
+// app (e.g. the Activate modal's app-access toggles), not another bespoke
+// control. An owner's own row is shown disabled: self-deactivation is
+// blocked server-side too (setEmployeeStatus), but disabling it here means
+// there's nothing to revert if they click it.
+function empStatusToggleHtml(p) {
+  const active = p.status === 'active';
+  const isSelf = p.id === ME.id;
+  const title = isSelf ? "You can't deactivate your own account" : (active ? 'Set inactive' : 'Set active');
+  return `<div class="emp-status-divider"></div>
+    <div class="emp-status-tgl" onclick="event.stopPropagation();" title="${escapeHtml(title)}">
+      <label class="switch${isSelf ? ' is-disabled' : ''}">
+        <input type="checkbox" ${active ? 'checked' : ''} ${isSelf ? 'disabled' : ''} onchange="toggleEmployeeStatus('${p.id}', this.checked)">
+        <span class="slider"></span>
+      </label>
+      <span class="lbl">Active</span>
+    </div>`;
+}
+
+async function toggleEmployeeStatus(personId, makeActive) {
+  const newStatus = makeActive ? 'active' : 'inactive';
+  try {
+    const result = await withStepUp(() => api(`/api/employees/${personId}/status`, { method: 'POST', body: { status: newStatus } }));
+    if (result && result.ok === false) { showMsg(result.error || 'Could not update status.', 'error'); loadAllEmployees(); return; }
+    showMsg(newStatus === 'active' ? 'Marked active — they’ll show up everywhere again.' : 'Marked inactive. Their shifts stay on the schedule; they just won’t show up as a pick anywhere else.', 'success');
+    await loadAllEmployees();
+  } catch (e) {
+    showMsg(e.message, 'error');
+    loadAllEmployees();
+  }
 }
 
 // Bigger icon-plus-label toggle, per the approved Concept C mockup — still

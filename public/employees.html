@@ -18,14 +18,24 @@
     <div class="card">
       <div class="roster-toolbar">
         <div class="loc-filters" id="locFilters"></div>
-        <div class="roster-sort">
-          <label for="employeeSort">Sort by</label>
-          <select id="employeeSort" onchange="renderAllEmployees()">
-            <option value="name_asc">Name (A&ndash;Z)</option>
-            <option value="name_desc">Name (Z&ndash;A)</option>
-            <option value="location">Location</option>
-            <option value="role">Role</option>
-          </select>
+        <div class="roster-right">
+          <div class="roster-status">
+            <label for="employeeStatusFilter">Status</label>
+            <select id="employeeStatusFilter" onchange="renderAllEmployees()">
+              <option value="active" selected>Active</option>
+              <option value="all">All</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
+          <div class="roster-sort">
+            <label for="employeeSort">Sort by</label>
+            <select id="employeeSort" onchange="renderAllEmployees()">
+              <option value="name_asc">Name (A&ndash;Z)</option>
+              <option value="name_desc">Name (Z&ndash;A)</option>
+              <option value="location">Location</option>
+              <option value="role">Role</option>
+            </select>
+          </div>
         </div>
       </div>
       <p class="muted" id="allEmployeesHint" style="margin-top:14px;">Loading…</p>

@@ -326,9 +326,11 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
   border: 1px solid var(--card-border); background: transparent; color: var(--muted); cursor: pointer;
 }
 .loc-filter.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-.roster-sort { display: flex; align-items: center; gap: 8px; }
-.roster-sort label { margin: 0; white-space: nowrap; }
-.roster-sort select { width: auto; min-width: 170px; padding: 9px 10px; }
+.roster-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.roster-sort, .roster-status { display: flex; align-items: center; gap: 8px; }
+.roster-sort label, .roster-status label { margin: 0; white-space: nowrap; }
+.roster-sort select, .roster-status select { width: auto; min-width: 170px; padding: 9px 10px; }
+.roster-status select { min-width: 120px; }
 
 .emp-row {
   display: flex; align-items: center; gap: 16px; padding: 13px 4px;
@@ -347,6 +349,14 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .emp-tgl.off .ic { background: #1a1e27; color: #3a4152; }
 .emp-tgl .lbl { font-size: 8px; font-weight: 700; color: var(--muted); }
 .emp-tgl.off .lbl { color: #454c5b; }
+
+/* Active/Inactive per-row switch (owner only) — a thin divider then the
+   existing generic .switch pill component, reused rather than another
+   bespoke toggle. See empStatusToggleHtml() in employees.js. */
+.emp-status-divider { width: 1px; align-self: stretch; background: var(--card-border); margin: 0 2px; flex-shrink: 0; }
+.emp-status-tgl { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 46px; flex-shrink: 0; }
+.emp-status-tgl .lbl { font-size: 8px; font-weight: 700; letter-spacing: 0.02em; color: var(--muted); text-transform: uppercase; }
+.switch.is-disabled .slider { opacity: 0.45; cursor: not-allowed; }
 
 @media (max-width: 760px) {
   .emp-row { flex-wrap: wrap; }
