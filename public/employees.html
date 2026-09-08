@@ -95,6 +95,23 @@
       <div id="notificationsResult"></div>
     </div>
   </div>
+
+  <!-- Session Timeout panel (owner only) -->
+  <div id="panelSession" style="display:none;">
+    <div class="card">
+      <h2>Session timeout</h2>
+      <p class="muted">How long a re-entered password lasts before a sensitive action (activating someone, changing a role, publishing a schedule, etc.) asks for it again. This is the "This needs you to re-enter your password first" prompt — it does not affect your everyday sign-in, which lasts 14 days.</p>
+      <label for="sessionTimeoutSelect">Stay signed in for</label>
+      <select id="sessionTimeoutSelect" onchange="submitSessionTimeout()">
+        <option value="15">15 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="60">1 hour</option>
+        <option value="120">2 hours</option>
+        <option value="1440">24 hours</option>
+      </select>
+      <div id="sessionTimeoutResult"></div>
+    </div>
+  </div>
 </div>
 
 <!-- Review modal -->

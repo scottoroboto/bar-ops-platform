@@ -106,7 +106,7 @@ function fillPositionSelect(sel, currentValue) {
 function renderTabs() {
   const tabs = [{ key: 'list', label: 'Employee List' }, { key: 'onboard', label: 'Onboard Review' }];
   if (ME.role === 'owner') {
-    tabs.push({ key: 'payrate', label: 'Pay Rate Requests' }, { key: 'reset', label: 'Reset Requests' }, { key: 'notifications', label: 'Notifications' });
+    tabs.push({ key: 'payrate', label: 'Pay Rate Requests' }, { key: 'reset', label: 'Reset Requests' }, { key: 'notifications', label: 'Notifications' }, { key: 'session', label: 'Session Timeout' });
   }
   document.getElementById('tabs').innerHTML = tabs.map(t =>
     `<button data-tab="${t.key}" onclick="setTab('${t.key}')">${t.label}<span class="tab-badge" id="badge-${t.key}" style="display:none;"></span></button>`
@@ -120,8 +120,10 @@ function setTab(which) {
   document.getElementById('panelPayRate').style.display = which === 'payrate' ? '' : 'none';
   document.getElementById('panelReset').style.display = which === 'reset' ? '' : 'none';
   document.getElementById('panelNotifications').style.display = which === 'notifications' ? '' : 'none';
+  document.getElementById('panelSession').style.display = which === 'session' ? '' : 'none';
   Array.from(document.querySelectorAll('#tabs button')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
   if (which === 'notifications') loadNotificationsToggle();
+  if (which === 'session') loadSessionTimeout();
 }
 
 function setBadge(key, n) {
@@ -693,6 +695,37 @@ async function submitNotificationsToggle() {
     setTimeout(() => { resultEl.innerHTML = ''; }, 2000);
   } catch (e) {
     checkbox.checked = !enabled; // revert the flip — the save didn't take
+    resultEl.innerHTML = `<span class="msg error">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+// ---- Session timeout (owner only) — how long a step-up ("full") session
+// lasts before the next sensitive action re-prompts for a password. See
+// server/auth.js's getFullSessionMinutes; reuses the same generic
+// owner_notes route as the notifications toggle above. Doesn't touch the
+// everyday 14-day sign-in — that's unrelated and unconfigurable on purpose.
+async function loadSessionTimeout() {
+  const sel = document.getElementById('sessionTimeoutSelect');
+  try {
+    const note = await api('/api/owner-notes/full_session_minutes');
+    sel.value = note.body && sel.querySelector(`option[value="${note.body}"]`) ? note.body : '15';
+    sel.dataset.prev = sel.value;
+  } catch (e) {
+    document.getElementById('sessionTimeoutResult').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+async function submitSessionTimeout() {
+  const sel = document.getElementById('sessionTimeoutSelect');
+  const newValue = sel.value;
+  const resultEl = document.getElementById('sessionTimeoutResult');
+  const prevValue = sel.dataset.prev || '15';
+  try {
+    await withStepUp(() => api('/api/owner-notes/full_session_minutes', { method: 'POST', body: { body: newValue } }));
+    sel.dataset.prev = newValue;
+    resultEl.innerHTML = '<span class="msg success">Saved — takes effect next time someone re-enters their password.</span>';
+    setTimeout(() => { resultEl.innerHTML = ''; }, 3000);
+  } catch (e) {
+    sel.value = prevValue; // revert — the save didn't take
     resultEl.innerHTML = `<span class="msg error">${escapeHtml(e.message)}</span>`;
   }
 }
