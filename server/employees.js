@@ -290,18 +290,33 @@ async function ownerUpdateEmployee({ personId, position, locationId, payRate, ad
 
 const VALID_ROLES = ['staff', 'manager', 'maintenance', 'owner'];
 
+// Scotto's own account is hard-protected against being touched by anyone
+// else, per his explicit request (2026-09-08): "I want my acct to be hard
+// coded so no one can remove me except me." The ordinary last-owner guards
+// below only stop the platform from ending up with zero owners — once a
+// second owner exists, one of them could otherwise demote or deactivate
+// the other. This closes that gap for this one specific account, hardcoded
+// by id (not username — there's no in-app way to change a username today,
+// but id is the one value guaranteed to never change regardless). He can
+// still change his own role/status himself; this only blocks someone ELSE
+// acting on this id.
+const PROTECTED_OWNER_ID = 'e3b149c7-88af-4589-8541-142d1bc1241d'; // Scotto
+
 // Owner-only role assignment — until this, promoting someone to
 // manager/maintenance/owner (or demoting them) required a direct database
 // edit; there was no in-app path (see claude/scheduling-app-discovery.md's
 // "Roles" finding, 2026-09-07). Guards against removing the very last owner,
 // which would lock the platform's owner-only actions (step-up, activation,
-// etc.) out entirely.
+// etc.) out entirely, and against anyone but Scotto changing Scotto's own role.
 async function ownerUpdateRole({ personId, role, updatedBy }) {
   if (!VALID_ROLES.includes(role)) return { ok: false, error: 'Not a valid role.' };
   return withServiceClient(async (client) => {
     const { rows: existingRows } = await client.query('SELECT id, name, role FROM people WHERE id = $1', [personId]);
     const existing = existingRows[0];
     if (!existing) return { ok: false, error: 'Not found.' };
+    if (existing.id === PROTECTED_OWNER_ID && updatedBy !== PROTECTED_OWNER_ID && role !== 'owner') {
+      return { ok: false, error: 'Only that account holder can change their own role.' };
+    }
     if (existing.role === 'owner' && role !== 'owner') {
       const { rows: ownerCountRows } = await client.query(`SELECT count(*)::int AS n FROM people WHERE role = 'owner' AND status = 'active'`);
       if ((ownerCountRows[0] && ownerCountRows[0].n) <= 1) {
@@ -341,6 +356,9 @@ async function setEmployeeStatus({ personId, status, updatedBy }) {
     if (!existing) return { ok: false, error: 'Not found.' };
     if (existing.status === 'pending_review') return { ok: false, error: "This person hasn't been activated yet." };
     if (existing.status === status) return { ok: true, person: existing }; // no-op, already there
+    if (existing.id === PROTECTED_OWNER_ID && status === 'inactive') {
+      return { ok: false, error: 'Only that account holder can deactivate their own account.' };
+    }
     if (existing.role === 'owner' && status === 'inactive') {
       const { rows: ownerCountRows } = await client.query(`SELECT count(*)::int AS n FROM people WHERE role = 'owner' AND status = 'active'`);
       if ((ownerCountRows[0] && ownerCountRows[0].n) <= 1) {
