@@ -316,6 +316,45 @@ async function ownerUpdateRole({ personId, role, updatedBy }) {
   });
 }
 
+const VALID_STATUSES = ['active', 'inactive'];
+
+// Owner-only Active/Inactive toggle (2026-09-08 — see the mockup Scotto
+// approved). Deliberately separate from activateEmployee: that one is only
+// for pending_review -> active and mints brand-new credentials; this only
+// ever flips an already-activated person between 'active' and 'inactive'
+// and never touches their username/password/PIN. Going inactive is a pure
+// visibility switch — auth.js's requireSession/login checks and every
+// roster/picker query across the app (scheduling, monitoring, service
+// calls, time clock, reset requests) already filter on status = 'active',
+// so an inactive person simply stops being selectable anywhere outside
+// this page. Shifts already on their schedule are deliberately left in
+// place — per Scotto, going inactive doesn't cancel anything already
+// scheduled. Mirrors ownerUpdateRole's last-owner guard, plus a hard block
+// on deactivating your own account, since that would have no in-app
+// recovery path.
+async function setEmployeeStatus({ personId, status, updatedBy }) {
+  if (!VALID_STATUSES.includes(status)) return { ok: false, error: 'Not a valid status.' };
+  if (personId === updatedBy) return { ok: false, error: "You can't deactivate your own account." };
+  return withServiceClient(async (client) => {
+    const { rows: existingRows } = await client.query('SELECT id, name, role, status FROM people WHERE id = $1', [personId]);
+    const existing = existingRows[0];
+    if (!existing) return { ok: false, error: 'Not found.' };
+    if (existing.status === 'pending_review') return { ok: false, error: "This person hasn't been activated yet." };
+    if (existing.status === status) return { ok: true, person: existing }; // no-op, already there
+    if (existing.role === 'owner' && status === 'inactive') {
+      const { rows: ownerCountRows } = await client.query(`SELECT count(*)::int AS n FROM people WHERE role = 'owner' AND status = 'active'`);
+      if ((ownerCountRows[0] && ownerCountRows[0].n) <= 1) {
+        return { ok: false, error: "Can't deactivate the platform's last owner." };
+      }
+    }
+    const { rows } = await client.query(
+      `UPDATE people SET status = $1, updated_at = now() WHERE id = $2 RETURNING id, name, role, status`,
+      [status, personId]
+    );
+    return { ok: true, person: rows[0] };
+  });
+}
+
 // A manager can't change pay directly — they submit a request, the owner
 // decides. pay_rate_requests has RLS FORCE-enabled with zero policies (same
 // situation as devices/locations/positions before them), so every touch of
@@ -427,6 +466,6 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 module.exports = {
   createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, setAppAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
-  requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,
-  addCertification, removeCertification, APP_KEYS, MANAGER_ONLY_APP_KEYS, VALID_ROLES,
+  setEmployeeStatus, requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,
+  addCertification, removeCertification, APP_KEYS, MANAGER_ONLY_APP_KEYS, VALID_ROLES, VALID_STATUSES,
 };

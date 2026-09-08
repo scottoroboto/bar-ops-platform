@@ -1911,6 +1911,15 @@ const result = await employees.ownerUpdateRole({ personId: req.params.id, role: 
 res.json(result);
 });
 
+// Owner-only Active/Inactive toggle — see server/employees.js's
+// setEmployeeStatus for the last-owner and self-deactivation guards.
+// Shifts already on the schedule are deliberately left in place.
+app.post('/api/employees/:id/status', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change a status.' });
+const result = await employees.setEmployeeStatus({ personId: req.params.id, status: req.body.status, updatedBy: req.person.id });
+res.json(result);
+});
+
 // Certifications shown on the employee data card — owner-only add/remove
 // (see server/employees.js and db/patch_022).
 app.post('/api/employees/:id/certifications', auth.requireSession('full'), async (req, res) => {
