@@ -35,6 +35,20 @@
 .big-amt-wrap .prefix { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); font-size: 28px; color: var(--muted); }
 .big-amt-wrap input { font-size: 28px; font-weight: 700; text-align: center; padding: 18px 16px 18px 40px; font-variant-numeric: tabular-nums; }
 
+.denom-calc { display: flex; flex-direction: column; gap: 7px; margin: 16px 0 4px; }
+.denom-row { display: grid; grid-template-columns: 52px 1fr 68px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--bg); }
+.denom-label { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.denom-row .denom-qty { margin: 0; padding: 8px; font-size: 15px; text-align: center; }
+.denom-line { text-align: right; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.denom-other-row { grid-template-columns: 52px 1fr; }
+.denom-other-input { position: relative; }
+.denom-other-input .prefix-sm { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--muted); }
+.denom-other-input input { margin: 0; padding: 8px 8px 8px 24px; font-size: 15px; text-align: left; }
+.denom-total-row { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; padding: 13px 14px; border-radius: 8px; background: var(--card); border: 1px solid var(--accent); }
+.denom-total-label { font-size: 13px; color: var(--muted); font-weight: 600; }
+.denom-total-value { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+
 .reveal-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0; }
 .reveal-tiles .card { margin-bottom: 0; padding: 14px 16px; }
 .reveal-tiles .l { font-size: 11.5px; color: var(--muted); margin-bottom: 5px; }
