@@ -1122,7 +1122,7 @@ res.status(err.status || 400).json({ error: err.message });
 }
 });
 
-app.post('/api/venue-control/sources/:id/update', auth.requireSession('full'), async (req, res) => {
+app.post('/api/venue-control/', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 const { slot, qamChannel, label, kind, ip, port, mac, receiverId, accessCardId, enabled, notes } = req.body || {};
 if (!slot || !qamChannel || !(label || '').trim()) return res.status(400).json({ error: 'A source needs "slot", "qamChannel", and "label".' });
@@ -2629,6 +2629,22 @@ app.post('/api/cashhandling/sources/:id/retire', auth.requireSession('full'), as
   if (!result) return res.status(404).json({ error: 'Not found.' });
   res.json(result);
 });
+// Retired sources never disappear for good — retireSource is a soft
+// delete (active = false), so these two routes back the "View retired
+// sources" panel at the bottom of Manage Cash Sources: list what's
+// retired, and flip one back on.
+app.get('/api/cashhandling/sources/retired', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can view retired cash sources.' });
+  const sources = await withServiceClient((client) => cashhandling.listRetiredSources(client, req.query.locationId || null));
+  res.json({ sources });
+});
+app.post('/api/cashhandling/sources/:id/reactivate', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can reactivate a cash source.' });
+  const result = await withServiceClient((client) => cashhandling.reactivateSource(client, req.params.id));
+  if (!result) return res.status(404).json({ error: 'Not found.' });
+  res.json(result);
+});
+
 app.post('/api/cashhandling/sources/:id/update', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can edit a cash source.' });
   const fields = {};
