@@ -122,13 +122,7 @@ function renderManagerShell() {
   setTab('dashboard');
 }
 
-// Split out from setTab() so quickTransaction() (below) can switch to the
-// Transactions tab's panel without also triggering loadTransactions() —
-// it's about to replace that panel's content with the new-transaction
-// form itself, and running both would race to write panelTransactions'
-// innerHTML (whichever finishes last wins, so the form could flash and
-// then get clobbered by the plain history list a moment later).
-function showTabPanel(which) {
+function setTab(which) {
   document.getElementById('panelDashboard').style.display = which === 'dashboard' ? '' : 'none';
   document.getElementById('panelHistory').style.display = which === 'history' ? '' : 'none';
   const txnPanel = document.getElementById('panelTransactions');
@@ -138,28 +132,12 @@ function showTabPanel(which) {
   const sourcesPanel = document.getElementById('panelSources');
   if (sourcesPanel) sourcesPanel.style.display = which === 'sources' ? '' : 'none';
   Array.from(document.querySelectorAll('#tabs button')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
-}
-
-function setTab(which) {
-  showTabPanel(which);
   if (which === 'dashboard') loadDashboard();
   if (which === 'history') loadHistory();
   if (which === 'transactions') loadTransactions();
   if (which === 'weekly') loadAuditLanding('weekly');
   if (which === 'manual') loadAuditLanding('manual');
   if (which === 'sources') loadManageSources();
-}
-
-// Dashboard-tab quick actions (full_authority only, see dashboardHtml) —
-// jump straight to the Transactions tab with the New Transaction form
-// already open and pre-set to the right type, instead of making someone
-// find the Transactions tab, click "+ New transaction", then pick the
-// type from a dropdown themselves.
-async function quickTransaction(type) {
-  showTabPanel('transactions');
-  await openNewTransactionForm();
-  document.getElementById('txnType').value = type;
-  onTransactionTypeChange();
 }
 
 function onLocationChange() {
@@ -194,26 +172,7 @@ function dashboardHtml(sources, tier) {
   const fixedTotal = fixedPoints.reduce((sum, f) => sum + Number(f.last_counted_amount ?? f.target_amount ?? 0), 0);
   const varianceCount = sources.filter(s => s.last_counted_at && Number(s.last_variance) !== 0).length;
 
-  // Quick actions — full_authority only, matching the server-side gate on
-  // POST /api/cashhandling/transactions (tierAtLeast(tier, 'full_authority')).
-  // Jumps into the Transactions tab's New Transaction form pre-set to the
-  // right type; see quickTransaction() above setTab().
-  let html = '';
-  if (tier === 'full_authority') {
-    html += `
-    <div class="ch-quick-actions">
-      <button class="ch-quick-btn primary" onclick="quickTransaction('deposit')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6"/><path d="M5 10v9M9 10v9M15 10v9M19 10v9"/><path d="M3 19h18"/></svg>
-        Bank Deposit
-      </button>
-      <button class="ch-quick-btn secondary" onclick="quickTransaction('bank_change')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg>
-        Bank Change
-      </button>
-    </div>`;
-  }
-
-  html += `
+  let html = `
     <div class="stat-strip">
       <div class="stat-tile"><div class="n">${fmtMoney(registerTotal + fixedTotal)}</div><div class="l">Total cash on hand · ${sources.length} sources</div></div>
       <div class="stat-tile"><div class="n ${varianceCount ? 'danger' : ''}">${varianceCount}</div><div class="l"><span class="dot" style="background:${varianceCount ? '#e5566d' : '#3fbf7f'}"></span>Variance flagged</div></div>
