@@ -557,7 +557,68 @@ function manageSourcesHtml(sources) {
       <button class="primary" onclick="submitNewSource()">Add source</button>
     </div>`;
 
+  html += `
+    <div class="card" style="text-align:center;">
+      <button class="secondary" id="retiredSourcesToggle" onclick="toggleRetiredSources()">View retired sources</button>
+    </div>
+    <div id="panelRetiredSources"></div>`;
+
   return html;
+}
+
+// ---- Retired sources — retireSource() is a soft delete (active = false),
+// so nothing is ever actually gone. This panel, collapsed by default at
+// the bottom of the page, lists what's retired at the selected location
+// and lets the owner bring one back.
+let RETIRED_SOURCES_OPEN = false;
+
+async function toggleRetiredSources() {
+  const panel = document.getElementById('panelRetiredSources');
+  const btn = document.getElementById('retiredSourcesToggle');
+  if (RETIRED_SOURCES_OPEN) {
+    panel.innerHTML = '';
+    RETIRED_SOURCES_OPEN = false;
+    btn.textContent = 'View retired sources';
+    return;
+  }
+  RETIRED_SOURCES_OPEN = true;
+  btn.textContent = 'Hide retired sources';
+  panel.innerHTML = '<div class="card"><p class="muted">Loading…</p></div>';
+  try {
+    const result = await api('/api/cashhandling/sources/retired' + (SELECTED_LOCATION_ID ? `?locationId=${SELECTED_LOCATION_ID}` : ''));
+    panel.innerHTML = retiredSourcesHtml(result.sources || []);
+  } catch (e) {
+    panel.innerHTML = `<div class="card"><p class="msg error">${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+function retiredSourcesHtml(sources) {
+  if (!sources.length) {
+    return '<div class="card"><h2>Retired sources</h2><p class="muted">Nothing retired at this location.</p></div>';
+  }
+  return `
+    <div class="card" style="padding:0;">
+      <h2 style="padding:16px 16px 0;">Retired sources</h2>
+      ${sources.map(s => `
+        <div class="list-row">
+          <div>
+            <div class="name">${escapeHtml(s.name)}</div>
+            <div class="sub">${s.kind === 'fixed_point' ? 'Fixed Cash Point' : (s.kind === 'drawer' ? 'Drawer' : 'Backup Bag')}${s.last_counted_at ? ' · last counted ' + fmtDate(s.last_counted_at) : ' · never counted'}</div>
+          </div>
+          <button class="small secondary" onclick="reactivateManagedSource('${s.id}')">Reactivate</button>
+        </div>`).join('')}
+    </div>`;
+}
+
+async function reactivateManagedSource(sourceId) {
+  try {
+    await withStepUp(() => api(`/api/cashhandling/sources/${sourceId}/reactivate`, { method: 'POST' }));
+    showMsg('Source reactivated.', 'success');
+    RETIRED_SOURCES_OPEN = false; // loadManageSources() below rebuilds the panel closed
+    loadManageSources();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
 }
 
 function onNewSourceKindChange() {
@@ -706,11 +767,8 @@ function openAuditItemEntry(kind, sourceId, sourceName) {
   formEl.innerHTML = `
     <div class="card">
       <h2>Count ${escapeHtml(sourceName)}</h2>
-      <p class="blind-note">Blind — count it now, then enter the total. No target is shown.</p>
-      <div class="big-amt-wrap">
-        <span class="prefix">$</span>
-        <input type="number" inputmode="decimal" step="0.01" min="0" id="auditItemAmount-${kind}" placeholder="0.00">
-      </div>
+      <p class="blind-note">Blind — count it now, then enter how many of each. No target is shown.</p>
+      ${denomCalcHtml(`auditItemAmount-${kind}`)}
       <label>Note (optional)</label>
       <textarea id="auditItemNote-${kind}" rows="2"></textarea>
       <div style="display:flex; gap:10px;">
@@ -718,14 +776,14 @@ function openAuditItemEntry(kind, sourceId, sourceName) {
         <button class="primary" onclick="submitAuditItemAmount('${kind}', '${sourceId}')">Log this count</button>
       </div>
     </div>`;
-  document.getElementById(`auditItemAmount-${kind}`).focus();
+  focusDenomCalc(`auditItemAmount-${kind}`);
 }
 
 async function submitAuditItemAmount(kind, sourceId) {
   const meta = AUDIT_META[kind];
   const amountEl = document.getElementById(`auditItemAmount-${kind}`);
   const amount = Number(amountEl.value);
-  if (!Number.isFinite(amount) || amount < 0 || amountEl.value === '') { showMsg('Enter a valid amount.', 'error'); return; }
+  if (!Number.isFinite(amount) || amount < 0 || !denomCalcTouched(`auditItemAmount-${kind}`)) { showMsg('Enter the count.', 'error'); return; }
   const note = document.getElementById(`auditItemNote-${kind}`).value.trim();
   const auditId = AUDIT_STATE[kind].audit.id;
   try {
@@ -801,11 +859,8 @@ function openRandomAuditEntry() {
   document.getElementById('panelMain').insertAdjacentHTML('afterbegin', `
     <div class="card" id="randomAuditEntryCard">
       <h2>Count ${escapeHtml(RANDOM_ASSIGNMENT.source_name)}</h2>
-      <p class="blind-note">Blind — count it now, then enter the total. No target is shown.</p>
-      <div class="big-amt-wrap">
-        <span class="prefix">$</span>
-        <input type="number" inputmode="decimal" step="0.01" min="0" id="randomAuditAmount" placeholder="0.00">
-      </div>
+      <p class="blind-note">Blind — count it now, then enter how many of each. No target is shown.</p>
+      ${denomCalcHtml('randomAuditAmount')}
       <label>Note (optional)</label>
       <textarea id="randomAuditNote" rows="2"></textarea>
       <div style="display:flex; gap:10px;">
@@ -813,13 +868,13 @@ function openRandomAuditEntry() {
         <button class="primary" onclick="submitRandomAuditAmount()">Log this count</button>
       </div>
     </div>`);
-  document.getElementById('randomAuditAmount').focus();
+  focusDenomCalc('randomAuditAmount');
 }
 
 async function submitRandomAuditAmount() {
   const amountEl = document.getElementById('randomAuditAmount');
   const amount = Number(amountEl.value);
-  if (!Number.isFinite(amount) || amount < 0 || amountEl.value === '') { showMsg('Enter a valid amount.', 'error'); return; }
+  if (!Number.isFinite(amount) || amount < 0 || !denomCalcTouched('randomAuditAmount')) { showMsg('Enter the count.', 'error'); return; }
   const note = document.getElementById('randomAuditNote').value.trim();
   try {
     const result = await api(`/api/cashhandling/random-audit/${RANDOM_ASSIGNMENT.id}/count`, {
@@ -866,6 +921,74 @@ async function renderOwnDrawerFlow() {
 }
 
 // ---------------------------------------------------------------------
+// Denomination calculator — shared by every blind-count screen (cash-out,
+// audit items, the random-audit banner). Nobody adds up bills in their
+// head: they enter how many of each denomination they've got, and this
+// does the math. `idPrefix` becomes a hidden input holding the computed
+// total — every submit function below reads it exactly the way it used
+// to read the old single dollar-amount field, so nothing downstream
+// (validation, the POST body, blind-reveal logic) had to change.
+// ---------------------------------------------------------------------
+const DENOMINATIONS = [100, 50, 20, 10, 5, 2, 1, 0.25];
+
+function denomCalcHtml(idPrefix) {
+  return `
+    <div class="denom-calc" id="${idPrefix}-denomcalc">
+      ${DENOMINATIONS.map(d => `
+        <div class="denom-row">
+          <span class="denom-label">${d >= 1 ? '$' + d : '25¢'}</span>
+          <input type="number" inputmode="numeric" min="0" step="1" class="denom-qty" data-value="${d}" placeholder="0" oninput="updateDenomTotal('${idPrefix}')">
+          <span class="denom-line">$0.00</span>
+        </div>`).join('')}
+      <div class="denom-row denom-other-row">
+        <span class="denom-label">Other</span>
+        <div class="denom-other-input">
+          <span class="prefix-sm">$</span>
+          <input type="number" inputmode="decimal" min="0" step="0.01" class="denom-other" placeholder="0.00" oninput="updateDenomTotal('${idPrefix}')">
+        </div>
+      </div>
+      <div class="denom-total-row">
+        <span class="denom-total-label">Total counted</span>
+        <span class="denom-total-value" id="${idPrefix}-totaldisplay">$0.00</span>
+      </div>
+    </div>
+    <input type="hidden" id="${idPrefix}" value="0">`;
+}
+
+function updateDenomTotal(idPrefix) {
+  const wrap = document.getElementById(`${idPrefix}-denomcalc`);
+  if (!wrap) return;
+  let total = 0;
+  wrap.querySelectorAll('.denom-row:not(.denom-other-row)').forEach((row) => {
+    const qtyEl = row.querySelector('.denom-qty');
+    const value = Number(qtyEl.dataset.value);
+    const qty = Math.max(0, Math.floor(Number(qtyEl.value) || 0));
+    const line = qty * value;
+    total += line;
+    row.querySelector('.denom-line').textContent = fmtMoney(line);
+  });
+  const otherEl = wrap.querySelector('.denom-other');
+  total += Math.max(0, Number(otherEl.value) || 0);
+  document.getElementById(idPrefix).value = total.toFixed(2);
+  const totalDisplay = document.getElementById(`${idPrefix}-totaldisplay`);
+  if (totalDisplay) totalDisplay.textContent = fmtMoney(total);
+}
+
+// True once the person has typed into at least one denomination or the
+// Other field — lets submit handlers tell "genuinely counted to zero"
+// apart from "hit submit without entering anything."
+function denomCalcTouched(idPrefix) {
+  const wrap = document.getElementById(`${idPrefix}-denomcalc`);
+  if (!wrap) return true;
+  return Array.from(wrap.querySelectorAll('.denom-qty, .denom-other')).some((el) => el.value !== '');
+}
+
+function focusDenomCalc(idPrefix) {
+  const firstQty = document.querySelector(`#${idPrefix}-denomcalc .denom-qty`);
+  if (firstQty) firstQty.focus();
+}
+
+// ---------------------------------------------------------------------
 // Blind count entry — shared by every tier. Deliberately never shown an
 // expected amount or a prior variance; nothing above this function passes
 // one in, and the reveal only happens after submitCount()'s POST returns.
@@ -882,17 +1005,14 @@ function renderCountEntry(source, opts) {
     <div class="card" style="margin-top:16px;">
       <h2>Cash out ${escapeHtml(source.name)}</h2>
       ${onBehalf ? `<p class="muted">On behalf of <b style="color:var(--text);">${escapeHtml(onBehalf)}</b>.</p>` : ''}
-      <p class="blind-note">Count it now, then enter the total below. This is blind — no target amount is shown, so what you type is never just a copy of a number on screen. It's checked against the ledger only after you submit.</p>
-      <div class="big-amt-wrap">
-        <span class="prefix">$</span>
-        <input type="number" inputmode="decimal" step="0.01" min="0" id="countAmount" placeholder="0.00">
-      </div>
+      <p class="blind-note">Count it now, then enter how many of each below. This is blind — no target amount is shown, so what you type is never just a copy of a number on screen. It's checked against the ledger only after you submit.</p>
+      ${denomCalcHtml('countAmount')}
       <label>Note (optional)</label>
       <textarea id="countNote" rows="2" placeholder="Anything worth flagging about this count"></textarea>
       <button class="primary" onclick="submitCount('${source.id}', ${onBehalf ? `'${source.assigned_person_id}'` : 'null'}, '${opts.returnTo}')">Log this count</button>
     </div>
   `;
-  document.getElementById('countAmount').focus();
+  focusDenomCalc('countAmount');
 }
 
 function backFromCountEntry(returnTo) {
@@ -903,8 +1023,8 @@ function backFromCountEntry(returnTo) {
 async function submitCount(sourceId, onBehalfOf, returnTo) {
   const amountEl = document.getElementById('countAmount');
   const amount = Number(amountEl.value);
-  if (!Number.isFinite(amount) || amount < 0 || amountEl.value === '') {
-    showMsg('Enter a valid amount.', 'error');
+  if (!Number.isFinite(amount) || amount < 0 || !denomCalcTouched('countAmount')) {
+    showMsg('Enter the count.', 'error');
     return;
   }
   const note = document.getElementById('countNote').value.trim();
