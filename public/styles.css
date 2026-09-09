@@ -253,10 +253,24 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .stat-tile .l { font-size: 12px; color: var(--muted); margin-top: 4px; display: flex; align-items: center; gap: 6px; }
 .stat-tile .l .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 
-.loc-card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; }
-.loc-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 10px; }
-.loc-header .name { font-size: 16px; font-weight: 700; }
-.loc-header .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+/* Site scorecard (all-locations dashboard) — collapsed-by-default per-
+   location card: a segmented status bar across the top, an issue-count
+   badge, and one monogram chip per category. Click the header to expand
+   into the same .sys-grid used below (see monitoring.js's
+   siteScoreCardHtml/toggleLocationCard). Chip/bar colors are set inline
+   from STATUS_META in monitoring.js, not fixed classes here, so this
+   app's brighter red/yellow/green status language stays in one place. */
+.site-scorecard { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); overflow: hidden; margin-bottom: 16px; }
+.site-scorecard .top-bar { display: flex; width: 100%; height: 15px; }
+.site-scorecard .score-body { padding: 16px 18px 17px; cursor: pointer; }
+.site-scorecard .score-hd { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.site-scorecard .score-nm { font-size: 16px; font-weight: 700; }
+.site-scorecard .score-frac { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.site-scorecard .score-badge { display: inline-flex; align-items: center; font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 999px; background: rgba(255,23,68,.16); color: #ff1744; border: 1px solid rgba(255,23,68,.4); white-space: nowrap; }
+.site-scorecard .cat-row { display: flex; gap: 9px; margin-top: 16px; flex-wrap: wrap; }
+.site-scorecard .mono-chip { width: 46px; height: 46px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 800; letter-spacing: .01em; border-width: 2px; border-style: solid; flex-shrink: 0; }
+.site-scorecard .score-expand { max-height: 0; overflow: hidden; transition: max-height .2s ease; }
+.site-scorecard.open .score-expand { max-height: 3000px; }
 
 .sys-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
 .sys-tile { background: #0c0e13; border: 1px solid var(--card-border); border-left: 3px solid var(--card-border); border-radius: 10px; }
