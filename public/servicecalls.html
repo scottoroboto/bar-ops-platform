@@ -18,6 +18,19 @@
   <div id="panelManage" style="display:none;"></div>
 </div>
 
+<!-- Move-to-Working modal -->
+<div class="card" id="pendingModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:15%; z-index:20;">
+  <h2>Move to Working</h2>
+  <input type="hidden" id="pendingCallId">
+  <p class="muted" id="pendingCallDesc"></p>
+  <label for="pendingNote">What's happening?</label>
+  <textarea id="pendingNote" rows="3" placeholder="e.g. Part ordered, technician called, en route…"></textarea>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closePendingModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitPending()">Move to Working</button>
+  </div>
+</div>
+
 <!-- Close-call modal -->
 <div class="card" id="closeModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:15%; z-index:20;">
   <h2>Close this call</h2>
