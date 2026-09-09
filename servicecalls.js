@@ -1,589 +1,338 @@
-let ME = null;
-let IS_MANAGER = false;
-let LOCATIONS = [];
-let EQUIPMENT = [];
-let DESTINATIONS = [];       // active send-to destinations, for the New Call checkboxes
-let ADMIN_DESTINATIONS = []; // full destinations (incl. archived) + members, for the Manage tab
-let MANAGE_PEOPLE = [];      // active employees, for the destination member picker
-let SC_SUBTAB = 'new';       // 'new' (open) | 'pending' (Working) | 'closed' — which Calls sub-tab is showing
+// Service Calls — ported from the reviewed prototype (open-first sort,
+// notify-on-open/close, CSV reporting) onto the shared people/locations
+// core, gated by employee_apps.service_calls the same way Time Clock is
+// gated behind employee_apps.time_clock.
+const notify = require('./notify');
+const { withServiceClient } = require('./db');
 
-function showMsg(text, kind) {
-  document.getElementById('msgBox').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+async function requireServiceCallsAccess(client, personId) {
+  const { rows } = await client.query(
+    `SELECT enabled FROM employee_apps WHERE person_id = $1 AND app_key = 'service_calls'`,
+    [personId]
+  );
+  return !!(rows[0] && rows[0].enabled);
 }
 
-function locationName(id) { const l = LOCATIONS.find(l => l.id === id); return l ? l.name : '—'; }
+// Deliberately does NOT join to `people` on the caller's own (RLS-enforced)
+// connection: a staff member can see calls at their own location, but
+// people's own RLS policies mean they generally can't see *other people's*
+// rows (e.g. a manager's, or another staff member's) — which silently
+// turned "reported by"/"closed by" into blanks for anyone but a manager/
+// owner. Names are resolved afterwards via resolveNames(), on the service
+// (RLS-bypass) connection, since a display name isn't the sensitive part
+// of a person's record — full row access is, and this never returns one.
+const CALL_SELECT = `
+  SELECT sc.*, l.name AS location_name, et.name AS equipment_name
+  FROM service_calls sc
+  JOIN locations l ON l.id = sc.location_id
+  LEFT JOIN equipment_types et ON et.id = sc.equipment_type_id
+`;
 
-function fillLocationSelect(sel, defaultId) {
-  sel.innerHTML = LOCATIONS.map(l => `<option value="${l.id}" ${l.id === defaultId ? 'selected' : ''}>${escapeHtml(l.name)}</option>`).join('');
-}
-function fillEquipmentSelect(sel) {
-  sel.innerHTML = EQUIPMENT.map(e => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('') + `<option value="__other">Other…</option>`;
-}
-
-function fmtDuration(minutes) {
-  if (minutes < 60) return `${minutes}m`;
-  const hrs = Math.floor(minutes / 60);
-  if (hrs < 24) return `${hrs}h ${minutes % 60}m`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ${hrs % 24}h`;
-}
-
-function setTab(which) {
-  document.getElementById('panelOpen').style.display = which === 'open' ? '' : 'none';
-  document.getElementById('panelNew').style.display = which === 'new' ? '' : 'none';
-  document.getElementById('panelReports').style.display = which === 'reports' ? '' : 'none';
-  document.getElementById('panelManage').style.display = which === 'manage' ? '' : 'none';
-  Array.from(document.querySelectorAll('#tabs button')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
-  if (which === 'open') loadOpen();
-  if (which === 'new') renderNewForm();
-  if (which === 'reports') renderReports();
-  if (which === 'manage') renderManage();
+async function resolveNames(ids) {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  if (!uniqueIds.length) return {};
+  return withServiceClient(async (svc) => {
+    const { rows } = await svc.query('SELECT id, name FROM people WHERE id = ANY($1)', [uniqueIds]);
+    return Object.fromEntries(rows.map((r) => [r.id, r.name]));
+  });
 }
 
-function renderTabs() {
-  const tabs = [{ key: 'open', label: 'Calls' }, { key: 'new', label: 'New Call' }];
-  if (IS_MANAGER) tabs.push({ key: 'reports', label: 'Reports' }, { key: 'manage', label: 'Manage' });
-  document.getElementById('tabs').innerHTML = tabs.map(t =>
-    `<button data-tab="${t.key}" onclick="setTab('${t.key}')">${t.label}</button>`).join('');
-  setTab('open');
+async function withNames(rows) {
+  const names = await resolveNames(rows.flatMap((r) => [r.created_by, r.closed_by, r.pending_by]));
+  return rows.map((r) => ({
+    ...r,
+    created_by_name: names[r.created_by] || null,
+    closed_by_name: r.closed_by ? (names[r.closed_by] || null) : null,
+    pending_by_name: r.pending_by ? (names[r.pending_by] || null) : null,
+  }));
 }
 
-function closeAllModals() { closePendingModal(); closeCloseModal(); closeDetailModal(); closeMembersModal(); }
+// ---------------------------------------------------------------------
+// Send-to destinations — attached to each call as destination_names, e.g.
+// ["Maintenance", "Kitchen Manager"]. Replaces the old single
+// assigned_to_role value; a call can now go to more than one destination
+// at once (that's what replaces "both"). service_call_destinations/
+// service_call_recipients carry no RLS (same open-reference-data posture
+// as equipment_types/locations/positions — see patch_012), so this just
+// queries on whatever client it's given, same as the equipment_name join
+// in CALL_SELECT above.
+// ---------------------------------------------------------------------
+async function destinationNamesForCalls(client, callIds) {
+  const ids = [...new Set(callIds.filter(Boolean))];
+  if (!ids.length) return {};
+  const { rows } = await client.query(
+    `SELECT r.call_id, d.name FROM service_call_recipients r
+     JOIN service_call_destinations d ON d.id = r.destination_id
+     WHERE r.call_id = ANY($1)
+     ORDER BY d.name`,
+    [ids]
+  );
+  const map = {};
+  for (const row of rows) (map[row.call_id] ||= []).push(row.name);
+  return map;
+}
 
-// ---------------- Calls list — New / Working / Closed sub-tabs ----------------
-async function loadOpen() {
-  const el = document.getElementById('panelOpen');
-  el.innerHTML = '<div class="card"><p class="muted">Loading…</p></div>';
-  try {
-    const calls = await api('/api/servicecalls');
-    const buckets = {
-      new: calls.filter(c => c.status === 'open'),
-      pending: calls.filter(c => c.status === 'pending'),
-      closed: calls.filter(c => c.status === 'closed'),
-    };
-    const subtabs = [
-      { key: 'new', label: 'New' },
-      { key: 'pending', label: 'Working' },
-      { key: 'closed', label: 'Closed' },
-    ];
-    const subtabsHtml = `<div class="sc-subtabs">${subtabs.map(t => `
-      <div class="sc-subtab ${t.key === 'new' ? 'sc-subtab-new' : ''} ${t.key === SC_SUBTAB ? 'active' : ''}" onclick="setScSubtab('${t.key}')">
-        <span>${t.label}</span><span class="sc-subtab-cnt">${buckets[t.key].length}</span>
-      </div>`).join('')}</div>`;
-    const rows = buckets[SC_SUBTAB] || [];
-    const listHtml = rows.length
-      ? `<div class="sc-tile-grid">${rows.map(callCardHtml).join('')}</div>`
-      : `<div class="card"><p class="muted">No ${SC_SUBTAB === 'new' ? 'new' : SC_SUBTAB === 'pending' ? 'working' : 'closed'} calls.</p></div>`;
-    el.innerHTML = subtabsHtml + listHtml;
-  } catch (e) {
-    el.innerHTML = `<div class="card"><p class="msg error">${escapeHtml(e.message)}</p></div>`;
+// ---------------------------------------------------------------------
+// Call notes — append-only ("all logged"): every note is timestamped and
+// attributed, nothing is ever edited or removed. Author names go through
+// resolveNames() for the same reason created_by_name/closed_by_name do —
+// the note's author might not be someone the viewer's own RLS-scoped
+// connection can see a `people` row for (e.g. a maintenance note left on
+// a staff member's call).
+// ---------------------------------------------------------------------
+async function listNotesForCall(client, callId) {
+  const { rows } = await client.query(
+    `SELECT * FROM service_call_notes WHERE call_id = $1 ORDER BY created_at ASC`,
+    [callId]
+  );
+  const names = await resolveNames(rows.map((r) => r.author_id));
+  return rows.map((r) => ({ ...r, author_name: names[r.author_id] || null }));
+}
+
+async function noteCountsForCalls(client, callIds) {
+  const ids = [...new Set(callIds.filter(Boolean))];
+  if (!ids.length) return {};
+  const { rows } = await client.query(
+    `SELECT call_id, COUNT(*)::int AS n FROM service_call_notes WHERE call_id = ANY($1) GROUP BY call_id`,
+    [ids]
+  );
+  return Object.fromEntries(rows.map((r) => [r.call_id, r.n]));
+}
+
+async function addNote(client, { callId, personId, note }) {
+  const trimmed = (note || '').trim();
+  if (!trimmed) return { ok: false, error: 'Write a note before saving.' };
+  const { rows: existingRows } = await client.query('SELECT id FROM service_calls WHERE id = $1', [callId]);
+  if (!existingRows[0]) return { ok: false, error: 'Not found.' };
+  await client.query(
+    `INSERT INTO service_call_notes (call_id, author_id, note) VALUES ($1,$2,$3)`,
+    [callId, personId, trimmed]
+  );
+  return { ok: true, notes: await listNotesForCall(client, callId) };
+}
+
+async function getCall(client, id) {
+  const { rows } = await client.query(`${CALL_SELECT} WHERE sc.id = $1`, [id]);
+  if (!rows[0]) return null;
+  const [named] = await withNames(rows);
+  const destMap = await destinationNamesForCalls(client, [id]);
+  const notes = await listNotesForCall(client, id);
+  return { ...withMinutesOpen(named), destination_names: destMap[id] || [], notes };
+}
+
+async function listCalls(client, filters = {}) {
+  const clauses = [];
+  const params = [];
+  if (filters.status) { params.push(filters.status); clauses.push(`sc.status = $${params.length}`); }
+  if (filters.locationId) { params.push(filters.locationId); clauses.push(`sc.location_id = $${params.length}`); }
+  if (filters.equipmentTypeId) { params.push(filters.equipmentTypeId); clauses.push(`sc.equipment_type_id = $${params.length}`); }
+  if (filters.createdBy) { params.push(filters.createdBy); clauses.push(`sc.created_by = $${params.length}`); }
+  if (filters.closedBy) { params.push(filters.closedBy); clauses.push(`sc.closed_by = $${params.length}`); }
+  if (filters.dateFrom) { params.push(filters.dateFrom); clauses.push(`sc.created_at >= $${params.length}`); }
+  if (filters.dateTo) { params.push(filters.dateTo); clauses.push(`sc.created_at <= $${params.length}`); }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+  const { rows } = await client.query(`${CALL_SELECT} ${where}`, params);
+  const named = await withNames(rows);
+  const ids = named.map((r) => r.id);
+  const [destMap, noteCounts] = await Promise.all([
+    destinationNamesForCalls(client, ids),
+    noteCountsForCalls(client, ids),
+  ]);
+  const withDest = named.map((r) => ({ ...r, destination_names: destMap[r.id] || [], notes_count: noteCounts[r.id] || 0 }));
+
+  // New (open) first, oldest first — a running reminder to action them —
+  // then Working (pending), longest-pending first, then Closed, most
+  // recently closed first.
+  const STATUS_ORDER = { open: 0, pending: 1, closed: 2 };
+  withDest.sort((a, b) => {
+    if (a.status !== b.status) return STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
+    if (a.status === 'open') return new Date(a.created_at) - new Date(b.created_at);
+    if (a.status === 'pending') return new Date(a.pending_at) - new Date(b.pending_at);
+    return new Date(b.closed_at) - new Date(a.closed_at);
+  });
+
+  return withDest.map(withMinutesOpen);
+}
+
+function withMinutesOpen(row) {
+  const end = row.closed_at ? new Date(row.closed_at) : new Date();
+  const minutesOpen = Math.max(0, Math.round((end - new Date(row.created_at)) / 60000));
+  return { ...row, minutes_open: minutesOpen };
+}
+
+async function createCall(client, person, { locationId, equipmentTypeId, equipmentOther, description, destinationIds }) {
+  const hasAccess = await requireServiceCallsAccess(client, person.id);
+  if (!hasAccess && person.role !== 'owner') {
+    return { ok: false, error: 'Service Calls isn’t turned on for your account yet — ask your manager.' };
+  }
+  const ids = [...new Set((Array.isArray(destinationIds) ? destinationIds : []).filter(Boolean))];
+  if (!locationId || !description || !ids.length) {
+    return { ok: false, error: 'Location, description, and who to notify are all required.' };
+  }
+
+  const { rows } = await client.query(
+    `INSERT INTO service_calls (location_id, equipment_type_id, equipment_other, description, created_by)
+     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [locationId, equipmentTypeId || null, equipmentOther || null, description, person.id]
+  );
+  const callId = rows[0].id;
+  const values = ids.map((_, i) => `($1, $${i + 2})`).join(',');
+  await client.query(`INSERT INTO service_call_recipients (call_id, destination_id) VALUES ${values}`, [callId, ...ids]);
+
+  const call = await getCall(client, callId);
+  await notifyNewCall(client, call).catch((err) => console.error('notifyNewCall error', err));
+  return { ok: true, call };
+}
+
+// Moves a call from New (open) to Working (pending) — requires an
+// explanation, same shape as closeCall() requiring a remedy. Deliberately
+// does not also allow re-entering pending once closed (closeCall() is the
+// only path off 'pending', same as it's the only path off 'open') — but
+// does NOT require a call to have passed through 'pending' before it can
+// be closed: closeCall() below only ever checks `status === 'closed'`, so
+// a New card can go straight to Closed in one step, matching the frontend's
+// "Move to Working" / "Close call" actions shown side by side on every New
+// card.
+async function pendingCall(client, { id, pendingBy, note }) {
+  const trimmed = (note || '').trim();
+  if (!trimmed) return { ok: false, error: 'Say what’s happening before moving this to Working.' };
+  const { rows: existingRows } = await client.query('SELECT * FROM service_calls WHERE id = $1', [id]);
+  const existing = existingRows[0];
+  if (!existing) return { ok: false, error: 'Not found.' };
+  if (existing.status === 'closed') return { ok: false, error: 'This call is already closed.' };
+  if (existing.status === 'pending') return { ok: false, error: 'Already moved to Working.' };
+
+  await client.query(
+    `UPDATE service_calls SET status = 'pending', pending_by = $1, pending_at = now(), pending_note = $2 WHERE id = $3`,
+    [pendingBy, trimmed, id]
+  );
+  return { ok: true, call: await getCall(client, id) };
+}
+
+async function closeCall(client, { id, closedBy, remedy }) {
+  if (!remedy) return { ok: false, error: 'Describe what fixed it before closing.' };
+  const { rows: existingRows } = await client.query('SELECT * FROM service_calls WHERE id = $1', [id]);
+  const existing = existingRows[0];
+  if (!existing) return { ok: false, error: 'Not found.' };
+  if (existing.status === 'closed') return { ok: false, error: 'Already closed.' };
+
+  await client.query(
+    `UPDATE service_calls SET status = 'closed', closed_by = $1, closed_at = now(), remedy = $2 WHERE id = $3`,
+    [closedBy, remedy, id]
+  );
+  const call = await getCall(client, id);
+  await notifyCallClosed(client, call).catch((err) => console.error('notifyCallClosed error', err));
+  return { ok: true, call };
+}
+
+// ---------------------------------------------------------------------
+// Notifications — recipients are whoever is a member of one of the call's
+// chosen destinations (service_call_destination_members), rather than
+// "everyone whose platform role matches". Deliberately does NOT also
+// require the recipient to have Service Calls access turned on for
+// themselves — being added to a destination is the owner/manager
+// explicitly saying "notify this person", independent of whether they use
+// the app themselves (same reasoning as Systems Monitoring's alert
+// routing).
+//
+// Runs on the service (RLS-bypass) connection, not the caller's authed
+// one: figuring out who to notify is a system operation, not something
+// scoped to what the *caller* can see.
+// ---------------------------------------------------------------------
+async function recipientsFor(call) {
+  return withServiceClient(async (svc) => {
+    const { rows } = await svc.query(
+      `SELECT DISTINCT p.* FROM people p
+       JOIN service_call_destination_members m ON m.person_id = p.id
+       JOIN service_call_recipients r ON r.destination_id = m.destination_id
+       WHERE r.call_id = $1 AND p.status = 'active'`,
+      [call.id]
+    );
+    return rows;
+  });
+}
+
+async function notifyNewCall(client, call) {
+  const recipients = await recipientsFor(call);
+  const equipmentLabel = call.equipment_name || call.equipment_other || 'Unspecified equipment';
+  const subject = `New service call: ${equipmentLabel} @ ${call.location_name}`;
+  const text = `${call.created_by_name} opened a service call at ${call.location_name}.\n\nEquipment: ${equipmentLabel}\nDescription: ${call.description}\nOpened: ${call.created_at}\n\nOpen the app to view and close this call.`;
+  const smsBody = `Service call: ${equipmentLabel} @ ${call.location_name} (by ${call.created_by_name}). ${call.description}`.slice(0, 300);
+
+  for (const person of recipients) {
+    if (person.email) await notify.sendEmail(client, 'service_calls', call.id, person.email, subject, text);
+    if (person.phone) await notify.sendSms(client, 'service_calls', call.id, person.phone, smsBody);
   }
 }
 
-function setScSubtab(key) {
-  SC_SUBTAB = key;
-  loadOpen();
+async function notifyCallClosed(client, call) {
+  // Let the original requester know their call was closed. Looked up via
+  // the service connection for the same reason as recipientsFor above —
+  // the closer (who might just be a same-location staff member) often
+  // can't see the original reporter's `people` row under RLS.
+  const person = await withServiceClient(async (svc) => {
+    const { rows } = await svc.query('SELECT * FROM people WHERE id = $1', [call.created_by]);
+    return rows[0];
+  });
+  if (!person || !person.email) return;
+  const equipmentLabel = call.equipment_name || call.equipment_other || 'Unspecified equipment';
+  const subject = `Service call closed: ${equipmentLabel} @ ${call.location_name}`;
+  const text = `${call.closed_by_name} closed the service call you opened at ${call.location_name}.\n\nEquipment: ${equipmentLabel}\nRemedy: ${call.remedy}\nClosed: ${call.closed_at}`;
+  await notify.sendEmail(client, 'service_calls', call.id, person.email, subject, text);
 }
 
-function callCardHtml(c) {
-  const equipment = c.equipment_name || c.equipment_other || 'Unspecified equipment';
-  const equipJson = JSON.stringify(equipment).replace(/"/g, '&quot;');
-  const sentTo = (c.destination_names && c.destination_names.length) ? c.destination_names.join(', ') : '—';
-  const noteHint = c.notes_count ? `${c.notes_count} note${c.notes_count === 1 ? '' : 's'}` : 'Add a note';
-  const statusBadge = c.status === 'open'
-    ? `<span class="badge stale">New · ${fmtDuration(c.minutes_open)}</span>`
-    : c.status === 'pending'
-      ? `<span class="badge on">Working · ${fmtDuration(c.minutes_open)}</span>`
-      : `<span class="badge off">Closed</span>`;
-  const pendingNoteHtml = c.status === 'pending' && c.pending_note
-    ? `<div class="sc-tile-note"><div class="sc-tile-note-lbl">Why it's pending</div>${escapeHtml(c.pending_note)}</div>`
-    : '';
-  // Every New card gets both actions side by side — Close is reachable
-  // directly from New, not gated behind first moving to Working.
-  let actionsHtml = '';
-  if (c.status === 'open') {
-    actionsHtml = `<button class="small ghost" onclick="event.stopPropagation(); openPendingModal('${c.id}', ${equipJson})">Move to Working</button>
-      <button class="small primary" style="margin-top:0;" onclick="event.stopPropagation(); openCloseModal('${c.id}', ${equipJson})">Close call</button>`;
-  } else if (c.status === 'pending') {
-    actionsHtml = `<button class="small primary" style="margin-top:0;" onclick="event.stopPropagation(); openCloseModal('${c.id}', ${equipJson})">Close call</button>`;
+// ---------------------------------------------------------------------
+// Send-to destinations admin (manager/owner) — a destination's member set
+// is replaced wholesale rather than added/removed one at a time, matching
+// how the Manage tab presents it: a checkbox grid of everyone, saved all
+// at once.
+// ---------------------------------------------------------------------
+async function listDestinationsWithMembers() {
+  return withServiceClient(async (client) => {
+    const { rows: destinations } = await client.query('SELECT * FROM service_call_destinations ORDER BY active DESC, name');
+    const { rows: members } = await client.query(
+      `SELECT m.destination_id, p.id AS person_id, p.name FROM service_call_destination_members m
+       JOIN people p ON p.id = m.person_id ORDER BY p.name`
+    );
+    return destinations.map((d) => ({
+      ...d,
+      members: members.filter((m) => m.destination_id === d.id).map((m) => ({ id: m.person_id, name: m.name })),
+    }));
+  });
+}
+
+async function setDestinationMembers({ destinationId, personIds }) {
+  return withServiceClient(async (client) => {
+    await client.query('DELETE FROM service_call_destination_members WHERE destination_id = $1', [destinationId]);
+    const ids = [...new Set((personIds || []).filter(Boolean))];
+    if (ids.length) {
+      const values = ids.map((_, i) => `($1, $${i + 2})`).join(',');
+      await client.query(`INSERT INTO service_call_destination_members (destination_id, person_id) VALUES ${values}`, [destinationId, ...ids]);
+    }
+    const { rows } = await client.query(
+      `SELECT p.id, p.name FROM service_call_destination_members m JOIN people p ON p.id = m.person_id WHERE m.destination_id = $1 ORDER BY p.name`,
+      [destinationId]
+    );
+    return { ok: true, members: rows };
+  });
+}
+
+function toCsv(rows) {
+  const headers = ['id', 'location_name', 'equipment_name', 'equipment_other', 'description', 'created_by_name', 'created_at', 'status', 'sent_to', 'closed_by_name', 'closed_at', 'minutes_open', 'remedy'];
+  const esc = (v) => {
+    const val = v instanceof Date ? v.toISOString() : (v == null ? '' : v);
+    return `"${String(val).replace(/"/g, '""')}"`;
+  };
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    const row = { ...r, sent_to: (r.destination_names || []).join('; ') };
+    lines.push(headers.map((h) => esc(row[h])).join(','));
   }
-  return `<div class="card sc-tile ${c.status === 'closed' ? 'sc-closed' : ''}" onclick="openCallDetail('${c.id}')" style="cursor:pointer;">
-    <div class="name">${escapeHtml(equipment)} ${statusBadge}</div>
-    <div class="sub">${escapeHtml(c.location_name)} · reported by ${escapeHtml(c.created_by_name)} · ${fmtDateTime(c.created_at)} · to ${escapeHtml(sentTo)}</div>
-    <p style="margin:0;">${escapeHtml(c.description)}</p>
-    ${pendingNoteHtml}
-    ${c.status === 'closed' ? `<p class="muted" style="margin:0;">Closed by ${escapeHtml(c.closed_by_name || '—')} ${fmtDateTime(c.closed_at)} — ${escapeHtml(c.remedy || '')}</p>` : ''}
-    <div class="sc-tile-foot">
-      <span class="muted">${escapeHtml(noteHint)}</span>
-      ${actionsHtml ? `<div class="sc-tile-actions" onclick="event.stopPropagation();">${actionsHtml}</div>` : ''}
-    </div>
-  </div>`;
+  return lines.join('\n');
 }
 
-// ---------------- Move to Working ----------------
-function openPendingModal(id, desc) {
-  document.getElementById('pendingCallId').value = id;
-  document.getElementById('pendingCallDesc').textContent = desc;
-  document.getElementById('pendingNote').value = '';
-  document.getElementById('pendingModal').style.display = '';
-  document.getElementById('modalBackdrop').style.display = '';
-}
-function closePendingModal() {
-  document.getElementById('pendingModal').style.display = 'none';
-  document.getElementById('modalBackdrop').style.display = 'none';
-}
-async function submitPending() {
-  const id = document.getElementById('pendingCallId').value;
-  const note = document.getElementById('pendingNote').value.trim();
-  if (!note) { alert('Say what’s happening first.'); return; }
-  try {
-    const result = await api(`/api/servicecalls/${id}/pending`, { method: 'POST', body: { note } });
-    if (!result.ok) { alert(result.error); return; }
-    closePendingModal();
-    showMsg('Moved to Working.', 'success');
-    SC_SUBTAB = 'pending';
-    loadOpen();
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
-// ---------------- Close call ----------------
-function openCloseModal(id, desc) {
-  document.getElementById('closeCallId').value = id;
-  document.getElementById('closeCallDesc').textContent = desc;
-  document.getElementById('closeRemedy').value = '';
-  document.getElementById('closeModal').style.display = '';
-  document.getElementById('modalBackdrop').style.display = '';
-}
-function closeCloseModal() {
-  document.getElementById('closeModal').style.display = 'none';
-  document.getElementById('modalBackdrop').style.display = 'none';
-}
-async function submitClose() {
-  const id = document.getElementById('closeCallId').value;
-  const remedy = document.getElementById('closeRemedy').value.trim();
-  if (!remedy) { alert('Describe what fixed it first.'); return; }
-  try {
-    const result = await api(`/api/servicecalls/${id}/close`, { method: 'POST', body: { remedy } });
-    if (!result.ok) { alert(result.error); return; }
-    closeCloseModal();
-    showMsg('Call closed.', 'success');
-    SC_SUBTAB = 'closed';
-    loadOpen();
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
-// ---------------- Call detail + notes ("click any call, all logged") ----------------
-function notesListHtml(notes) {
-  if (!notes || !notes.length) return '<p class="muted">No notes yet.</p>';
-  return notes.map(n => `<div class="sc-note">
-    <div class="sc-note-meta">${escapeHtml(n.author_name || '—')} · ${fmtDateTime(n.created_at)}</div>
-    <div>${escapeHtml(n.note)}</div>
-  </div>`).join('');
-}
-
-async function openCallDetail(id) {
-  document.getElementById('detailModal').style.display = '';
-  document.getElementById('modalBackdrop').style.display = '';
-  const body = document.getElementById('detailBody');
-  body.innerHTML = '<p class="muted">Loading…</p>';
-  try {
-    const c = await api('/api/servicecalls/' + id);
-    body.innerHTML = detailBodyHtml(c);
-  } catch (e) {
-    body.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
-  }
-}
-function closeDetailModal() {
-  document.getElementById('detailModal').style.display = 'none';
-  document.getElementById('modalBackdrop').style.display = 'none';
-}
-
-function detailBodyHtml(c) {
-  const equipment = c.equipment_name || c.equipment_other || 'Unspecified equipment';
-  const equipJson = JSON.stringify(equipment).replace(/"/g, '&quot;');
-  const sentTo = (c.destination_names && c.destination_names.length) ? c.destination_names.join(', ') : '—';
-  const statusBadge = c.status === 'open'
-    ? `<span class="badge stale">New · ${fmtDuration(c.minutes_open)}</span>`
-    : c.status === 'pending'
-      ? `<span class="badge on">Working · ${fmtDuration(c.minutes_open)}</span>`
-      : `<span class="badge off">Closed</span>`;
-  const pendingNoteHtml = c.status === 'pending' && c.pending_note
-    ? `<div class="sc-tile-note" style="margin-top:10px;"><div class="sc-tile-note-lbl">Why it's pending</div>${escapeHtml(c.pending_note)}</div>`
-    : '';
-  // Same rule as the tile actions: New shows both, Working shows Close only.
-  let actionsHtml = '';
-  if (c.status === 'open') {
-    actionsHtml = `<div class="stack-actions">
-      <button class="ghost" onclick="closeDetailModal(); openPendingModal('${c.id}', ${equipJson})">Move to Working</button>
-      <button class="primary" style="margin-top:0;" onclick="closeDetailModal(); openCloseModal('${c.id}', ${equipJson})">Close this call</button>
-    </div>`;
-  } else if (c.status === 'pending') {
-    actionsHtml = `<button class="primary" onclick="closeDetailModal(); openCloseModal('${c.id}', ${equipJson})">Close this call</button>`;
-  }
-  return `
-    <div class="name">${escapeHtml(equipment)} ${statusBadge}</div>
-    <p class="sub" style="margin:4px 0 12px;">${escapeHtml(c.location_name)} · reported by ${escapeHtml(c.created_by_name)} · ${fmtDateTime(c.created_at)} · to ${escapeHtml(sentTo)}</p>
-    <p>${escapeHtml(c.description)}</p>
-    ${pendingNoteHtml}
-    ${c.status === 'closed' ? `<p class="muted" style="margin-top:8px;">Closed by ${escapeHtml(c.closed_by_name || '—')} ${fmtDateTime(c.closed_at)} — ${escapeHtml(c.remedy || '')}</p>` : ''}
-    <hr style="border:none; border-top:1px solid var(--card-border); margin:16px 0;">
-    <h2 style="font-size:14px; margin:0 0 8px;">Notes</h2>
-    <div id="detailNotesList">${notesListHtml(c.notes)}</div>
-    <input type="hidden" id="detailCallId" value="${c.id}">
-    <label for="detailNewNote">Add a note</label>
-    <textarea id="detailNewNote" rows="2" placeholder="e.g. Called the vendor, part is on order"></textarea>
-    <button class="secondary" onclick="submitNote()">Add note</button>
-    <div id="detailNoteResult"></div>
-    ${actionsHtml}
-  `;
-}
-
-async function submitNote() {
-  const id = document.getElementById('detailCallId').value;
-  const note = document.getElementById('detailNewNote').value.trim();
-  const resultEl = document.getElementById('detailNoteResult');
-  if (!note) { resultEl.innerHTML = '<p class="msg error">Write a note first.</p>'; return; }
-  try {
-    const result = await api(`/api/servicecalls/${id}/notes`, { method: 'POST', body: { note } });
-    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
-    document.getElementById('detailNewNote').value = '';
-    resultEl.innerHTML = '';
-    document.getElementById('detailNotesList').innerHTML = notesListHtml(result.notes);
-  } catch (e) {
-    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
-  }
-}
-
-// ---------------- New call ----------------
-function renderNewForm() {
-  const el = document.getElementById('panelNew');
-  el.innerHTML = `<div class="card">
-    <h2>Report a new issue</h2>
-    <label for="ncLocation">Location</label>
-    <select id="ncLocation"></select>
-    <label for="ncEquipment">Equipment</label>
-    <select id="ncEquipment" onchange="document.getElementById('ncOtherWrap').style.display = this.value === '__other' ? '' : 'none';"></select>
-    <div id="ncOtherWrap" style="display:none;">
-      <label for="ncOther">What is it?</label>
-      <input id="ncOther" placeholder="e.g. Back door lock">
-    </div>
-    <label for="ncDescription">What's going on?</label>
-    <textarea id="ncDescription" rows="3" placeholder="Be specific — this is what the people below will see"></textarea>
-    <label>Send this to</label>
-    <div id="ncDestinations" class="sc-checkbox-grid"></div>
-    <button class="primary" onclick="submitNewCall()">Submit</button>
-  </div>`;
-  fillLocationSelect(document.getElementById('ncLocation'), ME.location_id);
-  fillEquipmentSelect(document.getElementById('ncEquipment'));
-  const destEl = document.getElementById('ncDestinations');
-  destEl.innerHTML = DESTINATIONS.length
-    ? DESTINATIONS.map(d => `<label class="sc-checkbox"><input type="checkbox" value="${d.id}"> ${escapeHtml(d.name)}</label>`).join('')
-    : '<p class="muted">No destinations set up yet — ask a manager to add one under Manage.</p>';
-}
-
-async function submitNewCall() {
-  const locationId = document.getElementById('ncLocation').value;
-  const equipmentSel = document.getElementById('ncEquipment').value;
-  const equipmentTypeId = equipmentSel === '__other' ? null : equipmentSel;
-  const equipmentOther = equipmentSel === '__other' ? document.getElementById('ncOther').value.trim() : null;
-  const description = document.getElementById('ncDescription').value.trim();
-  const destinationIds = Array.from(document.querySelectorAll('#ncDestinations input:checked')).map(i => i.value);
-  if (!description) { showMsg('Describe the issue first.', 'error'); return; }
-  if (!destinationIds.length) { showMsg('Pick at least one destination to send this to.', 'error'); return; }
-  try {
-    const result = await api('/api/servicecalls', { method: 'POST', body: { locationId, equipmentTypeId, equipmentOther, description, destinationIds } });
-    if (!result.ok) { showMsg(result.error, 'error'); return; }
-    showMsg('Reported — thanks.', 'success');
-    setTab('open');
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-// ---------------- Reports (manager/owner) ----------------
-function renderReports() {
-  const el = document.getElementById('panelReports');
-  el.innerHTML = `<div class="card">
-    <h2>Reports</h2>
-    <label for="rpLocation">Location</label>
-    <select id="rpLocation"><option value="">All locations</option></select>
-    <label for="rpEquipment">Equipment</label>
-    <select id="rpEquipment"><option value="">All equipment</option></select>
-    <label for="rpStatus">Status</label>
-    <select id="rpStatus"><option value="">All</option><option value="open">New</option><option value="pending">Working</option><option value="closed">Closed</option></select>
-    <div class="stack-actions">
-      <button class="secondary" onclick="runReport()">Run</button>
-      <button class="secondary" onclick="downloadCsv()">Download CSV</button>
-    </div>
-    <div id="reportSummary"></div>
-    <div id="reportTable" style="margin-top:10px; overflow-x:auto;"></div>
-  </div>`;
-  const locSel = document.getElementById('rpLocation');
-  locSel.insertAdjacentHTML('beforeend', LOCATIONS.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join(''));
-  const eqSel = document.getElementById('rpEquipment');
-  eqSel.insertAdjacentHTML('beforeend', EQUIPMENT.map(e => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join(''));
-  runReport();
-}
-
-function reportQuery() {
-  const params = new URLSearchParams();
-  const loc = document.getElementById('rpLocation').value;
-  const eq = document.getElementById('rpEquipment').value;
-  const status = document.getElementById('rpStatus').value;
-  if (loc) params.set('locationId', loc);
-  if (eq) params.set('equipmentTypeId', eq);
-  if (status) params.set('status', status);
-  return params.toString();
-}
-
-async function runReport() {
-  try {
-    const rows = await api('/api/servicecalls?' + reportQuery());
-    const closed = rows.filter(r => r.status === 'closed');
-    const newCalls = rows.filter(r => r.status === 'open');
-    const working = rows.filter(r => r.status === 'pending');
-    const avgMin = closed.length ? Math.round(closed.reduce((s, r) => s + r.minutes_open, 0) / closed.length) : 0;
-    document.getElementById('reportSummary').innerHTML = `
-      <p class="muted" style="margin-top:14px;">${rows.length} calls · ${newCalls.length} new · ${working.length} working · ${closed.length} closed
-      ${closed.length ? ' · avg time to close: ' + fmtDuration(avgMin) : ''}</p>`;
-    const statusBadge = (status) => status === 'open' ? '<span class="badge stale">new</span>'
-      : status === 'pending' ? '<span class="badge on">working</span>'
-      : '<span class="badge off">closed</span>';
-    document.getElementById('reportTable').innerHTML = rows.length ? `<table><thead><tr>
-        <th>Location</th><th>Equipment</th><th>Reported by</th><th>Opened</th><th>Status</th><th>Sent to</th><th>Closed by</th><th>Time</th><th>Remedy</th>
-      </tr></thead><tbody>
-        ${rows.map(r => `<tr>
-          <td>${escapeHtml(r.location_name)}</td>
-          <td>${escapeHtml(r.equipment_name || r.equipment_other || '—')}</td>
-          <td>${escapeHtml(r.created_by_name)}</td>
-          <td>${fmtDateTime(r.created_at)}</td>
-          <td>${statusBadge(r.status)}</td>
-          <td>${escapeHtml((r.destination_names || []).join(', ') || '—')}</td>
-          <td>${escapeHtml(r.closed_by_name || '—')}</td>
-          <td>${fmtDuration(r.minutes_open)}</td>
-          <td>${escapeHtml(r.remedy || '—')}</td>
-        </tr>`).join('')}
-      </tbody></table>` : '<p class="muted">No calls match those filters.</p>';
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-async function downloadCsv() {
-  try {
-    const res = await fetch('/api/servicecalls/report.csv?' + reportQuery(), {
-      headers: { Authorization: 'Bearer ' + getToken() },
-    });
-    if (!res.ok) throw new Error('Could not generate the report.');
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'service_calls.csv';
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-// ---------------- Manage (manager/owner): equipment types + destinations ----------------
-async function renderManage() {
-  const el = document.getElementById('panelManage');
-  el.innerHTML = '<div class="card"><p class="muted">Loading…</p></div>';
-  try {
-    MANAGE_PEOPLE = (await api('/api/employees')).filter(p => p.status === 'active');
-  } catch (e) {
-    MANAGE_PEOPLE = [];
-  }
-  el.innerHTML = `
-    <div class="card">
-      <h2>Equipment types</h2>
-      <p class="muted">Shown in the Equipment dropdown when reporting a new call. Archiving hides one from that dropdown — it doesn't touch past calls that already used it.</p>
-      <div id="equipList"><p class="muted">Loading…</p></div>
-      <label for="newEquipName">Add an equipment type</label>
-      <input id="newEquipName" placeholder="e.g. Neon Sign">
-      <button class="secondary" onclick="submitAddEquipment()">Add</button>
-      <div id="equipResult"></div>
-    </div>
-    <div class="card">
-      <h2>Send-to destinations</h2>
-      <p class="muted">Who gets notified when a call comes in. Add a destination, then set who's on it — being on a destination notifies someone whether or not they have Service Calls access themselves.</p>
-      <div id="destList"><p class="muted">Loading…</p></div>
-      <label for="newDestName">Add a destination</label>
-      <input id="newDestName" placeholder="e.g. Kitchen Manager">
-      <button class="secondary" onclick="submitAddDestination()">Add</button>
-      <div id="destResult"></div>
-    </div>
-  `;
-  loadManageEquipment();
-  loadManageDestinations();
-}
-
-async function loadManageEquipment() {
-  const el = document.getElementById('equipList');
-  try {
-    const rows = await api('/api/servicecalls/equipment-types/admin');
-    // Move arrows only make sense within the active group — archived ones
-    // are excluded from the move-target list server-side, so track first/
-    // last position among active rows only.
-    const active = rows.filter(e => e.active);
-    el.innerHTML = rows.length ? rows.map(e => {
-      const activeIdx = active.indexOf(e);
-      return `<div class="list-row">
-      <div><div class="name">${escapeHtml(e.name)}</div>${!e.active ? '<div class="sub">Archived</div>' : ''}</div>
-      <div style="display:flex; gap:8px; align-items:center;">
-        ${e.active ? `
-        <button class="small ghost" ${activeIdx === 0 ? 'disabled' : ''} onclick="moveEquipment('${e.id}','up')" title="Move up">▲</button>
-        <button class="small ghost" ${activeIdx === active.length - 1 ? 'disabled' : ''} onclick="moveEquipment('${e.id}','down')" title="Move down">▼</button>
-        <button class="small ghost" onclick="archiveEquipment('${e.id}')">Archive</button>` : `
-        <button class="small secondary" onclick="restoreEquipment('${e.id}')">Restore</button>`}
-      </div>
-    </div>`;
-    }).join('') : '<p class="muted">No equipment types yet.</p>';
-  } catch (e) {
-    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
-  }
-}
-
-async function moveEquipment(id, direction) {
-  try {
-    const result = await api(`/api/servicecalls/equipment-types/${id}/move`, { method: 'POST', body: { direction } });
-    if (!result.ok) { showMsg(result.error, 'error'); return; }
-    loadManageEquipment();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
-
-async function submitAddEquipment() {
-  const nameEl = document.getElementById('newEquipName');
-  const name = nameEl.value.trim();
-  const resultEl = document.getElementById('equipResult');
-  if (!name) return;
-  try {
-    const result = await api('/api/servicecalls/equipment-types', { method: 'POST', body: { name } });
-    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
-    nameEl.value = '';
-    resultEl.innerHTML = '';
-    loadManageEquipment();
-    EQUIPMENT = await api('/api/servicecalls/equipment-types');
-  } catch (e) {
-    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
-  }
-}
-async function archiveEquipment(id) {
-  await api(`/api/servicecalls/equipment-types/${id}/archive`, { method: 'POST' });
-  loadManageEquipment();
-  EQUIPMENT = await api('/api/servicecalls/equipment-types');
-}
-async function restoreEquipment(id) {
-  await api(`/api/servicecalls/equipment-types/${id}/restore`, { method: 'POST' });
-  loadManageEquipment();
-  EQUIPMENT = await api('/api/servicecalls/equipment-types');
-}
-
-async function loadManageDestinations() {
-  const el = document.getElementById('destList');
-  try {
-    const rows = await api('/api/servicecalls/destinations/admin');
-    ADMIN_DESTINATIONS = rows;
-    el.innerHTML = rows.length ? rows.map(d => `<div class="list-row" style="align-items:flex-start;">
-      <div>
-        <div class="name">${escapeHtml(d.name)} ${!d.active ? '<span class="badge off">Archived</span>' : ''}</div>
-        <div class="sub">${d.members.length ? escapeHtml(d.members.map(m => m.name).join(', ')) : 'Nobody yet'}</div>
-      </div>
-      <div class="stack-actions" style="margin-top:0;">
-        <button class="small ghost" onclick="openMembersModal('${d.id}')">Members</button>
-        ${d.active
-          ? `<button class="small ghost" onclick="archiveDestination('${d.id}')">Archive</button>`
-          : `<button class="small secondary" onclick="restoreDestination('${d.id}')">Restore</button>`}
-      </div>
-    </div>`).join('') : '<p class="muted">No destinations yet.</p>';
-  } catch (e) {
-    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
-  }
-}
-
-async function submitAddDestination() {
-  const nameEl = document.getElementById('newDestName');
-  const name = nameEl.value.trim();
-  const resultEl = document.getElementById('destResult');
-  if (!name) return;
-  try {
-    const result = await api('/api/servicecalls/destinations', { method: 'POST', body: { name } });
-    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
-    nameEl.value = '';
-    resultEl.innerHTML = '';
-    loadManageDestinations();
-    DESTINATIONS = await api('/api/servicecalls/destinations');
-  } catch (e) {
-    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
-  }
-}
-async function archiveDestination(id) {
-  await api(`/api/servicecalls/destinations/${id}/archive`, { method: 'POST' });
-  loadManageDestinations();
-  DESTINATIONS = await api('/api/servicecalls/destinations');
-}
-async function restoreDestination(id) {
-  await api(`/api/servicecalls/destinations/${id}/restore`, { method: 'POST' });
-  loadManageDestinations();
-  DESTINATIONS = await api('/api/servicecalls/destinations');
-}
-
-function openMembersModal(destId) {
-  const dest = ADMIN_DESTINATIONS.find(d => d.id === destId);
-  if (!dest) return;
-  document.getElementById('membersDestId').value = destId;
-  document.getElementById('membersTitle').textContent = 'Members — ' + dest.name;
-  const currentIds = new Set(dest.members.map(m => m.id));
-  const list = document.getElementById('membersList');
-  list.innerHTML = MANAGE_PEOPLE.length
-    ? MANAGE_PEOPLE.map(p => `<label class="sc-checkbox"><input type="checkbox" value="${p.id}" ${currentIds.has(p.id) ? 'checked' : ''}> ${escapeHtml(p.name)}${p.role ? ' — ' + escapeHtml(p.role) : ''}</label>`).join('')
-    : '<p class="muted">No active employees to add yet.</p>';
-  document.getElementById('membersResult').innerHTML = '';
-  document.getElementById('membersModal').style.display = '';
-  document.getElementById('modalBackdrop').style.display = '';
-}
-function closeMembersModal() {
-  document.getElementById('membersModal').style.display = 'none';
-  document.getElementById('modalBackdrop').style.display = 'none';
-}
-async function submitMembers() {
-  const destId = document.getElementById('membersDestId').value;
-  const personIds = Array.from(document.querySelectorAll('#membersList input:checked')).map(i => i.value);
-  const resultEl = document.getElementById('membersResult');
-  try {
-    const result = await api(`/api/servicecalls/destinations/${destId}/members`, { method: 'POST', body: { personIds } });
-    if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
-    closeMembersModal();
-    loadManageDestinations();
-  } catch (e) {
-    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
-  }
-}
-
-(async function init() {
-  ME = requireAuth();
-  if (!ME) return;
-  renderTopbar('Service Calls');
-  IS_MANAGER = ME.role === 'manager' || ME.role === 'owner';
-  const access = getAppAccess();
-  const hasAccess = ME.role === 'owner' || access.some(a => a.app_key === 'service_calls' && a.enabled);
-  if (!hasAccess && !IS_MANAGER) {
-    document.getElementById('app').innerHTML = '<div class="card"><p>Service Calls isn\'t enabled for your account yet — ask your manager.</p><p><a href="/dashboard.html">Back home</a></p></div>';
-    return;
-  }
-  try {
-    LOCATIONS = await api('/api/locations');
-    EQUIPMENT = await api('/api/servicecalls/equipment-types');
-    DESTINATIONS = await api('/api/servicecalls/destinations');
-    renderTabs();
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-})();
+module.exports = {
+  listCalls, getCall, createCall, pendingCall, closeCall, requireServiceCallsAccess, toCsv,
+  addNote, listDestinationsWithMembers, setDestinationMembers,
+};
