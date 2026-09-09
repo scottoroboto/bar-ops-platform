@@ -11,14 +11,28 @@ const CATEGORY_LABEL = {
 
 // Status tab visual language (card-grid dashboard) — one small stroke-based
 // icon per category (all 16x16, currentColor) and one color/label per
-// status, shared by the stat strip, location cards, and system tiles below.
+// status, shared by the stat strip, site scorecards, and system tiles below.
+// Deliberately brighter/more saturated than this app's shared --danger/
+// --warn/--success tokens (used by badges elsewhere in Bar Ops) — Scotto
+// asked for a punchier red/yellow/green specifically for Monitoring's own
+// status language, so these are local literals rather than the shared CSS
+// variables, to avoid changing color elsewhere in the platform.
 const STATUS_META = {
-  online: { label: 'Online', dot: '#3fbf7f', badgeClass: 'on' },
-  warning: { label: 'Warning', dot: '#e0a83e', badgeClass: 'stale' },
-  offline: { label: 'Offline', dot: '#e5566d', badgeClass: 'danger' },
+  online: { label: 'Online', dot: '#00e676', badgeClass: 'on' },
+  warning: { label: 'Warning', dot: '#ffea00', badgeClass: 'stale' },
+  offline: { label: 'Offline', dot: '#ff1744', badgeClass: 'danger' },
   unknown: { label: 'Unknown', dot: '#9aa3b2', badgeClass: 'off' },
 };
 function statusMeta(status) { return STATUS_META[status] || STATUS_META.unknown; }
+
+// hex -> "rgba(r, g, b, a)", for tinting a status color's dot into a light
+// chip background at a given opacity without hand-maintaining a second
+// parallel color table.
+function hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16), g = parseInt(h.substring(2, 4), 16), b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 const CATEGORY_ICON = {
   network: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="18" height="8" rx="2"></rect><circle cx="8" cy="13" r="1"></circle><circle cx="12" cy="13" r="1"></circle><path d="M12 9V6a2 2 0 0 1 2-2h1"></path></svg>',
@@ -30,6 +44,13 @@ const CATEGORY_ICON = {
   other: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"></rect><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"></circle></svg>',
 };
 function categoryIcon(cat) { return CATEGORY_ICON[cat] || CATEGORY_ICON.other; }
+
+// Short badge label for a category's monogram chip on a site scorecard —
+// see siteScoreCardHtml() below.
+const CATEGORY_MONO = {
+  network: 'NET', hvac: 'HVAC', refrigeration: 'RFG', freezer: 'FRZ',
+  ice_machine: 'ICE', power: 'PWR', other: 'OTH',
+};
 
 // Category types with no live data source yet (see server/monitoring.js —
 // only 'kind's starting 'unifi_' are actually polled today). Shown as a
@@ -116,7 +137,7 @@ async function loadStatus() {
     el.innerHTML = `
       ${openAlerts.length ? alertBannerHtml(openAlerts) : ''}
       ${statSummaryHtml(counts)}
-      ${Object.keys(byLocation).sort().map(loc => locationCardHtml(loc, byLocation[loc])).join('')}
+      ${Object.keys(byLocation).sort().map(loc => siteScoreCardHtml(loc, byLocation[loc])).join('')}
       ${roadmapCardHtml()}
     `;
   } catch (e) {
@@ -141,17 +162,54 @@ function statSummaryHtml(counts) {
   }).join('')}</div>`;
 }
 
-function locationCardHtml(name, systems) {
-  const online = systems.filter(s => (s.last_status || 'unknown') === 'online').length;
-  const anyOffline = systems.some(s => s.last_status === 'offline');
-  const pillClass = anyOffline ? 'danger' : (online === systems.length ? 'on' : 'stale');
-  return `<div class="loc-card">
-    <div class="loc-header">
-      <div><div class="name">${escapeHtml(name)}</div><div class="sub">${systems.length} system${systems.length === 1 ? '' : 's'}</div></div>
-      <span class="badge ${pillClass}">${online} of ${systems.length} online</span>
+// Site scorecard (all-locations dashboard) — a compact, collapsed-by-
+// default card per location: a segmented status bar across the top (worst
+// status first, left to right), an "N issues" badge when something's
+// flagged, and one bold monogram chip per category with its border/fill
+// colored by that category's worst status at this location. Click the
+// header to expand into the same per-system tile grid the old always-
+// expanded location cards used to show inline — nothing about drilling
+// into an individual system's history (toggleHistory, below) changed.
+function locSlug(name) { return name.toLowerCase().replace(/[^a-z0-9]+/g, '-'); }
+
+function siteScoreCardHtml(name, systems) {
+  const counts = { online: 0, warning: 0, offline: 0, unknown: 0 };
+  for (const s of systems) counts[STATUS_META[s.last_status] ? s.last_status : 'unknown']++;
+  const issues = counts.offline + counts.warning;
+
+  const barOrder = ['offline', 'warning', 'unknown', 'online'];
+  const bar = barOrder.filter(k => counts[k])
+    .map(k => `<div style="flex:${counts[k]}; background:${statusMeta(k).dot};"></div>`).join('');
+
+  const byCategory = {};
+  for (const s of systems) (byCategory[s.category] = byCategory[s.category] || []).push(s);
+  const chips = Object.keys(byCategory).map(cat => {
+    const inCat = byCategory[cat];
+    const worst = inCat.some(s => s.last_status === 'offline') ? 'offline'
+      : inCat.some(s => s.last_status === 'warning') ? 'warning'
+      : inCat.every(s => (s.last_status || 'unknown') === 'online') ? 'online' : 'unknown';
+    const dot = statusMeta(worst).dot;
+    return `<div class="mono-chip" style="border-color:${dot}; color:${dot}; background:${hexToRgba(dot, 0.16)}" title="${CATEGORY_LABEL[cat] || cat}">${CATEGORY_MONO[cat] || cat.slice(0, 3).toUpperCase()}</div>`;
+  }).join('');
+
+  const slug = locSlug(name);
+  return `<div class="site-scorecard" id="score-${slug}">
+    <div class="top-bar">${bar}</div>
+    <div class="score-body" onclick="toggleLocationCard('${slug}')">
+      <div class="score-hd">
+        <div><div class="score-nm">${escapeHtml(name)}</div><div class="score-frac">${counts.online} of ${systems.length} online</div></div>
+        ${issues ? `<span class="score-badge">${issues} issue${issues > 1 ? 's' : ''}</span>` : ''}
+      </div>
+      <div class="cat-row">${chips}</div>
     </div>
-    <div class="sys-grid">${systems.map(systemTileHtml).join('')}</div>
+    <div class="score-expand" id="expand-${slug}">
+      <div class="sys-grid" style="padding:0 18px 18px;">${systems.map(systemTileHtml).join('')}</div>
+    </div>
   </div>`;
+}
+
+function toggleLocationCard(slug) {
+  document.getElementById(`score-${slug}`).classList.toggle('open');
 }
 
 function systemTileHtml(s) {
