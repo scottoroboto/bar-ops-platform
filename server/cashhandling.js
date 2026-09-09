@@ -523,6 +523,48 @@ async function retireSource(client, sourceId) {
   return { source: rows[0], bag };
 }
 
+// Retired-sources pool for the "Reactivate a source" panel on the Manage
+// Cash Sources page — same shape as getDashboard's query but active =
+// false, and never tier-scoped (this is an owner-only route, not a
+// counting screen). Includes each source's last count, if it has one, so
+// the owner has some context before deciding to bring it back.
+async function listRetiredSources(client, locationId) {
+  const clauses = ['cs.active = false'];
+  const params = [];
+  if (locationId) { params.push(locationId); clauses.push(`cs.location_id = $${params.length}`); }
+  const { rows } = await client.query(
+    `SELECT cs.*, l.name AS location_name,
+            lc.counted_amount AS last_counted_amount,
+            lc.counted_at AS last_counted_at
+     FROM cash_sources cs
+     JOIN locations l ON l.id = cs.location_id
+     LEFT JOIN LATERAL (
+       SELECT counted_amount, counted_at FROM cash_counts WHERE source_id = cs.id ORDER BY counted_at DESC LIMIT 1
+     ) lc ON true
+     WHERE ${clauses.join(' AND ')}
+     ORDER BY l.name, cs.name`,
+    params
+  );
+  return rows;
+}
+
+// Reverses retireSource — flips active back to true. Mirrors retireSource's
+// own drawer+bag pairing: reactivating a drawer also reactivates its
+// paired backup bag (they're retired together, so they come back
+// together too). Reactivating a bag on its own does not reactivate its
+// drawer, the same asymmetry retireSource has.
+async function reactivateSource(client, sourceId) {
+  const source = await getSource(client, sourceId);
+  if (!source) return null;
+  const { rows } = await client.query('UPDATE cash_sources SET active = true WHERE id = $1 RETURNING *', [sourceId]);
+  let bag = null;
+  if (source.kind === 'drawer' && source.linked_source_id) {
+    const { rows: bagRows } = await client.query('UPDATE cash_sources SET active = true WHERE id = $1 RETURNING *', [source.linked_source_id]);
+    bag = bagRows[0] || null;
+  }
+  return { source: rows[0], bag };
+}
+
 async function updateSource(client, sourceId, fields) {
   const settable = ['name', 'target_amount', 'assigned_person_id', 'include_weekly_audit', 'include_random_audit'];
   const sets = [];
@@ -882,6 +924,8 @@ module.exports = {
   listAllEffectiveAccess,
   createSource,
   retireSource,
+  listRetiredSources,  
+  reactivateSource,
   updateSource,
   startAudit,
   getAudit,
