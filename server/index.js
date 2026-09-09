@@ -2412,6 +2412,7 @@ app.get('/api/cashhandling/sources/:id', auth.requireSession('light'), async (re
   if (result && result.error) return res.status(result.status || 403).json(result);
   res.json(result);
 });
+
 // The blind count itself. No response anywhere in this route (or any
 // route above) ever includes expected_amount/variance ahead of this
 // INSERT — this is the one and only place that reveal happens, and only
