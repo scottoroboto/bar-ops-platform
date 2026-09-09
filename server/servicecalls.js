@@ -38,11 +38,12 @@ async function resolveNames(ids) {
 }
 
 async function withNames(rows) {
-  const names = await resolveNames(rows.flatMap((r) => [r.created_by, r.closed_by]));
+  const names = await resolveNames(rows.flatMap((r) => [r.created_by, r.closed_by, r.pending_by]));
   return rows.map((r) => ({
     ...r,
     created_by_name: names[r.created_by] || null,
     closed_by_name: r.closed_by ? (names[r.closed_by] || null) : null,
+    pending_by_name: r.pending_by ? (names[r.pending_by] || null) : null,
   }));
 }
 
@@ -140,11 +141,14 @@ async function listCalls(client, filters = {}) {
   ]);
   const withDest = named.map((r) => ({ ...r, destination_names: destMap[r.id] || [], notes_count: noteCounts[r.id] || 0 }));
 
-  // Open calls first (oldest first — a running reminder to close them),
-  // then closed calls, most recently closed first.
+  // New (open) first, oldest first — a running reminder to action them —
+  // then Working (pending), longest-pending first, then Closed, most
+  // recently closed first.
+  const STATUS_ORDER = { open: 0, pending: 1, closed: 2 };
   withDest.sort((a, b) => {
-    if (a.status !== b.status) return a.status === 'open' ? -1 : 1;
+    if (a.status !== b.status) return STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
     if (a.status === 'open') return new Date(a.created_at) - new Date(b.created_at);
+    if (a.status === 'pending') return new Date(a.pending_at) - new Date(b.pending_at);
     return new Date(b.closed_at) - new Date(a.closed_at);
   });
 
@@ -179,6 +183,31 @@ async function createCall(client, person, { locationId, equipmentTypeId, equipme
   const call = await getCall(client, callId);
   await notifyNewCall(client, call).catch((err) => console.error('notifyNewCall error', err));
   return { ok: true, call };
+}
+
+// Moves a call from New (open) to Working (pending) — requires an
+// explanation, same shape as closeCall() requiring a remedy. Deliberately
+// does not also allow re-entering pending once closed (closeCall() is the
+// only path off 'pending', same as it's the only path off 'open') — but
+// does NOT require a call to have passed through 'pending' before it can
+// be closed: closeCall() below only ever checks `status === 'closed'`, so
+// a New card can go straight to Closed in one step, matching the frontend's
+// "Move to Working" / "Close call" actions shown side by side on every New
+// card.
+async function pendingCall(client, { id, pendingBy, note }) {
+  const trimmed = (note || '').trim();
+  if (!trimmed) return { ok: false, error: 'Say what’s happening before moving this to Working.' };
+  const { rows: existingRows } = await client.query('SELECT * FROM service_calls WHERE id = $1', [id]);
+  const existing = existingRows[0];
+  if (!existing) return { ok: false, error: 'Not found.' };
+  if (existing.status === 'closed') return { ok: false, error: 'This call is already closed.' };
+  if (existing.status === 'pending') return { ok: false, error: 'Already moved to Working.' };
+
+  await client.query(
+    `UPDATE service_calls SET status = 'pending', pending_by = $1, pending_at = now(), pending_note = $2 WHERE id = $3`,
+    [pendingBy, trimmed, id]
+  );
+  return { ok: true, call: await getCall(client, id) };
 }
 
 async function closeCall(client, { id, closedBy, remedy }) {
@@ -304,6 +333,6 @@ function toCsv(rows) {
 }
 
 module.exports = {
-  listCalls, getCall, createCall, closeCall, requireServiceCallsAccess, toCsv,
+  listCalls, getCall, createCall, pendingCall, closeCall, requireServiceCallsAccess, toCsv,
   addNote, listDestinationsWithMembers, setDestinationMembers,
 };
