@@ -99,7 +99,7 @@ async function managerReview({ personId, position, locationId, payRate, reviewed
 // initial per-app access grid, mints their login credentials, and sends
 // them their first-login info.
 // ---------------------------------------------------------------------
-async function activateEmployee({ personId, appAccess, activatedBy }) {
+async function activateEmployee({ personId, appAccess, networkAccess, activatedBy }) {
   return withServiceClient(async (client) => {
     const { rows: existingRows } = await client.query('SELECT * FROM people WHERE id = $1', [personId]);
     const person = existingRows[0];
@@ -149,6 +149,22 @@ async function activateEmployee({ personId, appAccess, activatedBy }) {
       );
     }
 
+    // Critical Systems widget access — same idea as the APP_KEYS loop
+    // above, just keyed by location instead of app_key (see
+    // db/patch_029_critical_systems_widget.sql). Every active location
+    // gets a row so setNetworkAccess's later ON CONFLICT updates always
+    // have something to update rather than needing its own insert path.
+    const { rows: activeLocations } = await client.query('SELECT id FROM locations WHERE active = true');
+    for (const loc of activeLocations) {
+      const enabled = !!(networkAccess && networkAccess[loc.id]);
+      await client.query(
+        `INSERT INTO network_status_access (person_id, location_id, enabled, updated_by)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (person_id, location_id) DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+        [personId, loc.id, enabled, activatedBy]
+      );
+    }
+
     if (tempPassword && person.email) {
       const enabledApps = APP_KEYS.filter(k => appAccess && appAccess[k]);
       const text = `Welcome! Your account is set up.\n\nUsername: ${username}\nTemporary password: ${tempPassword} (you'll verify with a one-time code the first time you use it)\nYour PIN for everyday clock-in/service-call use: ${pin}\n\nYou now have access to: ${enabledApps.join(', ') || '(nothing yet — ask your manager)'}`;
@@ -180,6 +196,37 @@ async function setAppAccess({ personId, appKey, enabled, updatedBy }) {
   });
 }
 
+// Critical Systems widget access — owner can revisit any time, same as
+// setAppAccess above. Mirrors its upsert shape exactly, just keyed by
+// location_id instead of app_key; no manager-only-style restriction here,
+// since unlike 'employees' access there's no role a grant could be wrong
+// for — the owner decides who sees which bar's row, full stop.
+async function getNetworkAccessForPerson(personId) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query(
+      `SELECT l.id AS location_id, l.name AS location_name, COALESCE(nsa.enabled, false) AS enabled
+       FROM locations l
+       LEFT JOIN network_status_access nsa ON nsa.location_id = l.id AND nsa.person_id = $1
+       WHERE l.active = true
+       ORDER BY l.name`,
+      [personId]
+    );
+    return rows;
+  });
+}
+
+async function setNetworkAccess({ personId, locationId, enabled, updatedBy }) {
+  return withServiceClient(async (client) => {
+    await client.query(
+      `INSERT INTO network_status_access (person_id, location_id, enabled, updated_by)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (person_id, location_id) DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [personId, locationId, enabled, updatedBy]
+    );
+    return { ok: true };
+  });
+}
+
 // locationFilter is set for a manager (their own location only, enforced by
 // the route handler passing req.person.location_id, never a client-supplied
 // value); left undefined for the owner, who sees every location.
@@ -206,12 +253,15 @@ async function listAllWithAccess(locationFilter) {
     const { rows: access } = await client.query('SELECT * FROM employee_apps');
     const byPerson = {};
     access.forEach(a => { (byPerson[a.person_id] ||= {})[a.app_key] = a.enabled; });
+    const { rows: netAccess } = await client.query('SELECT * FROM network_status_access');
+    const netByPerson = {};
+    netAccess.forEach(n => { (netByPerson[n.person_id] ||= {})[n.location_id] = n.enabled; });
     const { rows: certs } = await client.query(
       'SELECT * FROM employee_certifications ORDER BY acquired_on ASC NULLS LAST, created_at ASC'
     );
     const certsByPerson = {};
     certs.forEach(c => { (certsByPerson[c.person_id] ||= []).push(c); });
-    return people.map(p => ({ ...p, appAccess: byPerson[p.id] || {}, certifications: certsByPerson[p.id] || [] }));
+    return people.map(p => ({ ...p, appAccess: byPerson[p.id] || {}, networkAccess: netByPerson[p.id] || {}, certifications: certsByPerson[p.id] || [] }));
   });
 }
 
@@ -483,6 +533,7 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 
 module.exports = {
   createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, setAppAccess,
+  getNetworkAccessForPerson, setNetworkAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
   setEmployeeStatus, requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,
   addCertification, removeCertification, APP_KEYS, MANAGER_ONLY_APP_KEYS, VALID_ROLES, VALID_STATUSES,

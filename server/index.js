@@ -240,6 +240,24 @@ const inventoryTier = await withServiceClient((client) => inventorycontrol.getEf
 res.json({ person: req.person, appAccess: access, cashHandlingTier, inventoryTier });
 });
 
+// Critical Systems dashboard widget — WAN/LAN/WAP per bar, filtered to
+// whichever locations this person has been granted (owner sees every
+// active location regardless of network_status_access; see
+// db/patch_029_critical_systems_widget.sql). Returns [] (widget hides)
+// for anyone with nothing turned on.
+app.get('/api/dashboard/critical-systems', auth.requireSession('light'), async (req, res) => {
+let locationIds;
+if (req.person.role === 'owner') {
+  const { rows: locs } = await pool.query('SELECT id FROM locations WHERE active = true');
+  locationIds = locs.map(l => l.id);
+} else {
+  const access = await employees.getNetworkAccessForPerson(req.person.id);
+  locationIds = access.filter(a => a.enabled).map(a => a.location_id);
+}
+const rows = await withServiceClient((client) => monitoring.getCriticalSystemsStatus(client, locationIds));
+res.json(rows);
+});
+
 // Public, unauthenticated — the whole point is this works for someone who
 // can't log in. Owner-mediated fallback: files a request, the owner
 // reviews and approves it from Employees admin, no email/SMS required.
@@ -1892,13 +1910,21 @@ return res.status(403).json({ error: 'Managers/owners only.' });
 
 app.post('/api/employees/:id/activate', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can activate an employee.' });
-const result = await employees.activateEmployee({ personId: req.params.id, appAccess: req.body.appAccess, activatedBy: req.person.id });
+const result = await employees.activateEmployee({ personId: req.params.id, appAccess: req.body.appAccess, networkAccess: req.body.networkAccess, activatedBy: req.person.id });
 res.json(result);
 });
 
 app.post('/api/employees/:id/app-access', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change app access.' });
 const result = await employees.setAppAccess({ personId: req.params.id, appKey: req.body.appKey, enabled: req.body.enabled, updatedBy: req.person.id });
+res.json(result);
+});
+
+// Critical Systems widget — which bar(s) this person's dashboard shows a
+// WAN/LAN/WAP row for. Owner-only to change, same posture as app-access.
+app.post('/api/employees/:id/network-access', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change network status access.' });
+const result = await employees.setNetworkAccess({ personId: req.params.id, locationId: req.body.locationId, enabled: req.body.enabled, updatedBy: req.person.id });
 res.json(result);
 });
 

@@ -49,6 +49,38 @@ function tileHtml({ href, icon, label, note, count, disabled, external }) {
 // Fetches a list endpoint just to count it for a badge. Never lets a
 // failure (not enabled, network hiccup, role not permitted) break the
 // rest of the grid — badges are a nice-to-have, not load-bearing.
+// T1/T2/T3, matching employees.js's own shortLoc() convention for the
+// same "Ticket N" location names.
+function shortLoc(name) {
+  const m = String(name || '').match(/(\d+)\s*$/);
+  return m ? ('T' + m[1]) : String(name || '').slice(0, 2).toUpperCase();
+}
+
+function critsysDotHtml(label, status) {
+  return `<span class="critsys-group"><span class="critsys-dot ${status}"></span><span class="critsys-label">${label}</span></span>`;
+}
+
+function critsysRowHtml(r) {
+  return `<div class="critsys-row">
+    <span class="critsys-code">${escapeHtml(shortLoc(r.locationName))}</span>
+    <span class="critsys-groups">${critsysDotHtml('WAN', r.wan)}${critsysDotHtml('LAN', r.lan)}${critsysDotHtml('WAP', r.wap)}</span>
+  </div>`;
+}
+
+// Fire-and-forget from init() — a slow/failed fetch here shouldn't hold up
+// the app-tile grid; an empty result (nothing granted, see
+// server/monitoring.js's getCriticalSystemsStatus) just leaves the widget
+// out entirely rather than showing an empty card.
+async function loadCriticalSystems() {
+  const el = document.getElementById('criticalSystemsWidget');
+  try {
+    const rows = await api('/api/dashboard/critical-systems');
+    el.innerHTML = rows.length ? `<div class="critsys-widget">${rows.map(critsysRowHtml).join('')}</div>` : '';
+  } catch (e) {
+    el.innerHTML = '';
+  }
+}
+
 async function safeCount(path) {
   try {
     const data = await api(path);
@@ -73,6 +105,7 @@ async function employeesReviewCount(person) {
   const person = requireAuth();
   if (!person) return;
   renderTopbar('Apps Home');
+  loadCriticalSystems();
 
   if (person.status && person.status !== 'active') {
     document.getElementById('statusCard').style.display = '';

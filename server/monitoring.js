@@ -9,6 +9,10 @@
 // Sensor kinds (refrigeration/HVAC/etc.) get their own poll functions
 // later; the registry/status/alert tables and the notify fan-out are
 // already generic across every kind.
+//
+// Ticket 3 used to be excluded here (it was being sold) — that block has
+// been removed (see db/patch_029_critical_systems_widget.sql) now that
+// it's being activated again; all three locations are in scope.
 const { withServiceClient } = require('./db');
 const notify = require('./notify');
 
@@ -80,6 +84,57 @@ async function listSystems(client, { locationId, category } = {}) {
   return rows;
 }
 
+// ---------------------------------------------------------------------
+// Critical Systems dashboard widget — WAN/LAN/WAP per location, reusing
+// this same registry rather than new tables: a location's WAN is its
+// registered 'unifi_gateway' system(s), LAN its 'unifi_switch'(es), WAP
+// its 'unifi_ap'(s), all under category='network'. One dot per kind per
+// location: 'offline' if anything in that group is down, 'online' only
+// if every system in the group is up, 'unknown' if nothing's registered
+// there yet (the honest starting state — no UniFi equipment is
+// registered anywhere as of this writing) or nothing's polled it yet.
+// ---------------------------------------------------------------------
+const NETWORK_KIND_TO_KEY = { unifi_gateway: 'wan', unifi_switch: 'lan', unifi_ap: 'wap' };
+
+function aggregateNetworkStatus(statuses) {
+  if (statuses.length === 0) return 'unknown';
+  if (statuses.some((s) => s === 'offline')) return 'offline';
+  if (statuses.every((s) => s === 'online')) return 'online';
+  return 'unknown';
+}
+
+async function getCriticalSystemsStatus(client, locationIds) {
+  if (!locationIds || locationIds.length === 0) return [];
+  const { rows: locRows } = await client.query(
+    'SELECT id, name FROM locations WHERE id = ANY($1::uuid[]) ORDER BY name',
+    [locationIds]
+  );
+  const byLocation = {};
+  locRows.forEach((l) => { byLocation[l.id] = { wan: [], lan: [], wap: [] }; });
+
+  const { rows } = await client.query(
+    `SELECT ms.location_id, ms.kind,
+            (SELECT status FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_status
+     FROM monitored_systems ms
+     WHERE ms.active = true AND ms.category = 'network' AND ms.location_id = ANY($1::uuid[])
+       AND ms.kind IN ('unifi_gateway','unifi_switch','unifi_ap')`,
+    [locationIds]
+  );
+  for (const row of rows) {
+    const bucket = byLocation[row.location_id];
+    const key = NETWORK_KIND_TO_KEY[row.kind];
+    if (bucket && key) bucket[key].push(row.last_status || 'unknown');
+  }
+
+  return locRows.map((l) => ({
+    locationId: l.id,
+    locationName: l.name,
+    wan: aggregateNetworkStatus(byLocation[l.id].wan),
+    lan: aggregateNetworkStatus(byLocation[l.id].lan),
+    wap: aggregateNetworkStatus(byLocation[l.id].wap),
+  }));
+}
+
 // Manual reorder within a location — "move up/below one" per Scotto.
 // Swaps sort_order with whichever active sibling in the same location sits
 // immediately above/below in the current order; a no-op at either end of
@@ -109,15 +164,6 @@ async function addSystem({ locationId, category, kind, name, externalRef, config
     return { ok: false, error: 'Location, category, kind, and name are all required.' };
   }
   return withServiceClient(async (svc) => {
-    // Defense-in-depth backstop for the client-side Ticket 3 filter in
-    // public/monitoring.js — Ticket 3 is being sold and is deliberately
-    // out of scope for monitoring (see db/patch_010_monitoring.sql), so
-    // reject a system registration for it even if a request bypasses the
-    // UI (a direct API call, a stale cached page, etc).
-    const { rows: locRows } = await svc.query('SELECT name FROM locations WHERE id = $1', [locationId]);
-    if (locRows[0] && locRows[0].name === 'Ticket 3') {
-      return { ok: false, error: 'Ticket 3 is out of scope for Systems Monitoring.' };
-    }
     const { rows } = await svc.query(
       `INSERT INTO monitored_systems (location_id, category, kind, name, external_ref, config, make, model, serial_number, added_by, sort_order)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
@@ -140,10 +186,6 @@ async function updateSystem({ id, locationId, category, kind, name, make, model,
     return { ok: false, error: 'Location, category, kind, and name are all required.' };
   }
   return withServiceClient(async (svc) => {
-    const { rows: locRows } = await svc.query('SELECT name FROM locations WHERE id = $1', [locationId]);
-    if (locRows[0] && locRows[0].name === 'Ticket 3') {
-      return { ok: false, error: 'Ticket 3 is out of scope for Systems Monitoring.' };
-    }
     const { rows } = await svc.query(
       `UPDATE monitored_systems
        SET location_id = $1, category = $2, kind = $3, name = $4, make = $5, model = $6, serial_number = $7
@@ -479,4 +521,5 @@ module.exports = {
   listAlertRoutes, addAlertRoute, removeAlertRoute,
   pollUnifiSystems, unifiConfigured,
   reportAvHealth,
+  getCriticalSystemsStatus,
 };

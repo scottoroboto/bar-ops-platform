@@ -150,6 +150,11 @@
     <label class="switch"><input type="checkbox" id="accessCashHandling"><span class="slider"></span></label></div>
   <div class="toggle-row"><span class="label">Inventory Control</span>
     <label class="switch"><input type="checkbox" id="accessInventory"><span class="slider"></span></label></div>
+  <!-- Critical Systems widget — one row per active location, rendered by
+       openActivateModal() into activateNetworkAccess since the location
+       list is dynamic (not a fixed enum like the app-access toggles
+       above). Which bar's row a person's dashboard shows. -->
+  <div id="activateNetworkAccess"></div>
   <!-- No "Employees" toggle here: everyone lands in Onboard Review as
        role = 'staff' (see createPendingEmployee) — nobody is a manager
        yet at activation time. The Employees toggle only ever appears on
@@ -223,6 +228,12 @@
       <button class="primary" style="margin-top:0;" id="detailSaveBtn" onclick="saveEmployeeDetail()">Save changes</button>
     </div>
     <div id="detailResult"></div>
+  </div>
+
+  <div id="detailNetworkAccessFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">
+    <div class="detail-label" style="margin-bottom:10px;">Critical Systems access (owner)</div>
+    <p class="muted" style="margin-top:-6px;">Which bar's WAN/LAN/WAP row this person sees on their dashboard.</p>
+    <div id="detailNetworkAccess"></div>
   </div>
 
   <div id="detailRoleFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">

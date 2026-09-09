@@ -422,6 +422,30 @@ async function toggleAccess(personId, appKey, enabled) {
   }
 }
 
+// Critical Systems access — owner-only section on the employee data card
+// (see detailNetworkAccessFields in employees.html), same on/off-per-bar
+// shape as the activate modal's rows, just editable any time after
+// activation too, mirroring how app access itself works.
+function renderDetailNetworkAccess(person) {
+  document.getElementById('detailNetworkAccess').innerHTML = LOCATIONS.map(l => {
+    const on = !!(person.networkAccess && person.networkAccess[l.id]);
+    return `<div class="toggle-row"><span class="label">${escapeHtml(shortLoc(l.name))}</span>
+      <label class="switch"><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleNetworkAccess('${person.id}','${l.id}',this.checked)"><span class="slider"></span></label></div>`;
+  }).join('');
+}
+
+async function toggleNetworkAccess(personId, locationId, enabled) {
+  try {
+    const result = await withStepUp(() => api(`/api/employees/${personId}/network-access`, { method: 'POST', body: { locationId, enabled } }));
+    if (result && result.ok === false) { showMsg(result.error || 'Could not update access.', 'error'); }
+    await loadAllEmployees();
+    const p = ALL_EMPLOYEES.find(p => p.id === personId);
+    if (p) renderDetailNetworkAccess(p);
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
 // ---- Review modal ----
 function openReviewModal(id, name, position, locationId, payRate) {
   document.getElementById('reviewPersonId').value = id;
@@ -455,6 +479,16 @@ async function submitReview() {
 }
 
 // ---- Activate modal ----
+// One toggle row per active location, matching the fixed toggle-row
+// markup above but built at runtime since locations aren't a fixed enum
+// (see LOCATIONS in the init IIFE). shortLoc() gives "T1"/"T2"/"T3".
+function networkAccessRowsHtml(idPrefix) {
+  return LOCATIONS.map(l => `
+    <div class="toggle-row"><span class="label">Critical Systems — ${escapeHtml(shortLoc(l.name))}</span>
+      <label class="switch"><input type="checkbox" id="${idPrefix}_${l.id}"><span class="slider"></span></label></div>
+  `).join('');
+}
+
 function openActivateModal(id, name) {
   document.getElementById('activatePersonId').value = id;
   document.getElementById('activateName').textContent = name;
@@ -464,6 +498,7 @@ function openActivateModal(id, name) {
   document.getElementById('accessServiceCalls').checked = false;
   document.getElementById('accessScheduling').checked = false;
   document.getElementById('accessMonitoring').checked = false;
+  document.getElementById('activateNetworkAccess').innerHTML = networkAccessRowsHtml('activateNet');
   document.getElementById('activateResult').innerHTML = '';
   document.getElementById('activateModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
@@ -482,8 +517,13 @@ async function submitActivate() {
     scheduling: document.getElementById('accessScheduling').checked,
     monitoring: document.getElementById('accessMonitoring').checked,
   };
+  const networkAccess = {};
+  LOCATIONS.forEach(l => {
+    const el = document.getElementById(`activateNet_${l.id}`);
+    if (el) networkAccess[l.id] = el.checked;
+  });
   try {
-    const result = await withStepUp(() => api(`/api/employees/${id}/activate`, { method: 'POST', body: { appAccess } }));
+    const result = await withStepUp(() => api(`/api/employees/${id}/activate`, { method: 'POST', body: { appAccess, networkAccess } }));
     if (!result.ok) { document.getElementById('activateResult').innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
     let box = `<div class="msg success">Activated — they're live.</div>`;
     if (result.tempPassword) {
@@ -552,6 +592,9 @@ function openEmployeeDetail(id) {
     document.getElementById('detailAddress').value = p.address || '';
   }
   document.getElementById('detailResult').innerHTML = '';
+
+  document.getElementById('detailNetworkAccessFields').style.display = isOwner ? '' : 'none';
+  if (isOwner) renderDetailNetworkAccess(p);
 
   // Role is deliberately a separate section/action from the fields above —
   // see saveEmployeeRole(). Owner can't demote themselves (would leave the
