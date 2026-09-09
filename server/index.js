@@ -2353,6 +2353,473 @@ app.post('/api/monitoring/alert-routes/:id/remove', auth.requireSession('full'),
   res.json(result);
 });
 
+// ---------------- Cash Handling (Phase 1: sources + blind cash-out) ----------------
+// Access here is a four-tier system (full_authority/drawers_bags/
+// own_drawer/no_access) derived from Position, NOT the coarse people.role
+// column — see server/cashhandling.js's header. cash_sources/cash_counts
+// have zero RLS policies (same posture as scheduling), so every route
+// below reads/writes through withServiceClient and does its own
+// authorization, never req.withAuthedClient.
+app.get('/api/cashhandling/access', auth.requireSession('light'), async (req, res) => {
+  const tier = await withServiceClient((client) => cashhandling.getEffectiveCashTier(client, req.person.id));
+  res.json({ tier });
+});
+
+// Review dashboard — drawers_bags and full_authority/owner only. own_drawer
+// has no dashboard at all, per spec (blind cash-out of their own drawer(s)
+// is their entire world in this app).
+app.get('/api/cashhandling/dashboard', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+    if (!cashhandling.tierAtLeast(tier, 'drawers_bags')) return { error: 'Cash Handling isn’t turned on for your account yet, or your access level doesn’t include the dashboard — ask your manager.' };
+    const isOwner = req.person.role === 'owner';
+    const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+    const sources = await cashhandling.getDashboard(client, { locationId, tierScope: tier });
+    return { tier, sources };
+  });
+  if (result && result.error) return res.status(403).json(result);
+  res.json(result);
+});
+
+// own_drawer's own drawer(s) — thin (name only, no amounts) — the "pick
+// which drawer" step ahead of a blind count when someone has more than one.
+app.get('/api/cashhandling/my-drawers', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+    if (tier === 'no_access') return { error: 'Cash Handling isn’t turned on for your account yet — ask your manager.' };
+    const drawers = await cashhandling.listOwnDrawers(client, req.person.id);
+    return { tier, drawers };
+  });
+  if (result && result.error) return res.status(403).json(result);
+  res.json(result);
+});
+
+// Single-source detail for the after-the-fact review screen — drawers_bags/
+// full_authority only (own_drawer never gets a status/history view, only
+// blind entry, so this route is deliberately not reachable for them).
+app.get('/api/cashhandling/sources/:id', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+    if (!cashhandling.tierAtLeast(tier, 'drawers_bags')) return { error: 'Your access level doesn’t include source detail — ask your manager.' };
+    const source = await cashhandling.getSource(client, req.params.id);
+    if (!source) return { error: 'Not found.', status: 404 };
+    const isOwner = req.person.role === 'owner';
+    if (!isOwner && source.location_id !== req.person.location_id) return { error: 'Not found.', status: 404 };
+    if (tier === 'drawers_bags' && source.kind === 'fixed_point') return { error: 'Your access level doesn’t include Fixed Cash Points — ask your manager.' };
+    const recentCounts = await cashhandling.listRecentCounts(client, { sourceId: source.id, limit: 10 });
+    return { source, recentCounts };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+// The blind count itself. No response anywhere in this route (or any
+// route above) ever includes expected_amount/variance ahead of this
+// INSERT — this is the one and only place that reveal happens, and only
+// after the count is already logged.
+app.post('/api/cashhandling/sources/:id/count', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+    if (tier === 'no_access') return { error: 'Cash Handling isn’t turned on for your account yet — ask your manager.' };
+    const source = await cashhandling.getSource(client, req.params.id);
+    if (!source) return { error: 'Not found.', status: 404 };
+    const isOwner = req.person.role === 'owner';
+    const onBehalfOf = req.body.onBehalfOf || null;
+    if (onBehalfOf && tier === 'own_drawer') return { error: 'You can only cash out your own drawer.' };
+    const canCount = cashhandling.canCountSource({
+      tier, personId: req.person.id, personLocationId: req.person.location_id, isOwner, source,
+    });
+    if (!canCount) return { error: 'You don’t have access to count this source.' };
+    const amount = Number(req.body.countedAmount);
+    if (!Number.isFinite(amount) || amount < 0) return { error: 'Enter a valid amount.' };
+    const count = await cashhandling.submitCount(client, {
+      sourceId: source.id, countedBy: req.person.id, onBehalfOf, countedAmount: amount,
+      note: req.body.note || null, context: 'cash_out',
+    });
+    return { count };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+// Count history — after-the-fact review, kept on its own route/screen so
+// it's never fetched by a mid-count blind-entry screen for the same
+// source. drawers_bags/full_authority see their whole location; own_drawer
+// sees only their own drawer's history (results, never a live target).
+app.get('/api/cashhandling/counts', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+    if (tier === 'no_access') return { error: 'Cash Handling isn’t turned on for your account yet — ask your manager.' };
+    if (tier === 'own_drawer') {
+      const drawers = await cashhandling.listOwnDrawers(client, req.person.id);
+      const counts = [];
+      for (const d of drawers) counts.push(...await cashhandling.listRecentCounts(client, { sourceId: d.id, limit: 25 }));
+      counts.sort((a, b) => new Date(b.counted_at) - new Date(a.counted_at));
+      return { counts: counts.slice(0, 25) };
+    }
+    const isOwner = req.person.role === 'owner';
+    const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+    return { counts: await cashhandling.listRecentCounts(client, { locationId, limit: 50 }) };
+  });
+  if (result && result.error) return res.status(403).json(result);
+  res.json(result);
+});
+
+// ---- Phase 2: transactions + receipt photos (Supabase Storage) --------
+// full_authority-only across the board (owner is always full_authority).
+// Unlike counting a source, a transaction has no per-position "drawers_bags
+// can touch this too" carve-out — moving money between sources/the bank
+// is a manager-or-above action. This app's data model is single-location
+// per transaction (one location_id column, not a from/to pair of
+// locations) — a non-owner full_authority person always transacts at
+// their own location; only the owner gets to pick which location a
+// transaction belongs to (relevant mainly for Transfer, since it's the
+// one type with two source pickers that both need to be scoped to the
+// same site first).
+const receiptUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 }, // matches the cash-receipts bucket's file_size_limit (patch_024)
+}).single('receipt');
+
+app.post('/api/cashhandling/transactions', auth.requireSession('light'), (req, res, next) => {
+  receiptUpload(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Could not read the uploaded file.' });
+    next();
+  });
+}, async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+    if (!cashhandling.tierAtLeast(tier, 'full_authority')) return { error: 'Transactions are limited to full-authority Cash Handling access — ask your manager.' };
+    const isOwner = req.person.role === 'owner';
+    const locationId = isOwner && req.body.locationId ? req.body.locationId : req.person.location_id;
+    if (!locationId) return { error: 'No location to file this transaction under — pick one.' };
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return { error: 'Enter a valid amount.' };
+    try {
+      const txn = await cashhandling.createTransaction(client, {
+        locationId,
+        type: req.body.type,
+        fromSourceId: req.body.fromSourceId || null,
+        fromExternal: req.body.fromExternal || null,
+        toSourceId: req.body.toSourceId || null,
+        toExternal: req.body.toExternal || null,
+        amount,
+        reason: req.body.reason || null,
+        performedBy: req.person.id,
+        receiptFile: req.file || null,
+      });
+      return { transaction: txn };
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 400 };
+    }
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+app.get('/api/cashhandling/transactions', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+    if (!cashhandling.tierAtLeast(tier, 'full_authority')) return { error: 'Transactions are limited to full-authority Cash Handling access — ask your manager.' };
+    const isOwner = req.person.role === 'owner';
+    const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+    return { transactions: await cashhandling.listTransactions(client, { locationId, limit: 50 }) };
+  });
+  if (result && result.error) return res.status(403).json(result);
+  res.json(result);
+});
+
+// Never hands back the raw bucket path — always a freshly minted,
+// short-lived signed URL (server/storage.js), so a stale/shared link
+// can't be replayed indefinitely against a private bucket.
+app.get('/api/cashhandling/transactions/:id/receipt', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+    if (!cashhandling.tierAtLeast(tier, 'full_authority')) return { error: 'Transactions are limited to full-authority Cash Handling access — ask your manager.' };
+    const txn = await cashhandling.getTransaction(client, req.params.id);
+    if (!txn) return { error: 'Not found.', status: 404 };
+    const isOwner = req.person.role === 'owner';
+    if (!isOwner && txn.location_id !== req.person.location_id) return { error: 'Not found.', status: 404 };
+    if (!txn.receipt_path) return { error: 'No receipt on this transaction.', status: 404 };
+    try {
+      const url = await cashhandling.getTransactionReceiptUrl(client, txn.id);
+      return { url };
+    } catch (e) {
+      return { error: e.message, status: 500 };
+    }
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+// ---- Phase 3: owner-editable access + Manage Cash Sources -------------
+// Every route below is owner-only — the canonical
+// requireSession('full') + role !== 'owner' idiom, copied verbatim from
+// the existing employees/:id/app-access route above. Managers, even
+// full_authority ones, cannot grant or change anyone's Cash Handling
+// access or add/retire sources — per Scotto's explicit "Managers can not
+// override."
+app.get('/api/cashhandling/access/defaults', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Cash Handling access.' });
+  const defaults = await withServiceClient((client) => cashhandling.getPositionDefaults(client));
+  res.json({ defaults });
+});
+app.post('/api/cashhandling/access/defaults', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Cash Handling access.' });
+  if (!cashhandling.TIERS.includes(req.body.tier)) return res.status(400).json({ error: 'Unknown tier.' });
+  const result = await withServiceClient((client) => cashhandling.setPositionDefault(client, {
+    positionId: req.body.positionId, tier: req.body.tier, updatedBy: req.person.id,
+  }));
+  res.json({ default: result });
+});
+
+// The Manage Access table — every active person with their position
+// default, any override, and the effective tier that results (computed
+// with the exact same precedence getEffectiveCashTier itself uses).
+app.get('/api/cashhandling/access/overrides', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Cash Handling access.' });
+  const people = await withServiceClient((client) => cashhandling.listAllEffectiveAccess(client, { locationId: req.query.locationId || null }));
+  res.json({ people });
+});
+app.post('/api/cashhandling/access/overrides', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Cash Handling access.' });
+  if (!cashhandling.TIERS.includes(req.body.tier)) return res.status(400).json({ error: 'Unknown tier.' });
+  if (!req.body.personId) return res.status(400).json({ error: 'A person is required.' });
+  const override = await withServiceClient((client) => cashhandling.setAccessOverride(client, {
+    personId: req.body.personId, tier: req.body.tier, setBy: req.person.id, note: req.body.note || null,
+  }));
+  res.json({ override });
+});
+app.post('/api/cashhandling/access/overrides/:personId/revert', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Cash Handling access.' });
+  const result = await withServiceClient((client) => cashhandling.revertAccessOverride(client, {
+    personId: req.params.personId, revertedBy: req.person.id, note: (req.body || {}).note || null,
+  }));
+  res.json(result);
+});
+app.get('/api/cashhandling/access/log', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Cash Handling access.' });
+  const log = await withServiceClient((client) => cashhandling.listAccessChangeLog(client, { personId: req.query.personId || null, limit: 100 }));
+  res.json({ log });
+});
+
+// Manage Cash Sources — add a Fixed Point or a Drawer (its Backup Bag is
+// created in the same call, paired automatically), retire one, or edit
+// its name/target/assignment/audit-inclusion flags.
+app.post('/api/cashhandling/sources', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can add a cash source.' });
+  try {
+    const result = await withServiceClient((client) => cashhandling.createSource(client, {
+      locationId: req.body.locationId,
+      kind: req.body.kind,
+      name: req.body.name,
+      bagName: req.body.bagName,
+      targetAmount: req.body.targetAmount ? Number(req.body.targetAmount) : 0,
+      assignedPersonId: req.body.assignedPersonId || null,
+      createdBy: req.person.id,
+    }));
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+app.post('/api/cashhandling/sources/:id/retire', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can retire a cash source.' });
+  const result = await withServiceClient((client) => cashhandling.retireSource(client, req.params.id));
+  if (!result) return res.status(404).json({ error: 'Not found.' });
+  res.json(result);
+});
+app.post('/api/cashhandling/sources/:id/update', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can edit a cash source.' });
+  const fields = {};
+  if (req.body.name !== undefined) fields.name = req.body.name;
+  if (req.body.targetAmount !== undefined) fields.target_amount = Number(req.body.targetAmount) || 0;
+  if (req.body.assignedPersonId !== undefined) fields.assigned_person_id = req.body.assignedPersonId || null;
+  if (req.body.includeWeeklyAudit !== undefined) fields.include_weekly_audit = !!req.body.includeWeeklyAudit;
+  if (req.body.includeRandomAudit !== undefined) fields.include_random_audit = !!req.body.includeRandomAudit;
+  const source = await withServiceClient((client) => cashhandling.updateSource(client, req.params.id, fields));
+  if (!source) return res.status(404).json({ error: 'Not found.' });
+  res.json({ source });
+});
+
+// ---- Phase 4: Weekly Audit, Manual Random Audit, System-Assigned
+// Random Audit --------------------------------------------------------
+// Weekly Audit and Manual Random Audit are gated drawers_bags-or-above
+// (own_drawer never runs a checklist audit — they're on the other side
+// of one, via the ordinary blind cash-out flow, or a System-Assigned
+// Random Audit assignment below). Both share the exact same route
+// shape; only which cashhandling.js `kind` string ('weekly' vs
+// 'manual') and target-source flag they use differs, so the shared
+// logic lives once in cashhandling.js and these routes stay a thin,
+// explicit pair rather than one clever generic route.
+async function requireAuditAccess(client, req) {
+  const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+  if (!cashhandling.tierAtLeast(tier, 'drawers_bags')) {
+    return { error: 'Running an audit needs drawers-and-bags access or above — ask your manager.', status: 403 };
+  }
+  return { tier };
+}
+
+function resolveAuditLocation(req) {
+  const isOwner = req.person.role === 'owner';
+  return isOwner && req.body.locationId ? req.body.locationId : req.person.location_id;
+}
+
+for (const kind of ['weekly', 'manual']) {
+  const base = kind === 'weekly' ? '/api/cashhandling/audits/weekly' : '/api/cashhandling/audits/manual';
+
+  app.post(`${base}/start`, auth.requireSession('light'), async (req, res) => {
+    const result = await withServiceClient(async (client) => {
+      const access = await requireAuditAccess(client, req);
+      if (access.error) return access;
+      const locationId = resolveAuditLocation(req);
+      if (!locationId) return { error: 'No location to run this audit under — pick one.', status: 400 };
+      const audit = await cashhandling.startAudit(kind, client, { locationId, runBy: req.person.id });
+      const checklist = await cashhandling.getAuditChecklist(kind, client, audit.id);
+      return checklist;
+    });
+    if (result && result.error) return res.status(result.status || 403).json(result);
+    res.json(result);
+  });
+
+  // Blind checklist status — which target sources are counted, never an
+  // amount, safe to poll while the audit is still in_progress.
+  app.get(`${base}/:id`, auth.requireSession('light'), async (req, res) => {
+    const result = await withServiceClient(async (client) => {
+      const access = await requireAuditAccess(client, req);
+      if (access.error) return access;
+      const checklist = await cashhandling.getAuditChecklist(kind, client, req.params.id);
+      if (!checklist) return { error: 'Not found.', status: 404 };
+      const isOwner = req.person.role === 'owner';
+      if (!isOwner && checklist.audit.location_id !== req.person.location_id) return { error: 'Not found.', status: 404 };
+      return checklist;
+    });
+    if (result && result.error) return res.status(result.status || 403).json(result);
+    res.json(result);
+  });
+
+  app.post(`${base}/:id/items`, auth.requireSession('light'), async (req, res) => {
+    const result = await withServiceClient(async (client) => {
+      const access = await requireAuditAccess(client, req);
+      if (access.error) return access;
+      const amount = Number(req.body.countedAmount);
+      if (!Number.isFinite(amount) || amount < 0) return { error: 'Enter a valid amount.', status: 400 };
+      try {
+        return await cashhandling.submitAuditItem(kind, client, {
+          auditId: req.params.id, sourceId: req.body.sourceId, countedAmount: amount,
+          note: req.body.note || null, countedBy: req.person.id,
+        });
+      } catch (e) {
+        return { error: e.message, status: e.statusCode || 400 };
+      }
+    });
+    if (result && result.error) return res.status(result.status || 403).json(result);
+    res.json(result);
+  });
+
+  // The one and only reveal — every item this audit counted, together,
+  // the moment it's marked submitted.
+  app.post(`${base}/:id/submit`, auth.requireSession('light'), async (req, res) => {
+    const result = await withServiceClient(async (client) => {
+      const access = await requireAuditAccess(client, req);
+      if (access.error) return access;
+      try {
+        return await cashhandling.submitAudit(kind, client, { auditId: req.params.id });
+      } catch (e) {
+        return { error: e.message, status: e.statusCode || 400 };
+      }
+    });
+    if (result && result.error) return res.status(result.status || 403).json(result);
+    res.json(result);
+  });
+
+  app.get(`${base}/history/list`, auth.requireSession('light'), async (req, res) => {
+    const result = await withServiceClient(async (client) => {
+      const access = await requireAuditAccess(client, req);
+      if (access.error) return access;
+      const isOwner = req.person.role === 'owner';
+      const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+      return { audits: await cashhandling.listAuditHistory(kind, client, { locationId, limit: 25 }) };
+    });
+    if (result && result.error) return res.status(result.status || 403).json(result);
+    res.json(result);
+  });
+}
+
+// System-Assigned Random Audit — the "your assignment" banner is
+// checked regardless of tier (a stale/edge-case assignment should never
+// 403 the one person it's actually for); counting it is a normal
+// session route, generation is a shared-secret cron route below.
+app.get('/api/cashhandling/random-audit/mine', auth.requireSession('light'), async (req, res) => {
+  const assignment = await withServiceClient((client) => cashhandling.getMySystemAuditAssignment(client, req.person.id));
+  res.json({ assignment });
+});
+
+app.post('/api/cashhandling/random-audit/:id/count', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const amount = Number(req.body.countedAmount);
+    if (!Number.isFinite(amount) || amount < 0) return { error: 'Enter a valid amount.', status: 400 };
+    try {
+      return await cashhandling.submitSystemAuditCount(client, {
+        assignmentId: req.params.id, countedBy: req.person.id, countedAmount: amount, note: req.body.note || null,
+      });
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 400 };
+    }
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+// Oversight list — drawers_bags+ can see who's assigned what at their
+// location, same access floor as running a manual audit.
+app.get('/api/cashhandling/random-audit/assignments', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const access = await requireAuditAccess(client, req);
+    if (access.error) return access;
+    const isOwner = req.person.role === 'owner';
+    const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+    return { assignments: await cashhandling.listSystemAuditAssignments(client, { locationId, limit: 50 }) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+// Cron-only: generates this week's system random audit assignments
+// (idempotent per location/week) and sweeps any now-overdue assignment
+// to 'missed'. Not session-gated — meant to be hit by a Render Cron Job
+// on a weekly schedule, authenticated by a shared secret header instead
+// (see CASH_AUDIT_CRON_SECRET in .env / Render's env vars), the same
+// reason server/index.js's agent routes use a bearer token rather than
+// a login session: nobody is sitting at a browser when this fires.
+// weekStart in the body is optional and mainly for manual/testing
+// re-runs; the default is "the most recent Saturday" to match this
+// app's Sat-Fri week everywhere else (Scheduling).
+function mostRecentSaturdayISO() {
+  const d = new Date();
+  const day = d.getUTCDay(); // 0=Sun..6=Sat
+  const diff = (day - 6 + 7) % 7;
+  d.setUTCDate(d.getUTCDate() - diff);
+  return d.toISOString().slice(0, 10);
+}
+
+app.post('/api/cashhandling/random-audit/generate', async (req, res) => {
+  const configured = process.env.CASH_AUDIT_CRON_SECRET;
+  if (!configured) return res.status(503).json({ error: 'CASH_AUDIT_CRON_SECRET is not configured — random-audit generation is disabled until it is set.' });
+  const provided = req.get('x-cron-secret') || '';
+  const a = Buffer.from(provided);
+  const b = Buffer.from(configured);
+  const matches = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!matches) return res.status(401).json({ error: 'Invalid or missing cron secret.' });
+
+  const weekStart = req.body && req.body.weekStart ? req.body.weekStart : mostRecentSaturdayISO();
+  const result = await withServiceClient(async (client) => {
+    const generated = await cashhandling.generateSystemRandomAudits(client, weekStart);
+    const missed = await cashhandling.markMissedAssignments(client);
+    return { weekStart, generated, missedCount: missed.length };
+  });
+  res.json(result);
+});
+
 // ---------------- Scheduling ----------------
 // Shift model: Schedule (roster/crew under a Location) x Position
 // (qualification) x Employee. Manager-scoped via manager_schedules (not
