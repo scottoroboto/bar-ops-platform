@@ -14,6 +14,7 @@ const ICONS = {
   check: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>',
   phone: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 3a2 2 0 0 1-.5 2.1L8 10.1a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c1 .3 2 .5 3 .7a2 2 0 0 1 1.7 2Z"/></svg>',
   pin: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>',
+  cash: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 9v0M18 15v0"/></svg>',
 };
 
 // The roster row's app-access toggles, in the order the redesign settled
@@ -24,6 +25,7 @@ const TOGGLE_DEFS = [
   { key: 'scheduling', label: 'Sched', icon: ICONS.calendar },
   { key: 'service_calls', label: 'Calls', icon: ICONS.wrench },
   { key: 'monitoring', label: 'Monitor', icon: ICONS.monitor },
+  { key: 'cash_handling', label: 'Cash', icon: ICONS.cash },
 ];
 const EMPLOYEES_TOGGLE_DEF = { key: 'employees', label: 'Emp', icon: ICONS.people };
 
@@ -455,6 +457,7 @@ function openActivateModal(id, name) {
   document.getElementById('activatePersonId').value = id;
   document.getElementById('activateName').textContent = name;
   document.getElementById('accessTimeClock').checked = true;
+  document.getElementById('accessCashHandling').checked = false;
   document.getElementById('accessServiceCalls').checked = false;
   document.getElementById('accessScheduling').checked = false;
   document.getElementById('accessMonitoring').checked = false;
@@ -471,6 +474,7 @@ async function submitActivate() {
   const appAccess = {
     time_clock: document.getElementById('accessTimeClock').checked,
     service_calls: document.getElementById('accessServiceCalls').checked,
+    cash_handling: document.getElementById('accessCashHandling').checked,
     scheduling: document.getElementById('accessScheduling').checked,
     monitoring: document.getElementById('accessMonitoring').checked,
   };
