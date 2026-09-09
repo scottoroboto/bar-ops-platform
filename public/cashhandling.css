@@ -6,6 +6,15 @@
 .ch-loc-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .ch-loc-row select { width: auto; margin: 0; }
 
+/* Dashboard-tab quick actions (full_authority only) — jump straight into
+   the Transactions tab's New Transaction form pre-set to Deposit or Bank
+   Change. See quickTransaction() in cashhandling.js. */
+.ch-quick-actions { display: flex; gap: 10px; margin: 4px 0 16px; }
+.ch-quick-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 13px 10px; border-radius: 10px; font-size: 13.5px; font-weight: 700; border: none; cursor: pointer; }
+.ch-quick-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
+.ch-quick-btn.primary { background: var(--accent); color: #fff; }
+.ch-quick-btn.secondary { background: var(--card); color: var(--text); border: 1px solid var(--card-border); }
+
 .ch-group { margin-top: 22px; }
 .ch-group:first-child { margin-top: 0; }
 .ch-group-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
