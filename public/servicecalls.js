@@ -5,6 +5,7 @@ let EQUIPMENT = [];
 let DESTINATIONS = [];       // active send-to destinations, for the New Call checkboxes
 let ADMIN_DESTINATIONS = []; // full destinations (incl. archived) + members, for the Manage tab
 let MANAGE_PEOPLE = [];      // active employees, for the destination member picker
+let SC_SUBTAB = 'new';       // 'new' (open) | 'pending' (Working) | 'closed' — which Calls sub-tab is showing
 
 function showMsg(text, kind) {
   document.getElementById('msgBox').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
@@ -47,52 +48,107 @@ function renderTabs() {
   setTab('open');
 }
 
-function closeAllModals() { closeCloseModal(); closeDetailModal(); closeMembersModal(); }
+function closeAllModals() { closePendingModal(); closeCloseModal(); closeDetailModal(); closeMembersModal(); }
 
-// ---------------- Calls list ----------------
+// ---------------- Calls list — New / Working / Closed sub-tabs ----------------
 async function loadOpen() {
   const el = document.getElementById('panelOpen');
   el.innerHTML = '<div class="card"><p class="muted">Loading…</p></div>';
   try {
     const calls = await api('/api/servicecalls');
-    if (!calls.length) { el.innerHTML = '<div class="card"><p class="muted">No service calls yet.</p></div>'; return; }
-    // Server already sorts open-first (oldest first) then closed (most
-    // recently closed first) — splitting here just groups that same order
-    // under the two section headers rather than re-sorting anything.
-    const pending = calls.filter(c => c.status === 'open');
-    const closed = calls.filter(c => c.status === 'closed');
-    let html = '';
-    if (pending.length) html += sectionDividerHtml('Pending Calls') + pending.map(callCardHtml).join('');
-    if (closed.length) html += sectionDividerHtml('Closed Calls') + closed.map(callCardHtml).join('');
-    el.innerHTML = html;
+    const buckets = {
+      new: calls.filter(c => c.status === 'open'),
+      pending: calls.filter(c => c.status === 'pending'),
+      closed: calls.filter(c => c.status === 'closed'),
+    };
+    const subtabs = [
+      { key: 'new', label: 'New' },
+      { key: 'pending', label: 'Working' },
+      { key: 'closed', label: 'Closed' },
+    ];
+    const subtabsHtml = `<div class="sc-subtabs">${subtabs.map(t => `
+      <div class="sc-subtab ${t.key === 'new' ? 'sc-subtab-new' : ''} ${t.key === SC_SUBTAB ? 'active' : ''}" onclick="setScSubtab('${t.key}')">
+        <span>${t.label}</span><span class="sc-subtab-cnt">${buckets[t.key].length}</span>
+      </div>`).join('')}</div>`;
+    const rows = buckets[SC_SUBTAB] || [];
+    const listHtml = rows.length
+      ? `<div class="sc-tile-grid">${rows.map(callCardHtml).join('')}</div>`
+      : `<div class="card"><p class="muted">No ${SC_SUBTAB === 'new' ? 'new' : SC_SUBTAB === 'pending' ? 'working' : 'closed'} calls.</p></div>`;
+    el.innerHTML = subtabsHtml + listHtml;
   } catch (e) {
     el.innerHTML = `<div class="card"><p class="msg error">${escapeHtml(e.message)}</p></div>`;
   }
 }
 
-function sectionDividerHtml(label) {
-  return `<div class="sc-divider"><span></span><b>${escapeHtml(label)}</b><span></span></div>`;
+function setScSubtab(key) {
+  SC_SUBTAB = key;
+  loadOpen();
 }
 
 function callCardHtml(c) {
   const equipment = c.equipment_name || c.equipment_other || 'Unspecified equipment';
-  const open = c.status === 'open';
+  const equipJson = JSON.stringify(equipment).replace(/"/g, '&quot;');
   const sentTo = (c.destination_names && c.destination_names.length) ? c.destination_names.join(', ') : '—';
   const noteHint = c.notes_count ? `${c.notes_count} note${c.notes_count === 1 ? '' : 's'}` : 'Add a note';
-  return `<div class="card ${open ? '' : 'sc-closed'}" onclick="openCallDetail('${c.id}')" style="cursor:pointer;">
-    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-      <div>
-        <div class="name">${escapeHtml(equipment)} <span class="badge ${open ? 'stale' : 'off'}">${open ? 'open · ' + fmtDuration(c.minutes_open) : 'closed'}</span></div>
-        <div class="sub">${escapeHtml(c.location_name)} · reported by ${escapeHtml(c.created_by_name)} · ${fmtDateTime(c.created_at)} · to ${escapeHtml(sentTo)}</div>
-      </div>
-      ${open ? `<button class="small primary" style="margin-top:0;" onclick="event.stopPropagation(); openCloseModal('${c.id}', ${JSON.stringify(equipment).replace(/"/g, '&quot;')})">Close</button>` : ''}
+  const statusBadge = c.status === 'open'
+    ? `<span class="badge stale">New · ${fmtDuration(c.minutes_open)}</span>`
+    : c.status === 'pending'
+      ? `<span class="badge on">Working · ${fmtDuration(c.minutes_open)}</span>`
+      : `<span class="badge off">Closed</span>`;
+  const pendingNoteHtml = c.status === 'pending' && c.pending_note
+    ? `<div class="sc-tile-note"><div class="sc-tile-note-lbl">Why it's pending</div>${escapeHtml(c.pending_note)}</div>`
+    : '';
+  // Every New card gets both actions side by side — Close is reachable
+  // directly from New, not gated behind first moving to Working.
+  let actionsHtml = '';
+  if (c.status === 'open') {
+    actionsHtml = `<button class="small ghost" onclick="event.stopPropagation(); openPendingModal('${c.id}', ${equipJson})">Move to Working</button>
+      <button class="small primary" style="margin-top:0;" onclick="event.stopPropagation(); openCloseModal('${c.id}', ${equipJson})">Close call</button>`;
+  } else if (c.status === 'pending') {
+    actionsHtml = `<button class="small primary" style="margin-top:0;" onclick="event.stopPropagation(); openCloseModal('${c.id}', ${equipJson})">Close call</button>`;
+  }
+  return `<div class="card sc-tile ${c.status === 'closed' ? 'sc-closed' : ''}" onclick="openCallDetail('${c.id}')" style="cursor:pointer;">
+    <div class="name">${escapeHtml(equipment)} ${statusBadge}</div>
+    <div class="sub">${escapeHtml(c.location_name)} · reported by ${escapeHtml(c.created_by_name)} · ${fmtDateTime(c.created_at)} · to ${escapeHtml(sentTo)}</div>
+    <p style="margin:0;">${escapeHtml(c.description)}</p>
+    ${pendingNoteHtml}
+    ${c.status === 'closed' ? `<p class="muted" style="margin:0;">Closed by ${escapeHtml(c.closed_by_name || '—')} ${fmtDateTime(c.closed_at)} — ${escapeHtml(c.remedy || '')}</p>` : ''}
+    <div class="sc-tile-foot">
+      <span class="muted">${escapeHtml(noteHint)}</span>
+      ${actionsHtml ? `<div class="sc-tile-actions" onclick="event.stopPropagation();">${actionsHtml}</div>` : ''}
     </div>
-    <p style="margin:10px 0 0;">${escapeHtml(c.description)}</p>
-    ${!open ? `<p class="muted" style="margin-top:8px;">Closed by ${escapeHtml(c.closed_by_name || '—')} ${fmtDateTime(c.closed_at)} — ${escapeHtml(c.remedy || '')}</p>` : ''}
-    <p class="muted" style="margin-top:8px;">${escapeHtml(noteHint)} →</p>
   </div>`;
 }
 
+// ---------------- Move to Working ----------------
+function openPendingModal(id, desc) {
+  document.getElementById('pendingCallId').value = id;
+  document.getElementById('pendingCallDesc').textContent = desc;
+  document.getElementById('pendingNote').value = '';
+  document.getElementById('pendingModal').style.display = '';
+  document.getElementById('modalBackdrop').style.display = '';
+}
+function closePendingModal() {
+  document.getElementById('pendingModal').style.display = 'none';
+  document.getElementById('modalBackdrop').style.display = 'none';
+}
+async function submitPending() {
+  const id = document.getElementById('pendingCallId').value;
+  const note = document.getElementById('pendingNote').value.trim();
+  if (!note) { alert('Say what’s happening first.'); return; }
+  try {
+    const result = await api(`/api/servicecalls/${id}/pending`, { method: 'POST', body: { note } });
+    if (!result.ok) { alert(result.error); return; }
+    closePendingModal();
+    showMsg('Moved to Working.', 'success');
+    SC_SUBTAB = 'pending';
+    loadOpen();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// ---------------- Close call ----------------
 function openCloseModal(id, desc) {
   document.getElementById('closeCallId').value = id;
   document.getElementById('closeCallDesc').textContent = desc;
@@ -113,6 +169,7 @@ async function submitClose() {
     if (!result.ok) { alert(result.error); return; }
     closeCloseModal();
     showMsg('Call closed.', 'success');
+    SC_SUBTAB = 'closed';
     loadOpen();
   } catch (e) {
     alert(e.message);
@@ -147,13 +204,32 @@ function closeDetailModal() {
 
 function detailBodyHtml(c) {
   const equipment = c.equipment_name || c.equipment_other || 'Unspecified equipment';
-  const open = c.status === 'open';
+  const equipJson = JSON.stringify(equipment).replace(/"/g, '&quot;');
   const sentTo = (c.destination_names && c.destination_names.length) ? c.destination_names.join(', ') : '—';
+  const statusBadge = c.status === 'open'
+    ? `<span class="badge stale">New · ${fmtDuration(c.minutes_open)}</span>`
+    : c.status === 'pending'
+      ? `<span class="badge on">Working · ${fmtDuration(c.minutes_open)}</span>`
+      : `<span class="badge off">Closed</span>`;
+  const pendingNoteHtml = c.status === 'pending' && c.pending_note
+    ? `<div class="sc-tile-note" style="margin-top:10px;"><div class="sc-tile-note-lbl">Why it's pending</div>${escapeHtml(c.pending_note)}</div>`
+    : '';
+  // Same rule as the tile actions: New shows both, Working shows Close only.
+  let actionsHtml = '';
+  if (c.status === 'open') {
+    actionsHtml = `<div class="stack-actions">
+      <button class="ghost" onclick="closeDetailModal(); openPendingModal('${c.id}', ${equipJson})">Move to Working</button>
+      <button class="primary" style="margin-top:0;" onclick="closeDetailModal(); openCloseModal('${c.id}', ${equipJson})">Close this call</button>
+    </div>`;
+  } else if (c.status === 'pending') {
+    actionsHtml = `<button class="primary" onclick="closeDetailModal(); openCloseModal('${c.id}', ${equipJson})">Close this call</button>`;
+  }
   return `
-    <div class="name">${escapeHtml(equipment)} <span class="badge ${open ? 'stale' : 'off'}">${open ? 'open · ' + fmtDuration(c.minutes_open) : 'closed'}</span></div>
+    <div class="name">${escapeHtml(equipment)} ${statusBadge}</div>
     <p class="sub" style="margin:4px 0 12px;">${escapeHtml(c.location_name)} · reported by ${escapeHtml(c.created_by_name)} · ${fmtDateTime(c.created_at)} · to ${escapeHtml(sentTo)}</p>
     <p>${escapeHtml(c.description)}</p>
-    ${!open ? `<p class="muted" style="margin-top:8px;">Closed by ${escapeHtml(c.closed_by_name || '—')} ${fmtDateTime(c.closed_at)} — ${escapeHtml(c.remedy || '')}</p>` : ''}
+    ${pendingNoteHtml}
+    ${c.status === 'closed' ? `<p class="muted" style="margin-top:8px;">Closed by ${escapeHtml(c.closed_by_name || '—')} ${fmtDateTime(c.closed_at)} — ${escapeHtml(c.remedy || '')}</p>` : ''}
     <hr style="border:none; border-top:1px solid var(--card-border); margin:16px 0;">
     <h2 style="font-size:14px; margin:0 0 8px;">Notes</h2>
     <div id="detailNotesList">${notesListHtml(c.notes)}</div>
@@ -162,7 +238,7 @@ function detailBodyHtml(c) {
     <textarea id="detailNewNote" rows="2" placeholder="e.g. Called the vendor, part is on order"></textarea>
     <button class="secondary" onclick="submitNote()">Add note</button>
     <div id="detailNoteResult"></div>
-    ${open ? `<button class="primary" onclick="closeDetailModal(); openCloseModal('${c.id}', ${JSON.stringify(equipment).replace(/"/g, '&quot;')})">Close this call</button>` : ''}
+    ${actionsHtml}
   `;
 }
 
@@ -238,7 +314,7 @@ function renderReports() {
     <label for="rpEquipment">Equipment</label>
     <select id="rpEquipment"><option value="">All equipment</option></select>
     <label for="rpStatus">Status</label>
-    <select id="rpStatus"><option value="">All</option><option value="open">Open</option><option value="closed">Closed</option></select>
+    <select id="rpStatus"><option value="">All</option><option value="open">New</option><option value="pending">Working</option><option value="closed">Closed</option></select>
     <div class="stack-actions">
       <button class="secondary" onclick="runReport()">Run</button>
       <button class="secondary" onclick="downloadCsv()">Download CSV</button>
@@ -268,11 +344,15 @@ async function runReport() {
   try {
     const rows = await api('/api/servicecalls?' + reportQuery());
     const closed = rows.filter(r => r.status === 'closed');
-    const open = rows.filter(r => r.status === 'open');
+    const newCalls = rows.filter(r => r.status === 'open');
+    const working = rows.filter(r => r.status === 'pending');
     const avgMin = closed.length ? Math.round(closed.reduce((s, r) => s + r.minutes_open, 0) / closed.length) : 0;
     document.getElementById('reportSummary').innerHTML = `
-      <p class="muted" style="margin-top:14px;">${rows.length} calls · ${open.length} open · ${closed.length} closed
+      <p class="muted" style="margin-top:14px;">${rows.length} calls · ${newCalls.length} new · ${working.length} working · ${closed.length} closed
       ${closed.length ? ' · avg time to close: ' + fmtDuration(avgMin) : ''}</p>`;
+    const statusBadge = (status) => status === 'open' ? '<span class="badge stale">new</span>'
+      : status === 'pending' ? '<span class="badge on">working</span>'
+      : '<span class="badge off">closed</span>';
     document.getElementById('reportTable').innerHTML = rows.length ? `<table><thead><tr>
         <th>Location</th><th>Equipment</th><th>Reported by</th><th>Opened</th><th>Status</th><th>Sent to</th><th>Closed by</th><th>Time</th><th>Remedy</th>
       </tr></thead><tbody>
@@ -281,7 +361,7 @@ async function runReport() {
           <td>${escapeHtml(r.equipment_name || r.equipment_other || '—')}</td>
           <td>${escapeHtml(r.created_by_name)}</td>
           <td>${fmtDateTime(r.created_at)}</td>
-          <td><span class="badge ${r.status === 'open' ? 'stale' : 'off'}">${r.status}</span></td>
+          <td>${statusBadge(r.status)}</td>
           <td>${escapeHtml((r.destination_names || []).join(', ') || '—')}</td>
           <td>${escapeHtml(r.closed_by_name || '—')}</td>
           <td>${fmtDuration(r.minutes_open)}</td>
