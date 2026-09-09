@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Service Calls — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<div class="wrap wide" id="app">
+  <div id="msgBox"></div>
+  <div class="tabs" id="tabs"></div>
+
+  <div id="panelOpen"></div>
+  <div id="panelNew" style="display:none;"></div>
+  <div id="panelReports" style="display:none;"></div>
+  <div id="panelManage" style="display:none;"></div>
+</div>
+
+<!-- Move-to-Working modal -->
+<div class="card" id="pendingModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:15%; z-index:20;">
+  <h2>Move to Working</h2>
+  <input type="hidden" id="pendingCallId">
+  <p class="muted" id="pendingCallDesc"></p>
+  <label for="pendingNote">What's happening?</label>
+  <textarea id="pendingNote" rows="3" placeholder="e.g. Part ordered, technician called, en route…"></textarea>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closePendingModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitPending()">Move to Working</button>
+  </div>
+</div>
+
+<!-- Close-call modal -->
+<div class="card" id="closeModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:15%; z-index:20;">
+  <h2>Close this call</h2>
+  <input type="hidden" id="closeCallId">
+  <p class="muted" id="closeCallDesc"></p>
+  <label for="closeRemedy">What fixed it?</label>
+  <textarea id="closeRemedy" rows="3" placeholder="e.g. Reset the breaker and cleared the drain line"></textarea>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeCloseModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitClose()">Mark closed</button>
+  </div>
+</div>
+
+<!-- Call detail modal — click any call, open/pending/closed -->
+<div class="card" id="detailModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:480px; max-height:82vh; overflow-y:auto; height:fit-content; top:8%; z-index:20;">
+  <h2 style="margin-bottom:2px;">Call details</h2>
+  <div id="detailBody"><p class="muted">Loading…</p></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeDetailModal()">Close</button>
+  </div>
+</div>
+
+<!-- Destination member picker modal (Manage tab) -->
+<div class="card" id="membersModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; max-height:82vh; overflow-y:auto; height:fit-content; top:8%; z-index:20;">
+  <h2 id="membersTitle">Members</h2>
+  <input type="hidden" id="membersDestId">
+  <p class="muted">Who should be notified for this destination?</p>
+  <div id="membersList"></div>
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeMembersModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitMembers()">Save</button>
+  </div>
+  <div id="membersResult"></div>
+</div>
+
+<div id="modalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10;" onclick="closeAllModals()"></div>
+
+<script src="/common.js"></script>
+<script src="/servicecalls.js"></script>
+</body>
+</html>

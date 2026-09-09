@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Employees — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<div class="wrap wide" id="app">
+  <div id="msgBox"></div>
+
+  <div class="tabs" id="tabs"></div>
+
+  <!-- Employee List panel -->
+  <div id="panelList" style="display:none;">
+    <div class="card">
+      <div class="roster-toolbar">
+        <div class="loc-filters" id="locFilters"></div>
+        <div class="roster-right">
+          <div class="roster-status">
+            <label for="employeeStatusFilter">Status</label>
+            <select id="employeeStatusFilter" onchange="renderAllEmployees()">
+              <option value="active" selected>Active</option>
+              <option value="all">All</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
+          <div class="roster-sort">
+            <label for="employeeSort">Sort by</label>
+            <select id="employeeSort" onchange="renderAllEmployees()">
+              <option value="name_asc">Name (A&ndash;Z)</option>
+              <option value="name_desc">Name (Z&ndash;A)</option>
+              <option value="location">Location</option>
+              <option value="role">Role</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <p class="muted" id="allEmployeesHint" style="margin-top:14px;">Loading…</p>
+      <div id="employeeList" style="margin-top:4px;"><p class="muted">Loading…</p></div>
+    </div>
+  </div>
+
+  <!-- Onboard Review panel -->
+  <div id="panelOnboard" style="display:none;">
+    <div class="card">
+      <h1>Onboard Review</h1>
+      <p class="muted">New sign-ups land here first (normally from your onboarding form). Nobody on this list can log in yet.</p>
+      <div class="msg info" id="ownerOnlyNotice" style="display:none;">Activation and app-access toggles are owner-only. Once you've reviewed someone above, ask the owner to activate them.</div>
+      <div id="pendingList"><p class="muted">Loading…</p></div>
+      <hr style="border:none; border-top:1px solid rgba(255,255,255,0.12); margin:18px 0;">
+      <label for="inviteEmail">Invite someone to apply</label>
+      <input id="inviteName" placeholder="Name (optional)">
+      <input id="inviteEmail" type="email" placeholder="jane@example.com">
+      <button class="secondary" id="sendInviteBtn" onclick="sendOnboardingInvite()">Send onboarding link</button>
+      <div id="inviteResult"></div>
+    </div>
+  </div>
+
+  <!-- Pay Rate Requests panel (owner only) -->
+  <div id="panelPayRate" style="display:none;">
+    <div class="card">
+      <h2>Pay rate requests</h2>
+      <p class="muted">Raise requests submitted by managers, waiting on your decision.</p>
+      <div id="payRateRequestsList"><p class="muted">Loading…</p></div>
+      <hr style="border:none; border-top:1px solid rgba(255,255,255,0.12); margin:18px 0;">
+      <label for="payRateMemoInput">Memo for managers (shown when they request a raise)</label>
+      <textarea id="payRateMemoInput" rows="2" placeholder="e.g. Don't discuss a raise with an employee until it's been decided."></textarea>
+      <button class="secondary" onclick="savePayRateMemo()">Save memo</button>
+      <span id="payRateMemoResult"></span>
+    </div>
+  </div>
+
+  <!-- Reset Requests panel (owner only) -->
+  <div id="panelReset" style="display:none;">
+    <div class="card">
+      <h2>Reset requests</h2>
+      <p class="muted">Employees who said they forgot their password or PIN. Approving generates a brand-new one — hand it to them directly, it only shows once.</p>
+      <div id="resetRequestsList"><p class="muted">Loading…</p></div>
+    </div>
+  </div>
+
+  <!-- Notifications panel (owner only) -->
+  <div id="panelNotifications" style="display:none;">
+    <div class="card">
+      <h2>Notifications</h2>
+      <p class="muted">A master switch for every email and text this platform sends — schedule publishes, onboarding invites, pay rate decisions, reset requests, monitoring alerts, all of it. Turn it off while you're testing (like importing a real employee list) so nothing actually goes out; every send is still logged, just marked "disabled" instead of sent.</p>
+      <div class="toggle-row">
+        <span class="label">Send real emails &amp; texts</span>
+        <label class="switch"><input type="checkbox" id="notificationsToggle" onchange="submitNotificationsToggle()"><span class="slider"></span></label>
+      </div>
+      <div id="notificationsStatus"></div>
+      <div id="notificationsResult"></div>
+    </div>
+  </div>
+
+  <!-- Session Timeout panel (owner only) -->
+  <div id="panelSession" style="display:none;">
+    <div class="card">
+      <h2>Session timeout</h2>
+      <p class="muted">How long a re-entered password lasts before a sensitive action (activating someone, changing a role, publishing a schedule, etc.) asks for it again. This is the "This needs you to re-enter your password first" prompt — it does not affect your everyday sign-in, which lasts 14 days.</p>
+      <label for="sessionTimeoutSelect">Stay signed in for</label>
+      <select id="sessionTimeoutSelect" onchange="submitSessionTimeout()">
+        <option value="15">15 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="60">1 hour</option>
+        <option value="120">2 hours</option>
+        <option value="1440">24 hours</option>
+      </select>
+      <div id="sessionTimeoutResult"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Review modal -->
+<div class="card" id="reviewModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:10%; z-index:20;">
+  <h2>Review employee</h2>
+  <input type="hidden" id="reviewPersonId">
+  <label for="reviewName">Name</label>
+  <input id="reviewName" disabled>
+  <label for="reviewPosition">Position</label>
+  <select id="reviewPosition"></select>
+  <label for="reviewLocation">Location</label>
+  <select id="reviewLocation"></select>
+  <label for="reviewPayRate">Pay rate ($/hr)</label>
+  <input id="reviewPayRate" type="number" step="0.01">
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeReviewModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitReview()">Save review</button>
+  </div>
+</div>
+
+<!-- Activate modal -->
+<div class="card" id="activateModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:420px; height:fit-content; top:8%; z-index:20; max-height:84vh; overflow-y:auto;">
+  <h2>Activate employee</h2>
+  <p class="muted" id="activateName"></p>
+  <input type="hidden" id="activatePersonId">
+  <p class="muted">Choose what this person can access. You can change this any time later.</p>
+  <div class="toggle-row"><span class="label">Time Clock</span>
+    <label class="switch"><input type="checkbox" id="accessTimeClock"><span class="slider"></span></label></div>
+  <div class="toggle-row"><span class="label">Service Calls</span>
+    <label class="switch"><input type="checkbox" id="accessServiceCalls"><span class="slider"></span></label></div>
+  <div class="toggle-row"><span class="label">Scheduling</span>
+    <label class="switch"><input type="checkbox" id="accessScheduling"><span class="slider"></span></label></div>
+  <div class="toggle-row"><span class="label">Systems Monitoring</span>
+    <label class="switch"><input type="checkbox" id="accessMonitoring"><span class="slider"></span></label></div>
+  <div class="toggle-row"><span class="label">Cash Handling</span>
+    <label class="switch"><input type="checkbox" id="accessCashHandling"><span class="slider"></span></label></div>
+  <!-- No "Employees" toggle here: everyone lands in Onboard Review as
+       role = 'staff' (see createPendingEmployee) — nobody is a manager
+       yet at activation time. The Employees toggle only ever appears on
+       the roster row, once a person's role has actually become
+       'manager' (set outside the app today; there's no in-app promotion
+       flow), matching the "will need to add app toggles down the road"
+       note in the original request. -->
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeActivateModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitActivate()">Activate — go live</button>
+  </div>
+  <div id="activateResult"></div>
+</div>
+
+<!-- Employee detail card — avatar-first, centered, sized for everything the
+     redesign asked for: rate (visibility-gated), role/position/location,
+     hire date, certifications, contact (mobile/address), Jotform link.
+     Owner also gets an inline edit section (position/location/pay
+     rate/address) below the read-only card, same owner-only-write rule as
+     before (/api/employees/:id/update stays owner-only server-side). -->
+<div class="card detail-card" id="employeeDetailModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:600px; height:fit-content; top:4%; z-index:20; max-height:92vh; overflow-y:auto;">
+  <button class="detail-close" onclick="closeEmployeeDetail()" aria-label="Close">&times;</button>
+  <input type="hidden" id="detailPersonId">
+
+  <div class="detail-avatar" id="detailAvatar"></div>
+  <h1 id="detailName" style="text-align:center; margin:14px 0 2px;"></h1>
+  <p class="muted" id="detailMeta" style="text-align:center; margin-top:0;"></p>
+  <div id="detailLocChips" style="display:flex; gap:6px; justify-content:center; margin-top:6px;"></div>
+
+  <div class="detail-tiles" id="detailTiles"></div>
+
+  <div class="detail-section" id="detailCertsSection">
+    <div class="detail-label">Certifications</div>
+    <div id="detailCerts"></div>
+    <div id="detailCertsAdd" style="display:none; margin-top:10px;">
+      <div style="display:flex; gap:8px;">
+        <input id="certName" placeholder="Certification name" list="certSuggestions" style="flex:1;">
+        <input id="certDate" type="date" style="width:160px;">
+        <button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="addCertification()">Add</button>
+      </div>
+      <datalist id="certSuggestions">
+        <option value="ServeSafe Server">
+        <option value="ServeSafe Food Handler">
+        <option value="Food Service Manager">
+        <option value="TIPS Alcohol Certification">
+      </datalist>
+    </div>
+  </div>
+
+  <div class="detail-section">
+    <div class="detail-label">Contact</div>
+    <div id="detailContact" class="detail-contact"></div>
+  </div>
+
+  <a href="#" class="detail-jotform-btn" onclick="window.open(JOTFORM_HIRE_PACK_URL, '_blank'); return false;">
+    View secure employee file (Jotform)
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M8 7h9v9"/></svg>
+  </a>
+
+  <div id="detailEditFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">
+    <div class="detail-label" style="margin-bottom:10px;">Edit (owner)</div>
+    <label for="detailPosition">Position</label>
+    <select id="detailPosition"></select>
+    <label for="detailLocation">Location</label>
+    <select id="detailLocation"></select>
+    <label for="detailPayRate">Pay rate ($/hr)</label>
+    <input id="detailPayRate" type="number" step="0.01">
+    <label for="detailAddress">Address</label>
+    <input id="detailAddress" placeholder="Street, city, state, ZIP">
+    <div class="stack-actions">
+      <button class="primary" style="margin-top:0;" id="detailSaveBtn" onclick="saveEmployeeDetail()">Save changes</button>
+    </div>
+    <div id="detailResult"></div>
+  </div>
+
+  <div id="detailRoleFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">
+    <div class="detail-label" style="margin-bottom:10px;">Role (owner)</div>
+    <p class="muted" style="margin-top:-6px;">Controls what this person can access across every app — change this deliberately.</p>
+    <label for="detailRole">Role</label>
+    <select id="detailRole">
+      <option value="staff">Staff</option>
+      <option value="manager">Manager</option>
+      <option value="maintenance">Maintenance</option>
+      <option value="owner">Owner</option>
+    </select>
+    <div class="stack-actions">
+      <button class="secondary" style="margin-top:0;" id="detailRoleSaveBtn" onclick="saveEmployeeRole()">Change role</button>
+    </div>
+    <div id="detailRoleResult"></div>
+  </div>
+</div>
+
+<!-- Request pay raise modal (manager) -->
+<div class="card" id="requestRaiseModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:380px; height:fit-content; top:12%; z-index:20;">
+  <h2>Request a raise</h2>
+  <p class="muted" id="raiseName"></p>
+  <input type="hidden" id="raisePersonId">
+  <p class="muted" id="raiseCurrentRate"></p>
+  <p class="msg info" id="raiseMemo" style="display:none;"></p>
+  <label for="raiseRequestedRate">New pay rate ($/hr)</label>
+  <input id="raiseRequestedRate" type="number" step="0.01">
+  <div class="stack-actions">
+    <button class="ghost" onclick="closeRequestRaiseModal()">Cancel</button>
+    <button class="primary" style="margin-top:0;" onclick="submitRequestRaise()">Send to owner</button>
+  </div>
+  <div id="raiseResult"></div>
+</div>
+
+<div id="modalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10;" onclick="closeAllModals()"></div>
+
+<!-- Inline confirm bubble — safeguard before an app-access or Active/Inactive
+     toggle actually fires, so a stray click on a long roster doesn't change
+     anything without a second, explicit tap. -->
+<div id="confirmPopover" class="confirm-popover" style="display:none;">
+  <div id="confirmPopoverText"></div>
+  <div class="confirm-popover-actions">
+    <button class="small ghost" onclick="cancelPopoverConfirm()">Cancel</button>
+    <button class="small primary" onclick="submitPopoverConfirm()">Yes</button>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script src="/employees.js"></script>
+</body>
+</html>
