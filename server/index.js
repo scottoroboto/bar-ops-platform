@@ -1122,7 +1122,7 @@ res.status(err.status || 400).json({ error: err.message });
 }
 });
 
-app.post('/api/venue-control/', auth.requireSession('full'), async (req, res) => {
+app.post('/api/venue-control/sources/:id/update', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 const { slot, qamChannel, label, kind, ip, port, mac, receiverId, accessCardId, enabled, notes } = req.body || {};
 if (!slot || !qamChannel || !(label || '').trim()) return res.status(400).json({ error: 'A source needs "slot", "qamChannel", and "label".' });
