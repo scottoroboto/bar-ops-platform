@@ -10,8 +10,10 @@ const timeclock = require('./timeclock');
 const servicecalls = require('./servicecalls');
 const monitoring = require('./monitoring');
 const scheduling = require('./scheduling');
+const cashhandling = require('./cashhandling');
 const notify = require('./notify');
 const jotform = require('./jotform');
+const multer = require('multer');
 const resetRequests = require('./resetRequests');
 
 const app = express();
@@ -229,7 +231,11 @@ const access = await req.withAuthedClient(async (client) => {
 const { rows } = await client.query('SELECT app_key, enabled FROM employee_apps WHERE person_id = $1', [req.person.id]);
 return rows;
 });
-res.json({ person: req.person, appAccess: access });
+// cash_sources/cash_counts have zero RLS policies (same posture as
+// scheduling), so tier resolution goes through the service client even
+// though this route otherwise reads through req.withAuthedClient.
+const cashHandlingTier = await withServiceClient((client) => cashhandling.getEffectiveCashTier(client, req.person.id));
+res.json({ person: req.person, appAccess: access, cashHandlingTier });
 });
 
 // Public, unauthenticated — the whole point is this works for someone who
