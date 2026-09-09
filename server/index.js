@@ -2199,6 +2199,21 @@ const result = await req.withAuthedClient((client) => servicecalls.createCall(cl
 res.json(result);
 });
 
+// New -> Working. Requires an explanation (mirrors /close requiring a
+// remedy). Does NOT require this to happen before /close — a New call can
+// go straight to Closed; see the comment on pendingCall() in servicecalls.js.
+app.post('/api/servicecalls/:id/pending', auth.requireSession('light'), async (req, res) => {
+const isManagerOrOwner = req.person.role === 'manager' || req.person.role === 'owner';
+const result = await req.withAuthedClient(async (client) => {
+if (!isManagerOrOwner) {
+const hasAccess = await servicecalls.requireServiceCallsAccess(client, req.person.id);
+if (!hasAccess) return { ok: false, error: 'Service Calls isn’t turned on for your account yet — ask your manager.' };
+}
+return servicecalls.pendingCall(client, { id: req.params.id, pendingBy: req.person.id, note: req.body.note });
+});
+res.json(result);
+});
+
 app.post('/api/servicecalls/:id/close', auth.requireSession('light'), async (req, res) => {
 const isManagerOrOwner = req.person.role === 'manager' || req.person.role === 'owner';
 const result = await req.withAuthedClient(async (client) => {
