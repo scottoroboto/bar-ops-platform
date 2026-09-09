@@ -11,6 +11,7 @@ const servicecalls = require('./servicecalls');
 const monitoring = require('./monitoring');
 const scheduling = require('./scheduling');
 const cashhandling = require('./cashhandling');
+const inventorycontrol = require('./inventorycontrol');
 const notify = require('./notify');
 const jotform = require('./jotform');
 const multer = require('multer');
@@ -231,11 +232,12 @@ const access = await req.withAuthedClient(async (client) => {
 const { rows } = await client.query('SELECT app_key, enabled FROM employee_apps WHERE person_id = $1', [req.person.id]);
 return rows;
 });
-// cash_sources/cash_counts have zero RLS policies (same posture as
-// scheduling), so tier resolution goes through the service client even
-// though this route otherwise reads through req.withAuthedClient.
+// cash_sources/cash_counts and inventory_* have zero RLS policies (same
+// posture as scheduling), so tier resolution goes through the service
+// client even though this route otherwise reads through req.withAuthedClient.
 const cashHandlingTier = await withServiceClient((client) => cashhandling.getEffectiveCashTier(client, req.person.id));
-res.json({ person: req.person, appAccess: access, cashHandlingTier });
+const inventoryTier = await withServiceClient((client) => inventorycontrol.getEffectiveInventoryTier(client, req.person.id));
+res.json({ person: req.person, appAccess: access, cashHandlingTier, inventoryTier });
 });
 
 // Public, unauthenticated — the whole point is this works for someone who
@@ -2835,6 +2837,369 @@ app.post('/api/cashhandling/random-audit/generate', async (req, res) => {
     return { weekStart, generated, missedCount: missed.length };
   });
   res.json(result);
+});
+
+// ---------------- Inventory Control ("Stocktake") — Phase 1: liquor counting ----------------
+// Same posture as Cash Handling: inventory_* tables (patch_028) have
+// zero RLS policies, so every route below goes through withServiceClient
+// and enforces its own authorization — either the four-tier system
+// (no_access/counter/lead/full_authority, via inventorycontrol.
+// getEffectiveInventoryTier) or, for access management, the same hard
+// role==='owner' gate Cash Handling uses (see cashhandling.js's note on
+// why tier alone isn't enough there — "Managers can not override").
+//
+// unit_cost is the one field a Counter must never see. inventorycontrol.js
+// keeps its catalog-read functions tier-agnostic on purpose; stripping
+// happens here, once, in stripCostForTier.
+function stripCostForTier(item, tier) {
+  if (!item) return item;
+  if (inventorycontrol.tierAtLeast(tier, 'lead')) return item;
+  const { unit_cost, ...rest } = item;
+  return rest;
+}
+
+app.get('/api/inventory/access', auth.requireSession('light'), async (req, res) => {
+  const tier = await withServiceClient((client) => inventorycontrol.getEffectiveInventoryTier(client, req.person.id));
+  res.json({ tier });
+});
+
+app.get('/api/inventory/areas', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    const locationId = req.person.role === 'owner' && req.query.locationId ? req.query.locationId : req.person.location_id;
+    return { areas: await inventorycontrol.listAreas(client, locationId) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+app.post('/api/inventory/areas', auth.requireSession('full'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
+    try {
+      const area = await inventorycontrol.createArea(client, {
+        locationId: req.body.locationId || req.person.location_id,
+        name: req.body.name,
+        createdBy: req.person.id,
+      });
+      return { area };
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 400 };
+    }
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.post('/api/inventory/areas/:id/update', auth.requireSession('full'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
+    const area = await inventorycontrol.updateArea(client, req.params.id, req.body || {});
+    return { area };
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.post('/api/inventory/areas/:id/retire', auth.requireSession('full'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
+    const area = await inventorycontrol.retireArea(client, req.params.id);
+    return { area };
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.post('/api/inventory/areas/:id/reactivate', auth.requireSession('full'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
+    const area = await inventorycontrol.reactivateArea(client, req.params.id);
+    return { area };
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.get('/api/inventory/areas/:id/items', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    return { items: await inventorycontrol.listItemsForArea(client, req.params.id) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+app.get('/api/inventory/items/lookup', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    if (!req.query.upc) return { error: 'A UPC is required.', status: 400 };
+    const item = await inventorycontrol.getItemByUpc(client, req.query.upc);
+    return { item: stripCostForTier(item, tier) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+app.get('/api/inventory/items/search', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    const items = await inventorycontrol.searchItems(client, { query: req.query.q });
+    return { items: items.map((i) => stripCostForTier(i, tier)) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+// Unknown-barcode quick add. A Counter can create the catalog row, but
+// any unitCost in the body is silently dropped when their tier is
+// exactly 'counter' — a Counter can add a product, but only Lead+ prices
+// it (see the follow-up /items/:id/update route).
+app.post('/api/inventory/items', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    const body = req.body || {};
+    const canSetCost = inventorycontrol.tierAtLeast(tier, 'lead');
+    try {
+      const item = await inventorycontrol.createItem(client, {
+        name: body.name,
+        category: body.category,
+        upc: body.upc,
+        sizeMl: body.sizeMl,
+        abvPct: body.abvPct,
+        caseSize: body.caseSize,
+        unitCost: canSetCost ? body.unitCost : null,
+        fullWeightG: body.fullWeightG,
+        emptyWeightG: body.emptyWeightG,
+        createdBy: req.person.id,
+        areaId: body.areaId,
+      });
+      return { item: stripCostForTier(item, tier) };
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 400 };
+    }
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.post('/api/inventory/items/:id/update', auth.requireSession('full'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
+    const item = await inventorycontrol.updateItem(client, req.params.id, req.body || {});
+    return { item };
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.post('/api/inventory/items/:id/retire', auth.requireSession('full'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
+    const item = await inventorycontrol.retireItem(client, req.params.id);
+    return { item };
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.post('/api/inventory/items/:id/assign-area', auth.requireSession('full'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
+    if (req.body && req.body.unassign) {
+      return { ok: await inventorycontrol.unassignItemFromArea(client, { itemId: req.params.id, areaId: req.body.areaId }) };
+    }
+    return { ok: await inventorycontrol.assignItemToArea(client, { itemId: req.params.id, areaId: req.body.areaId }) };
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.get('/api/inventory/counts', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    const isLeadPlus = inventorycontrol.tierAtLeast(tier, 'lead');
+    const locationId = req.person.role === 'owner' && req.query.locationId ? req.query.locationId : req.person.location_id;
+    const statusFilter = isLeadPlus ? (req.query.status || null) : 'in_progress';
+    return { counts: await inventorycontrol.listCounts(client, { locationId, statusFilter, limit: 50 }) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+app.post('/api/inventory/counts', auth.requireSession('full'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
+    try {
+      const count = await inventorycontrol.startCount(client, {
+        locationId: req.body.locationId || req.person.location_id,
+        name: req.body.name,
+        mode: req.body.mode,
+        areaIds: req.body.areaIds,
+        startedBy: req.person.id,
+      });
+      return { count };
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 400 };
+    }
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.get('/api/inventory/counts/:id', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    return { count: await inventorycontrol.getCount(client, req.params.id) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+app.get('/api/inventory/counts/:id/progress', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    return { progress: await inventorycontrol.getCountProgress(client, req.params.id) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+app.get('/api/inventory/counts/:id/areas/:areaId/items', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    return { items: await inventorycontrol.listCountItemsForArea(client, { countId: req.params.id, areaId: req.params.areaId }) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+// "Save & scan next" — the one and only blind write.
+app.post('/api/inventory/counts/:id/items', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    const body = req.body || {};
+    try {
+      const countItem = await inventorycontrol.submitItemCount(client, {
+        countId: req.params.id,
+        areaId: body.areaId,
+        itemId: body.itemId,
+        sealedUnits: body.sealedUnits,
+        partials: body.partials,
+        skipped: !!body.skipped,
+        skipReason: body.skipReason,
+        countedBy: req.person.id,
+      });
+      return { countItem };
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 400 };
+    }
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.get('/api/inventory/counts/:id/review', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    return { review: await inventorycontrol.getReviewTally(client, req.params.id) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+// The reveal-computation step — response stays blind for EVERY caller
+// regardless of tier, matching the mockup's own screen order (a blind
+// Submitted confirmation, then a separate Variance report for whoever
+// can see it).
+app.post('/api/inventory/counts/:id/submit', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
+    try {
+      return { confirmation: await inventorycontrol.submitInventoryCount(client, { countId: req.params.id, submittedBy: req.person.id }) };
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 400 };
+    }
+  });
+  if (result && result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.get('/api/inventory/counts/:id/variance', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
+    if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
+    return { variance: await inventorycontrol.getVarianceReport(client, req.params.id) };
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
+// ---- Access management — owner-only, exactly like Cash Handling's own
+// access routes (server/index.js's Cash Handling block, ~line 2560):
+// tier alone is NOT the gate here, even Full authority. Confirmed with
+// Scotto rather than following the discovery doc's wording literally —
+// see the implementation plan's design call (c). ----
+app.get('/api/inventory/access/defaults', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Inventory Control access.' });
+  const defaults = await withServiceClient((client) => inventorycontrol.getPositionDefaults(client));
+  res.json({ defaults });
+});
+app.post('/api/inventory/access/defaults', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Inventory Control access.' });
+  if (!inventorycontrol.TIERS.includes(req.body.tier)) return res.status(400).json({ error: 'Unknown tier.' });
+  const result = await withServiceClient((client) => inventorycontrol.setPositionDefault(client, {
+    positionId: req.body.positionId, tier: req.body.tier, updatedBy: req.person.id,
+  }));
+  res.json({ default: result });
+});
+
+app.get('/api/inventory/access/overrides', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Inventory Control access.' });
+  const people = await withServiceClient((client) => inventorycontrol.listAllEffectiveAccess(client, { locationId: req.query.locationId || null }));
+  res.json({ people });
+});
+app.post('/api/inventory/access/overrides', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Inventory Control access.' });
+  if (!inventorycontrol.TIERS.includes(req.body.tier)) return res.status(400).json({ error: 'Unknown tier.' });
+  if (!req.body.personId) return res.status(400).json({ error: 'A person is required.' });
+  const override = await withServiceClient((client) => inventorycontrol.setAccessOverride(client, {
+    personId: req.body.personId, tier: req.body.tier, setBy: req.person.id, note: req.body.note,
+  }));
+  res.json({ override });
+});
+app.post('/api/inventory/access/overrides/:personId/revert', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Inventory Control access.' });
+  const result = await withServiceClient((client) => inventorycontrol.revertAccessOverride(client, {
+    personId: req.params.personId, revertedBy: req.person.id, note: (req.body || {}).note || null,
+  }));
+  res.json(result);
+});
+
+app.get('/api/inventory/access/log', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can manage Inventory Control access.' });
+  const log = await withServiceClient((client) => inventorycontrol.listAccessChangeLog(client, { personId: req.query.personId || null, limit: 100 }));
+  res.json({ log });
 });
 
 // ---------------- Scheduling ----------------
