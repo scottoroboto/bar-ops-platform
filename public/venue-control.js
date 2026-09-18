@@ -1630,7 +1630,13 @@ function renderDiscoveryResults() {
 function renderDiscoveryRow(d) {
   const adoptAs = DISCOVERY_ADOPT_AS[d.classified_as];
   const alreadyAdopted = !!d.adopted_type;
-  const formOpen = DISCOVERY_ADOPT_OPEN_ID === d.id;
+  // vc_discovery_devices.id is a bigint, which node-postgres hands back as a
+  // STRING; the onclick below embeds it back as a bare number literal. A
+  // strict === between the two never matched, so clicking Adopt flipped
+  // DISCOVERY_ADOPT_OPEN_ID and re-rendered... with the form still closed.
+  // Same Number-vs-String trap the TV remote's "receiving" Set fell into
+  // (see project-status.md). Compare as strings everywhere this id travels.
+  const formOpen = String(DISCOVERY_ADOPT_OPEN_ID) === String(d.id);
   // .list-row is a one-line flex row by default (name | badges | actions side
   // by side) -- fine with three short children, but the adopt form below is
   // a tall block that needs to stack underneath instead of squeezing into
@@ -1644,7 +1650,7 @@ function renderDiscoveryRow(d) {
       <p class="muted" style="margin:4px 0;">${discoveryControlBadges(d)}</p>
       ${!alreadyAdopted && adoptAs
         ? `<div class="stack-actions" style="margin-top:0;">
-             <button class="small ${formOpen ? 'ghost' : 'secondary'}" style="margin-top:0;" onclick="toggleDiscoveryAdoptForm(${d.id})">${formOpen ? 'Cancel' : 'Adopt'}</button>
+             <button class="small ${formOpen ? 'ghost' : 'secondary'}" style="margin-top:0;" onclick="toggleDiscoveryAdoptForm('${d.id}')">${formOpen ? 'Cancel' : 'Adopt'}</button>
            </div>`
         : (!alreadyAdopted ? '<p class="muted" style="margin:2px 0 0;font-size:12px;">Not controllable — no matching driver for this device.</p>' : '')}
       ${formOpen ? renderDiscoveryAdoptForm(d, adoptAs) : ''}
@@ -1652,7 +1658,7 @@ function renderDiscoveryRow(d) {
 }
 
 function toggleDiscoveryAdoptForm(deviceId) {
-  DISCOVERY_ADOPT_OPEN_ID = DISCOVERY_ADOPT_OPEN_ID === deviceId ? null : deviceId;
+  DISCOVERY_ADOPT_OPEN_ID = String(DISCOVERY_ADOPT_OPEN_ID) === String(deviceId) ? null : String(deviceId);
   renderDiscoveryResults();
 }
 
@@ -1673,7 +1679,7 @@ function renderDiscoveryAdoptForm(d, adoptAs) {
         </label>
         <p class="muted" style="margin:8px 0 0;font-size:12px;">Control method: ${escapeHtml(method ? method.method : 'unknown')} (from the scan).</p>
         <div class="stack-actions">
-          <button class="small" onclick="submitDiscoveryAdopt(${d.id}, 'tv')">Adopt this TV</button>
+          <button class="small" onclick="submitDiscoveryAdopt('${d.id}', 'tv')">Adopt this TV</button>
         </div>
       </div>`;
   }
@@ -1686,14 +1692,15 @@ function renderDiscoveryAdoptForm(d, adoptAs) {
       <label>QAM channel</label>
       <input id="discAdoptQam_${d.id}" placeholder="e.g. 14.1">
       <div class="stack-actions">
-        <button class="small" onclick="submitDiscoveryAdopt(${d.id}, 'source')">Adopt this source</button>
+        <button class="small" onclick="submitDiscoveryAdopt('${d.id}', 'source')">Adopt this source</button>
       </div>
     </div>`;
 }
 
 async function submitDiscoveryAdopt(deviceId, as) {
   const locationId = document.getElementById('sourcesLocationSelect').value;
-  const d = DISCOVERY_DEVICES.find((x) => x.id === deviceId);
+  const d = DISCOVERY_DEVICES.find((x) => String(x.id) === String(deviceId));
+  if (!d) { document.getElementById('discoveryStatus').innerHTML = '<p class="msg error">That device is no longer in the scan results — scan again.</p>'; return; }
   let fields;
   if (as === 'tv') {
     const method = (d.control_methods || []).find((m) => m.status === 'available');
