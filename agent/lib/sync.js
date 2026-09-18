@@ -67,11 +67,16 @@ async function pullConfig() {
   return config;
 }
 
+// lanIp rides along on every heartbeat, not just register(): the cloud's
+// "TV Staff" tile links people to this box by the address it last
+// reported, and a box that moves networks (DHCP renew, new switch, the
+// Ticket 1 Pi going from the bench to the bar) would otherwise keep its
+// stale registration-time IP in the cloud until the next restart.
 async function heartbeat(status = 'online') {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/heartbeat`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ status, agentVersion: AGENT_VERSION, configEtag: cache.get('configEtag') }),
+    body: JSON.stringify({ status, agentVersion: AGENT_VERSION, configEtag: cache.get('configEtag'), lanIp: localLanIp() }),
   });
   if (!res.ok) throw new Error(`heartbeat failed: ${res.status} ${await res.text()}`);
   cache.set('lastHeartbeatAt', new Date().toISOString());

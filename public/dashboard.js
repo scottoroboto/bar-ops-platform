@@ -186,13 +186,18 @@ async function employeesReviewCount(person) {
   // all since it's an outside site this platform doesn't control.
   tiles.push(tileHtml({ icon: ICONS.workforce, label: 'Workforce', href: WORKFORCE_URL, external: true }));
 
-  // Venue Control — device-gated, not role-gated (see trustedDevice above).
-  // Currently a placeholder page; the real build (agent + drivers) is a
-  // separate project tracked in docs/venue-control.md.
-  if (person.role === 'owner' || trustedDevice) {
-    // Labeled "TV" on the tile itself for now (Scotto's call) — the page,
-    // icon key, and doc/module name underneath stay "venue control" / "venue-control".
-    tiles.push(tileHtml({ icon: ICONS.venue_control, label: 'TV', href: '/venue-control.html' }));
+  // Venue Control is two tiles now (Scotto, 2026-09-18, the day the Ticket 1
+  // box went live): "TV Admin" is the cloud setup/config page — owner only,
+  // since every route behind it is owner-gated anyway. "TV Staff" is the
+  // hop to the on-site box's own staff pages where live power/volume/
+  // channel control happens; it's for whoever's actually standing at the
+  // bar — the shared iPad (trusted device), the owner, and managers. The
+  // page, icon key, and module name underneath stay "venue-control".
+  if (person.role === 'owner') {
+    tiles.push(tileHtml({ icon: ICONS.venue_control, label: 'TV Admin', href: '/venue-control.html' }));
+  }
+  if (person.role === 'owner' || person.role === 'manager' || trustedDevice) {
+    tiles.push(tileHtml({ icon: ICONS.venue_control, label: 'TV Staff', href: '/tv-staff.html' }));
   }
 
   // Employees replaces the old duplicate "Admin" card — it's just another

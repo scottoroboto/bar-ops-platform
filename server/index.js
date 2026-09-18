@@ -351,6 +351,67 @@ const { rows } = await withServiceClient((client) => client.query(
 res.json(rows);
 });
 
+// Where each location's on-site box is serving its staff pages RIGHT NOW.
+// The agent reports its LAN IP on every heartbeat (vc_agents.lan_ip), so
+// this is always the current address even after a DHCP change or a move
+// between networks -- the "TV Staff" dashboard tile links through here
+// rather than to a hard-coded IP. Only useful from the bar's own LAN
+// (the box isn't reachable from the internet, by design), which is the
+// whole point: this is the shared-iPad / on-shift path, not remote admin.
+//
+// Who sees which locations: the owner sees all; a manager sees their own
+// location; a trusted shared device (deviceToken) sees its location.
+// Anyone else gets an empty list, same posture as the dashboard tile.
+// Port is the agent's default 8088 -- it isn't reported on heartbeat yet,
+// so a box running on a different PORT would need this extended.
+app.get('/api/venue-control/staff-links', auth.requireSession('light'), async (req, res) => {
+let locationIds = null; // null = all
+if (req.person.role === 'owner') {
+locationIds = null;
+} else if (req.person.role === 'manager' && req.person.location_id) {
+locationIds = [req.person.location_id];
+} else {
+const token = req.query.deviceToken;
+if (!token) return res.json([]);
+const { rows } = await withServiceClient((client) => client.query('SELECT location_id FROM devices WHERE device_token = $1', [token]));
+if (!rows[0]) return res.json([]);
+locationIds = [rows[0].location_id];
+}
+const params = [];
+let where = 'vs.enabled = true AND l.active = true';
+if (locationIds) { params.push(locationIds); where += ` AND l.id = ANY($${params.length}::uuid[])`; }
+const { rows } = await withServiceClient((client) => client.query(
+`SELECT l.id AS location_id, l.name AS location_name,
+        va.lan_ip, va.status AS agent_status, va.last_seen_at AS agent_last_seen_at
+   FROM locations l
+   JOIN vc_sites vs ON vs.location_id = l.id
+   LEFT JOIN LATERAL (
+     SELECT lan_ip, status, last_seen_at FROM vc_agents
+      WHERE site_id = vs.id ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1
+   ) va ON true
+   WHERE ${where}
+   ORDER BY l.name`,
+params
+));
+const STALE_MS = 2 * 60 * 1000; // no heartbeat in 2 min = treat as offline, whatever status says
+const now = Date.now();
+res.json(rows.map((r) => {
+const seen = r.agent_last_seen_at ? new Date(r.agent_last_seen_at).getTime() : 0;
+// lan_ip is agent-reported; only ever turn a plain IPv4 into a link, so a
+// misbehaving box can't inject anything into the page that renders this.
+const lanIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(r.lan_ip || '') ? r.lan_ip : null;
+const online = r.agent_status === 'online' && (now - seen) < STALE_MS && !!lanIp;
+return {
+locationId: r.location_id,
+locationName: r.location_name,
+online,
+lanIp,
+lastSeenAt: r.agent_last_seen_at,
+url: lanIp ? `http://${lanIp}:8088/staff_tvs.html` : null,
+};
+}));
+});
+
 app.post('/api/venue-control/sites/:locationId/set-enabled', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 const enabled = !!req.body.enabled;
@@ -765,12 +826,16 @@ res.set('ETag', etag);
 res.json(config);
 });
 
+// lanIp is optional (older agents don't send it); when present it refreshes
+// the address the staff-links route hands out, so a box that changes
+// networks is findable again within one heartbeat instead of one restart.
 app.post('/api/venue/agent/heartbeat', requireAgentAuth(), async (req, res) => {
-const { status, agentVersion, configEtag } = req.body || {};
+const { status, agentVersion, configEtag, lanIp } = req.body || {};
 await withServiceClient((client) => client.query(
-`UPDATE vc_agents SET status=$1, agent_version=COALESCE($2, agent_version), config_etag=COALESCE($3, config_etag), last_seen_at=now()
+`UPDATE vc_agents SET status=$1, agent_version=COALESCE($2, agent_version), config_etag=COALESCE($3, config_etag),
+        lan_ip=COALESCE($5, lan_ip), last_seen_at=now()
    WHERE site_id=$4`,
-[status || 'online', agentVersion, configEtag, req.vcSite.site_id]
+[status || 'online', agentVersion, configEtag, req.vcSite.site_id, lanIp || null]
 ));
 res.json({ ok: true });
 });
