@@ -31,6 +31,31 @@ function randomPin() {
   return String(crypto.randomInt(0, 10000)).padStart(4, '0');
 }
 
+// Where the app lives, for links in outbound email (the sign-in page is
+// the root URL — public/index.html). APP_BASE_URL overrides when the
+// address ever changes; the fallback is the current Render URL.
+function appBaseUrl() {
+  return (process.env.APP_BASE_URL || 'https://bar-ops-platform-52n1.onrender.com').replace(/\/$/, '');
+}
+
+// The "your account is ready" email, shared by first activation and by
+// resendCredentials so the two can never drift. Per Scotto: it has to
+// carry a link to sign in (people were getting the email with no idea
+// where to go), and it has to say the one-time code comes to THIS email
+// address — SMS isn't configured, so the code is routed to email (see
+// server/auth.js loginWithPassword).
+function welcomeEmailText({ username, tempPassword, pin, enabledApps }) {
+  return `Welcome! Your account is set up.\n\n` +
+    `Sign in here: ${appBaseUrl()}\n\n` +
+    `Username: ${username}\n` +
+    `Temporary password: ${tempPassword}\n` +
+    `Your PIN for everyday clock-in/service-call use: ${pin}\n\n` +
+    `The first time you sign in, use your username and temporary password. ` +
+    `We'll email a 6-digit code to this address to confirm it's you — enter that and you're in. ` +
+    `After that, your PIN is all you need day to day.\n\n` +
+    `You now have access to: ${enabledApps.join(', ') || '(nothing yet — ask your manager)'}`;
+}
+
 // ---------------------------------------------------------------------
 // Creates a pending_review record — this is what a Jotform submission
 // (or, for now, the manual "add pending employee" form) produces. Only
@@ -167,7 +192,7 @@ async function activateEmployee({ personId, appAccess, networkAccess, activatedB
 
     if (tempPassword && person.email) {
       const enabledApps = APP_KEYS.filter(k => appAccess && appAccess[k]);
-      const text = `Welcome! Your account is set up.\n\nUsername: ${username}\nTemporary password: ${tempPassword} (you'll verify with a one-time code the first time you use it)\nYour PIN for everyday clock-in/service-call use: ${pin}\n\nYou now have access to: ${enabledApps.join(', ') || '(nothing yet — ask your manager)'}`;
+      const text = welcomeEmailText({ username, tempPassword, pin, enabledApps });
       await notify.sendEmail(client, 'people', personId, person.email, 'Your account is ready', text);
     }
 
@@ -226,7 +251,7 @@ async function resendCredentials({ personId, resentBy }) {
 
     let emailed = false;
     if (person.email) {
-      const text = `Welcome! Your account is set up.\n\nUsername: ${person.username}\nTemporary password: ${tempPassword} (you'll verify with a one-time code the first time you use it)\nYour PIN for everyday clock-in/service-call use: ${pin}\n\nYou now have access to: ${enabledApps.join(', ') || '(nothing yet — ask your manager)'}`;
+      const text = welcomeEmailText({ username: person.username, tempPassword, pin, enabledApps });
       const result = await notify.sendEmail(client, 'people', personId, person.email, 'Your account is ready', text);
       emailed = !!(result.ok && !result.simulated);
     }
@@ -376,7 +401,7 @@ async function discardPending({ personId }) {
 async function sendOnboardingInvite({ toEmail, toName, sentBy }) {
   if (!toEmail) return { ok: false, error: 'Email is required.' };
   return withServiceClient(async (client) => {
-    const link = `${(process.env.APP_BASE_URL || 'https://bar-ops-platform-52n1.onrender.com').replace(/\/$/, '')}/apply.html`;
+    const link = `${appBaseUrl()}/apply.html`;
     const greeting = toName ? `Hi ${toName},` : 'Hi,';
     const text = `${greeting}\n\nYou've been invited to apply to join the team at Ticket Sports Bar. It only takes about a minute:\n\n${link}\n\nSee you soon!`;
     const result = await notify.sendEmail(client, 'onboarding_invite', crypto.randomUUID(), toEmail, 'Join the team at Ticket Sports Bar', text);

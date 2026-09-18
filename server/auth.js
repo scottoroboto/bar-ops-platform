@@ -57,7 +57,13 @@ if (!person.password_verified_at) {
 // First time this credential has ever been used — require a one-time code.
 const code = randomCode();
 const codeHash = hashToken(code);
-const channel = person.phone ? 'sms' : 'email';
+// Only route the code to SMS when SMS can actually be delivered. Before
+// this check, anyone with a phone number on file got 'sms' — and with
+// Twilio unconfigured, notify.sendSms just logged it as 'simulated', so
+// the login page told them "we sent a code to your phone" and nothing
+// ever arrived (Ryan, 2026-09-18). Email is the fallback whenever SMS
+// isn't wired up, and the login page's hint text follows this value.
+const channel = (person.phone && notify.smsConfigured()) ? 'sms' : 'email';
 await client.query(
 `INSERT INTO verification_codes (person_id, code_hash, channel, purpose, expires_at)
 VALUES ($1,$2,$3,'first_login', now() + interval '${CODE_TTL_MINUTES} minutes')`,
