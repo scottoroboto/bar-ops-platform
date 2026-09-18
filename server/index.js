@@ -1914,6 +1914,16 @@ const result = await employees.activateEmployee({ personId: req.params.id, appAc
 res.json(result);
 });
 
+// Owner-only. Re-sends fresh credentials to someone who's active but never
+// completed their first login — see employees.resendCredentials for why
+// this can't just resend the original password. Step-up gated like
+// activate, since it's handing out a working login.
+app.post('/api/employees/:id/resend-credentials', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can resend credentials.' });
+const result = await employees.resendCredentials({ personId: req.params.id, resentBy: req.person.id });
+res.json(result);
+});
+
 app.post('/api/employees/:id/app-access', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change app access.' });
 const result = await employees.setAppAccess({ personId: req.params.id, appKey: req.body.appKey, enabled: req.body.enabled, updatedBy: req.person.id });

@@ -593,6 +593,21 @@ function openEmployeeDetail(id) {
   }
   document.getElementById('detailResult').innerHTML = '';
 
+  // Resend credentials — only while they're active but have never
+  // actually completed a first login (password_verified_at null). Once
+  // that's set, either they signed in for real or a reset already
+  // covered it, and "Forgot?" on the login page is the right tool from
+  // there, not this.
+  const canResendCreds = isOwner && p.status === 'active' && p.username && !p.password_verified_at;
+  document.getElementById('detailCredentialsFields').style.display = canResendCreds ? '' : 'none';
+  if (canResendCreds) {
+    const first = (p.name || '').split(' ')[0] || 'They';
+    document.getElementById('detailCredentialsHint').textContent = p.email
+      ? `${first} hasn't signed in yet. If the original "account is ready" email never reached them, resend it with new credentials.`
+      : `${first} hasn't signed in yet, and has no email on file — resending will only generate new credentials here for you to hand over.`;
+  }
+  document.getElementById('detailCredentialsResult').innerHTML = '';
+
   document.getElementById('detailNetworkAccessFields').style.display = isOwner ? '' : 'none';
   if (isOwner) renderDetailNetworkAccess(p);
 
@@ -650,6 +665,27 @@ async function removeCertification(certId) {
     openEmployeeDetail(id);
   } catch (e) {
     showMsg(e.message, 'error');
+  }
+}
+
+async function submitResendCredentials() {
+  const id = document.getElementById('detailPersonId').value;
+  try {
+    const result = await withStepUp(() => api(`/api/employees/${id}/resend-credentials`, { method: 'POST' }));
+    if (!result.ok) { document.getElementById('detailCredentialsResult').innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
+    let box = `<div class="msg success">${result.emailed ? 'New credentials sent.' : 'New credentials generated.'}</div>`;
+    box += `<div class="credential-box">
+      <b>Username:</b> ${escapeHtml(result.username)}<br>
+      <b>Temp password:</b> ${escapeHtml(result.tempPassword)}<br>
+      <b>PIN:</b> ${escapeHtml(result.pin)}<br>
+      <span class="muted">${result.emailed
+        ? 'Emailed to them just now — worth confirming it actually lands this time.'
+        : (result.hasEmail ? 'Notifications are off or email isn’t configured, so nothing was actually emailed — hand these over directly.' : 'No email on file — hand these over directly.')}</span>
+    </div>`;
+    document.getElementById('detailCredentialsResult').innerHTML = box;
+    await loadAllEmployees();
+  } catch (e) {
+    document.getElementById('detailCredentialsResult').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
 }
 

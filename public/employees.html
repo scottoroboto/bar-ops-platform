@@ -230,6 +230,15 @@
     <div id="detailResult"></div>
   </div>
 
+  <div id="detailCredentialsFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">
+    <div class="detail-label" style="margin-bottom:10px;">Credentials (owner)</div>
+    <p class="muted" style="margin-top:-6px;" id="detailCredentialsHint"></p>
+    <div class="stack-actions">
+      <button class="secondary" style="margin-top:0;" onclick="submitResendCredentials()">Resend credentials</button>
+    </div>
+    <div id="detailCredentialsResult"></div>
+  </div>
+
   <div id="detailNetworkAccessFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">
     <div class="detail-label" style="margin-bottom:10px;">Critical Systems access (owner)</div>
     <p class="muted" style="margin-top:-6px;">Which bar's WAN/LAN/WAP row this person sees on their dashboard.</p>

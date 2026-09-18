@@ -176,6 +176,66 @@ async function activateEmployee({ personId, appAccess, networkAccess, activatedB
   });
 }
 
+// ---------------------------------------------------------------------
+// Owner-only. Re-sends the same "your account is ready" credentials
+// email activateEmployee sends once at first activation — built for
+// exactly the situation that showed up with Ryan: the account is active
+// and ready, but the original email never reached him, and there's no
+// way to log in without it.
+//
+// Can't literally resend the SAME password — only its bcrypt hash is
+// ever stored, never the plaintext — so this mints a brand-new temp
+// password/PIN every time, the same as a credential reset does. The one
+// real difference from resetRequests.decideReset: this does NOT set
+// password_verified_at, so the person still goes through the normal
+// one-time-code first-login flow in auth.js when they actually sign in
+// — there's no phone call substituting for that check here, the owner
+// is just re-delivering what should have arrived the first time.
+//
+// Only usable before that first real login ever completes: once
+// password_verified_at is set (from a genuine first login, or from an
+// owner-approved reset), this refuses — at that point the "Forgot?"
+// self-service flow on the login page is the right tool, not a blind
+// resend of new credentials to someone who's already using the old ones.
+// ---------------------------------------------------------------------
+async function resendCredentials({ personId, resentBy }) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query('SELECT * FROM people WHERE id = $1', [personId]);
+    const person = rows[0];
+    if (!person) return { ok: false, error: 'Employee not found.' };
+    if (person.status !== 'active') return { ok: false, error: 'Not active yet — activate them first.' };
+    if (!person.username) return { ok: false, error: 'No credentials to resend yet.' };
+    if (person.password_verified_at) {
+      return { ok: false, error: "They've already signed in once — use a credential reset instead of a resend." };
+    }
+
+    const tempPassword = randomPassword();
+    const pin = randomPin();
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
+    const pinHash = await bcrypt.hash(pin, 10);
+    await client.query(
+      'UPDATE people SET password_hash = $1, pin_hash = $2, updated_at = now() WHERE id = $3',
+      [passwordHash, pinHash, personId]
+    );
+
+    const { rows: accessRows } = await client.query(
+      'SELECT app_key FROM employee_apps WHERE person_id = $1 AND enabled = true',
+      [personId]
+    );
+    const enabledApps = accessRows.map(r => r.app_key);
+
+    let emailed = false;
+    if (person.email) {
+      const text = `Welcome! Your account is set up.\n\nUsername: ${person.username}\nTemporary password: ${tempPassword} (you'll verify with a one-time code the first time you use it)\nYour PIN for everyday clock-in/service-call use: ${pin}\n\nYou now have access to: ${enabledApps.join(', ') || '(nothing yet — ask your manager)'}`;
+      const result = await notify.sendEmail(client, 'people', personId, person.email, 'Your account is ready', text);
+      emailed = !!(result.ok && !result.simulated);
+    }
+    console.log(`[employees] credentials resent for ${person.username} (person ${personId}) by ${resentBy} — emailed=${emailed}`);
+
+    return { ok: true, username: person.username, tempPassword, pin, emailed, hasEmail: !!person.email };
+  });
+}
+
 // Owner can revisit toggles at any point during employment — not just at onboarding.
 async function setAppAccess({ personId, appKey, enabled, updatedBy }) {
   if (!APP_KEYS.includes(appKey)) return { ok: false, error: 'Unknown app.' };
@@ -246,6 +306,7 @@ async function listAllWithAccess(locationFilter) {
     }
     const { rows: people } = await client.query(
       `SELECT id, name, role, location_id, username, email, phone, address, status, position, pay_rate,
+              password_verified_at,
               activated_at, COALESCE(activated_at, created_at) AS hire_date
        FROM people WHERE ${where} ORDER BY name`,
       params
@@ -532,7 +593,7 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 }
 
 module.exports = {
-  createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, setAppAccess,
+  createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
   getNetworkAccessForPerson, setNetworkAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
   setEmployeeStatus, requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,
