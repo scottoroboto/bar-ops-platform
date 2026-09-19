@@ -179,9 +179,17 @@ function renderAgentRow(s) {
     statusText = `${stale ? 'offline' : 'online'} — ${escapeHtml(s.agent_hostname)}, last seen ${formatAgo(ageMs)}`;
     statusClass = stale ? 'off' : 'on';
   }
+  // Same public-IP comparison TV Staff uses (server-side, same_network):
+  // tells the owner at a glance whether the device they're holding is on
+  // this bar's internet connection. Can't see VLANs -- same SSID on a
+  // different VLAN still fails the LAN link -- so it's a hint, not a gate.
+  let netNote = '';
+  if (s.agent_hostname && s.same_network === true) netNote = `<span class="badge on" title="Your device and this box share a public IP">you’re on this bar’s network</span>`;
+  else if (s.agent_hostname && s.same_network === false) netNote = `<span class="badge stale" title="Your device's public IP differs from this box's — the LAN address won't load from here">network mismatch</span>`;
+  const lanNote = s.agent_lan_ip ? `<span class="muted">LAN ${escapeHtml(s.agent_lan_ip)}</span>` : '';
   return `
     <div class="muted" style="margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-      <span>Agent: <span class="badge ${statusClass}">${statusText}</span></span>
+      <span>Agent: <span class="badge ${statusClass}">${statusText}</span></span>${lanNote}${netNote}
       <button class="small ghost" onclick="generateAgentToken('${s.location_id}')">${s.has_agent_token ? 'Regenerate agent token' : 'Generate agent token'}</button>
     </div>`;
 }

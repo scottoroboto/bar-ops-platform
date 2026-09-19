@@ -339,16 +339,25 @@ const { rows } = await withServiceClient((client) => client.query(
 `SELECT l.id AS location_id, l.name AS location_name, l.active AS location_active,
         vs.id AS site_id, vs.enabled AS site_enabled,
         vs.agent_token_hash IS NOT NULL AS has_agent_token,
-        va.hostname AS agent_hostname, va.status AS agent_status, va.last_seen_at AS agent_last_seen_at
+        va.hostname AS agent_hostname, va.status AS agent_status, va.last_seen_at AS agent_last_seen_at,
+        va.lan_ip AS agent_lan_ip, va.public_ip AS agent_public_ip
    FROM locations l
    LEFT JOIN vc_sites vs ON vs.location_id = l.id
    LEFT JOIN LATERAL (
-     SELECT hostname, status, last_seen_at FROM vc_agents
+     SELECT hostname, status, last_seen_at, lan_ip, public_ip FROM vc_agents
       WHERE site_id = vs.id ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1
    ) va ON true
    ORDER BY l.name`
 ));
-res.json(rows);
+// Same public-IP comparison the TV Staff page uses (see staff-links
+// below): lets TV Admin say "you're on this box's network" / "you're
+// not" next to each site, so a dead LAN link is explained, not mysterious.
+const myPublicIp = clientPublicIp(req);
+res.json(rows.map((r) => ({
+...r,
+agent_public_ip: undefined,
+same_network: (r.agent_public_ip && myPublicIp) ? r.agent_public_ip === myPublicIp : null,
+})));
 });
 
 // Where each location's on-site box is serving its staff pages RIGHT NOW.
@@ -382,11 +391,11 @@ let where = 'vs.enabled = true AND l.active = true';
 if (locationIds) { params.push(locationIds); where += ` AND l.id = ANY($${params.length}::uuid[])`; }
 const { rows } = await withServiceClient((client) => client.query(
 `SELECT l.id AS location_id, l.name AS location_name,
-        va.lan_ip, va.status AS agent_status, va.last_seen_at AS agent_last_seen_at
+        va.lan_ip, va.public_ip, va.status AS agent_status, va.last_seen_at AS agent_last_seen_at
    FROM locations l
    JOIN vc_sites vs ON vs.location_id = l.id
    LEFT JOIN LATERAL (
-     SELECT lan_ip, status, last_seen_at FROM vc_agents
+     SELECT lan_ip, public_ip, status, last_seen_at FROM vc_agents
       WHERE site_id = vs.id ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1
    ) va ON true
    WHERE ${where}
@@ -395,18 +404,23 @@ params
 ));
 const STALE_MS = 2 * 60 * 1000; // no heartbeat in 2 min = treat as offline, whatever status says
 const now = Date.now();
+const myPublicIp = clientPublicIp(req);
 res.json(rows.map((r) => {
 const seen = r.agent_last_seen_at ? new Date(r.agent_last_seen_at).getTime() : 0;
 // lan_ip is agent-reported; only ever turn a plain IPv4 into a link, so a
 // misbehaving box can't inject anything into the page that renders this.
 const lanIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(r.lan_ip || '') ? r.lan_ip : null;
 const online = r.agent_status === 'online' && (now - seen) < STALE_MS && !!lanIp;
+// true/false when both sides are known, null when we can't tell (older
+// agent that hasn't reported a public IP yet, or no client address).
+const sameNetwork = (r.public_ip && myPublicIp) ? r.public_ip === myPublicIp : null;
 return {
 locationId: r.location_id,
 locationName: r.location_name,
 online,
 lanIp,
 lastSeenAt: r.agent_last_seen_at,
+sameNetwork,
 url: lanIp ? `http://${lanIp}:8088/staff_tvs.html` : null,
 };
 }));
@@ -705,8 +719,20 @@ schedules: (payload.schedules || []).length,
 // Agent calls this on every boot. Keeps exactly one vc_agents row current
 // per site (updates the most-recently-seen row if one exists) rather than
 // growing a new row every restart -- a site normally has one agent box.
+// The public address a request reached us from. Render terminates TLS
+// and forwards with X-Forwarded-For (client first, then any proxies);
+// the app doesn't set Express's trust-proxy globally, so read it here
+// explicitly. Used only to compare an agent's WAN address against the
+// person's -- see db/patch_030_vc_agents_public_ip.sql -- never for auth.
+function clientPublicIp(req) {
+const xff = String(req.get('x-forwarded-for') || '').split(',')[0].trim();
+const ip = xff || req.ip || '';
+return ip.replace(/^::ffff:/, '') || null;
+}
+
 app.post('/api/venue/agent/register', requireAgentAuth(), async (req, res) => {
 const { hostname, agentVersion, platform, lanIp } = req.body || {};
+const publicIp = clientPublicIp(req);
 const agent = await withServiceClient(async (client) => {
 const { rows: existing } = await client.query(
 'SELECT id FROM vc_agents WHERE site_id = $1 ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1',
@@ -714,16 +740,16 @@ const { rows: existing } = await client.query(
 );
 if (existing[0]) {
 const { rows } = await client.query(
-`UPDATE vc_agents SET hostname=$1, lan_ip=$2, agent_version=$3, platform=$4, status='online', last_seen_at=now()
+`UPDATE vc_agents SET hostname=$1, lan_ip=$2, agent_version=$3, platform=$4, public_ip=$6, status='online', last_seen_at=now()
    WHERE id=$5 RETURNING id`,
-[hostname, lanIp, agentVersion, platform, existing[0].id]
+[hostname, lanIp, agentVersion, platform, existing[0].id, publicIp]
 );
 return rows[0];
 }
 const { rows } = await client.query(
-`INSERT INTO vc_agents (site_id, hostname, lan_ip, agent_version, platform, status, last_seen_at)
-   VALUES ($1,$2,$3,$4,$5,'online', now()) RETURNING id`,
-[req.vcSite.site_id, hostname, lanIp, agentVersion, platform]
+`INSERT INTO vc_agents (site_id, hostname, lan_ip, agent_version, platform, public_ip, status, last_seen_at)
+   VALUES ($1,$2,$3,$4,$5,$6,'online', now()) RETURNING id`,
+[req.vcSite.site_id, hostname, lanIp, agentVersion, platform, publicIp]
 );
 return rows[0];
 });
@@ -833,9 +859,9 @@ app.post('/api/venue/agent/heartbeat', requireAgentAuth(), async (req, res) => {
 const { status, agentVersion, configEtag, lanIp } = req.body || {};
 await withServiceClient((client) => client.query(
 `UPDATE vc_agents SET status=$1, agent_version=COALESCE($2, agent_version), config_etag=COALESCE($3, config_etag),
-        lan_ip=COALESCE($5, lan_ip), last_seen_at=now()
+        lan_ip=COALESCE($5, lan_ip), public_ip=COALESCE($6, public_ip), last_seen_at=now()
    WHERE site_id=$4`,
-[status || 'online', agentVersion, configEtag, req.vcSite.site_id, lanIp || null]
+[status || 'online', agentVersion, configEtag, req.vcSite.site_id, lanIp || null, clientPublicIp(req)]
 ));
 res.json({ ok: true });
 });
