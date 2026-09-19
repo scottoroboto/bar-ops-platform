@@ -251,11 +251,17 @@ async function setPower(tv, desiredState) {
       // a wake that WORKED was still reported as a failure almost every
       // time (Scotto's home TV, 2026-09-18: off -> on took ~12s). Poll
       // every 2s for up to 25s and stop the moment it answers.
+      // ...and keep RE-SENDING the wake every 2s while waiting, not just
+      // once up front. A Samsung's WiFi radio in standby listens in duty
+      // cycles, so a burst of packets can all land in one gap -- Scotto's
+      // first real test: single Power On failed every time, "All TVs on"
+      // succeeded on the second press, i.e. the second packet is what
+      // woke it. Repeating during the wait makes the first press do that.
       try {
-        await wol.sendMagicPacket(tv.mac, { ip: tv.ip });
         method = 'wol';
-        const deadline = Date.now() + 25000;
+        const deadline = Date.now() + 30000;
         while (Date.now() < deadline) {
+          await wol.sendMagicPacket(tv.mac, { ip: tv.ip }).catch(() => {});
           await sleep(2000);
           after = await getPowerState(tv);
           if (after === 'on') break;
