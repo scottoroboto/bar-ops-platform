@@ -341,6 +341,18 @@ function findTv(idParam) {
 // prompt -- see docs/venue-control.md §7.2 and lib/sync.js's reportTvToken.
 function maybeReportToken(tv, result) {
   if (result && result.token && result.token !== tv.ws_token) {
+    // Apply it to the synced config in memory RIGHT NOW, not just up in
+    // the cloud. Until the next 30s config pull brought the token back
+    // down, every command in that window reconnected token-less, so the
+    // TV re-prompted "Allow this device?" on each press and minted a
+    // fresh token every time -- Scotto hit Allow 5-6 times pairing his
+    // first real TV (2026-09-18). One Allow is the contract.
+    const config = cache.get('config');
+    if (config && Array.isArray(config.tvs)) {
+      const row = config.tvs.find((t) => Number(t.id) === Number(tv.id));
+      if (row) { row.ws_token = result.token; cache.set('config', config); }
+    }
+    tv.ws_token = result.token;
     sync.reportTvToken(tv.id, result.token).catch((err) => console.error('[server] failed to push captured ws_token:', err.message));
   }
 }

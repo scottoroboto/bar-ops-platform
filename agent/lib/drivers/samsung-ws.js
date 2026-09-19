@@ -244,10 +244,25 @@ async function setPower(tv, desiredState) {
 
   if (desiredState === 'on') {
     if (before === 'on') return { ok: true, requested: desiredState, state: 'on', changed: false, method: 'none' };
+    let after = before;
     if (tv.wol_enabled && tv.mac) {
-      try { await wol.sendMagicPacket(tv.mac); method = 'wol'; await sleep(3000); } catch (err) { /* fall through to ST below */ }
+      // A Samsung coming up from network standby takes anywhere from ~5s
+      // to ~20s before it answers on :8001 -- the old fixed 3s wait meant
+      // a wake that WORKED was still reported as a failure almost every
+      // time (Scotto's home TV, 2026-09-18: off -> on took ~12s). Poll
+      // every 2s for up to 25s and stop the moment it answers.
+      try {
+        await wol.sendMagicPacket(tv.mac, { ip: tv.ip });
+        method = 'wol';
+        const deadline = Date.now() + 25000;
+        while (Date.now() < deadline) {
+          await sleep(2000);
+          after = await getPowerState(tv);
+          if (after === 'on') break;
+        }
+      } catch (err) { /* fall through to ST below */ }
     }
-    let after = await getPowerState(tv);
+    if (after !== 'on') after = await getPowerState(tv);
     if (after !== 'on' && samsungSt.configured() && tv.st_device_id) {
       try {
         await samsungSt.switchOn(tv.st_device_id);

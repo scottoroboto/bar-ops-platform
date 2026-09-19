@@ -322,9 +322,17 @@ function renderTvsColumn() {
         </div>
       </div>`;
 
+  // Three different "empty" cases, and the old single message ("No TVs
+  // configured yet") was flat wrong for the common one: TVs exist but none
+  // is flagged channel-capable yet, so the source-picking grid has nothing
+  // to show even though TV Remote would list every one of them.
+  let emptyMsg;
+  if (!TVS.length) emptyMsg = 'No TVs configured yet. Add one from TSB Platform: TV Admin &rarr; TVs.';
+  else if (!TV_REMOTE_OPEN && !pickableTvs().length) emptyMsg = `${TVS.length} TV${TVS.length === 1 ? '' : 's'} configured, but none marked channel-capable yet — so there's nothing to move between sources here. Use <b>TV Remote</b> above for power and volume; turn on "Channel capable" in TV Admin &rarr; TVs once you've confirmed a set changes channels.`;
+  else emptyMsg = 'No TVs to show.';
   const groupsHtml = groups.length
     ? groups.map((g) => zoneGroupHtml(g)).join('')
-    : '<p class="muted">No TVs configured yet. Add one from TSB Platform: Venue Control &rarr; TVs.</p>';
+    : `<p class="muted">${emptyMsg}</p>`;
 
   box.innerHTML = header + `<div class="tvz-scroll">${groupsHtml}</div>` + commitBarHtml();
 }
