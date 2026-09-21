@@ -147,7 +147,13 @@ async function listSchedulesPublic() {
   });
 }
 
-async function saveSchedule({ id, locationId, name }) {
+// grantManagerId: when a manager adds a schedule (allowed since
+// 2026-09-21, at their own location only — see the route), they're
+// checked into manager_schedules for it in the same transaction, so the
+// schedule they just made is usable immediately rather than waiting on
+// the owner to assign it. Owners manage everything already, so the
+// route passes nothing for them.
+async function saveSchedule({ id, locationId, name, grantManagerId }) {
   const trimmed = (name || '').trim();
   if (!trimmed || !locationId) return { ok: false, error: 'Location and name are required.' };
   return withServiceClient(async (client) => {
@@ -163,6 +169,12 @@ async function saveSchedule({ id, locationId, name }) {
       `INSERT INTO schedules (location_id, name) VALUES ($1,$2) RETURNING *`,
       [locationId, trimmed]
     );
+    if (grantManagerId) {
+      await client.query(
+        'INSERT INTO manager_schedules (person_id, schedule_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [grantManagerId, rows[0].id]
+      );
+    }
     return { ok: true, schedule: rows[0] };
   });
 }
@@ -189,10 +201,21 @@ async function restoreSchedule(id) {
 // manager can manage. Each is replaced wholesale on save, same pattern as
 // Service Calls' destination-members save.
 // =========================================================
+// Only people with the Scheduling app turned on (Employees > toggles)
+// appear in the scheduler at all — as a grid row, in the shift modal's
+// person picker, or in Setup (Scotto, 2026-09-21: "if an employee doesn't
+// have schedule turned on in admin, they shouldn't be listed"). Same
+// employee_apps row the dashboard tile and self-service routes key off,
+// so turning it off in Employees removes them here in one step. Published
+// shifts for someone switched off afterwards stay in the database and
+// still count elsewhere (cash audits); they just have no row to show on.
 async function getEmployeesForScheduling() {
   return withServiceClient(async (client) => {
     const { rows: people } = await client.query(
-      `SELECT id, name, role, location_id, status FROM people WHERE status = 'active' ORDER BY name`
+      `SELECT p.id, p.name, p.role, p.location_id, p.status FROM people p
+       WHERE p.status = 'active'
+         AND EXISTS (SELECT 1 FROM employee_apps ea WHERE ea.person_id = p.id AND ea.app_key = 'scheduling' AND ea.enabled = true)
+       ORDER BY p.name`
     );
     const [{ rows: es }, { rows: ep }, { rows: ms }] = await Promise.all([
       client.query('SELECT person_id, schedule_id FROM employee_schedules'),
@@ -364,10 +387,11 @@ async function getWeekShifts(scheduleIds, weekStartISO) {
   const dates = weekDateRange(weekStartISO);
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `SELECT sh.*, p.name AS person_name, s.name AS schedule_name, pos.name AS position_name
+      `SELECT sh.*, p.name AS person_name, s.name AS schedule_name, l.name AS location_name, pos.name AS position_name
        FROM shifts sh
        JOIN people p ON p.id = sh.person_id
        JOIN schedules s ON s.id = sh.schedule_id
+       JOIN locations l ON l.id = s.location_id
        JOIN positions pos ON pos.id = sh.position_id
        WHERE sh.schedule_id = ANY($1) AND sh.status != 'cancelled' AND sh.shift_date = ANY($2)`,
       [ids, dates]
@@ -384,10 +408,11 @@ async function getShiftsForPrint(scheduleIds, weekStartISO, numWeeks) {
   const dates = Array.from({ length: n * 7 }, (_, i) => addDaysToDateStr(weekStartISO, i));
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `SELECT sh.*, p.name AS person_name, s.name AS schedule_name, pos.name AS position_name
+      `SELECT sh.*, p.name AS person_name, s.name AS schedule_name, l.name AS location_name, pos.name AS position_name
        FROM shifts sh
        JOIN people p ON p.id = sh.person_id
        JOIN schedules s ON s.id = sh.schedule_id
+       JOIN locations l ON l.id = s.location_id
        JOIN positions pos ON pos.id = sh.position_id
        WHERE sh.schedule_id = ANY($1) AND sh.status != 'cancelled' AND sh.shift_date = ANY($2)
        ORDER BY sh.shift_date, sh.start_time`,
@@ -423,21 +448,33 @@ async function getWeekShiftsWithDrafts(scheduleIds, weekStartISO, personId) {
       if (d.action === 'create') {
         const [{ rows: pr }, { rows: sr }, { rows: por }] = await Promise.all([
           client.query('SELECT name FROM people WHERE id = $1', [d.person_id]),
-          client.query('SELECT name FROM schedules WHERE id = $1', [d.schedule_id]),
+          client.query('SELECT s.name, l.name AS location_name FROM schedules s JOIN locations l ON l.id = s.location_id WHERE s.id = $1', [d.schedule_id]),
           client.query('SELECT name FROM positions WHERE id = $1', [d.position_id]),
         ]);
         byKey['newdraft-' + d.id] = {
           id: null, person_id: d.person_id, schedule_id: d.schedule_id, position_id: d.position_id,
           shift_date: d.shift_date, start_time: d.start_time, end_time: d.end_time, status: 'scheduled',
-          person_name: pr[0] && pr[0].name, schedule_name: sr[0] && sr[0].name, position_name: por[0] && por[0].name,
+          person_name: pr[0] && pr[0].name, schedule_name: sr[0] && sr[0].name, location_name: sr[0] && sr[0].location_name,
+          position_name: por[0] && por[0].name,
           isDraft: true, draftAction: 'create', draftId: d.id,
         };
       } else if (d.action === 'update' && d.target_shift_id) {
         if (byKey[d.target_shift_id]) {
+          const live = byKey[d.target_shift_id];
+          // An update can move a shift to another schedule (and so
+          // another location) or position — relabel from the draft's
+          // targets, not the live row's.
+          const [{ rows: sr }, { rows: por }] = await Promise.all([
+            client.query('SELECT s.name, l.name AS location_name FROM schedules s JOIN locations l ON l.id = s.location_id WHERE s.id = $1', [d.schedule_id]),
+            client.query('SELECT name FROM positions WHERE id = $1', [d.position_id]),
+          ]);
           byKey[d.target_shift_id] = {
-            ...byKey[d.target_shift_id],
+            ...live,
             schedule_id: d.schedule_id, position_id: d.position_id, shift_date: d.shift_date,
             start_time: d.start_time, end_time: d.end_time,
+            schedule_name: (sr[0] && sr[0].name) || live.schedule_name,
+            location_name: (sr[0] && sr[0].location_name) || live.location_name,
+            position_name: (por[0] && por[0].name) || live.position_name,
             isDraft: true, draftAction: 'update', draftId: d.id,
           };
         }
@@ -829,8 +866,9 @@ async function getMyAllShiftsForWeek(personId, weekStartISO) {
   const dates = weekDateRange(weekStartISO);
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `SELECT sh.*, s.name AS schedule_name, pos.name AS position_name FROM shifts sh
+      `SELECT sh.*, s.name AS schedule_name, l.name AS location_name, pos.name AS position_name FROM shifts sh
        JOIN schedules s ON s.id = sh.schedule_id
+       JOIN locations l ON l.id = s.location_id
        JOIN positions pos ON pos.id = sh.position_id
        WHERE sh.person_id = $1 AND sh.status != 'cancelled' AND sh.shift_date = ANY($2)
        ORDER BY sh.shift_date, sh.start_time`,
@@ -843,8 +881,9 @@ async function getMyAllShiftsForWeek(personId, weekStartISO) {
 async function getEmployeeUpcomingShifts(personId) {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `SELECT sh.*, s.name AS schedule_name, pos.name AS position_name FROM shifts sh
+      `SELECT sh.*, s.name AS schedule_name, l.name AS location_name, pos.name AS position_name FROM shifts sh
        JOIN schedules s ON s.id = sh.schedule_id
+       JOIN locations l ON l.id = s.location_id
        JOIN positions pos ON pos.id = sh.position_id
        WHERE sh.person_id = $1 AND sh.status != 'cancelled' AND sh.shift_date >= CURRENT_DATE
        ORDER BY sh.shift_date, sh.start_time LIMIT 20`,

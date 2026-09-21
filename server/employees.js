@@ -115,6 +115,52 @@ async function getPhotoUrl({ personId, viewer }) {
   });
 }
 
+// Self-service photo (My Account). Same storage rules as the Apply page;
+// the route has already checked type/size. Upload the new object first,
+// point the row at it, then drop the old one — so a failure anywhere
+// leaves the person with the photo they had, never with none.
+async function setOwnPhoto({ personId, photoFile }) {
+  return withServiceClient(async (client) => {
+    const newPath = await storage.uploadPersonPhoto({ buffer: photoFile.buffer, mimetype: photoFile.mimetype, personId });
+    let oldPath = null;
+    try {
+      const { rows } = await client.query(
+        'UPDATE people SET photo_path = $1, updated_at = now() WHERE id = $2 RETURNING (SELECT photo_path FROM people WHERE id = $2) AS old_path',
+        [newPath, personId]
+      );
+      oldPath = rows[0] && rows[0].old_path;
+    } catch (e) {
+      await storage.deletePersonPhoto(newPath);
+      throw e;
+    }
+    if (oldPath && oldPath !== newPath) await storage.deletePersonPhoto(oldPath);
+    return { ok: true };
+  });
+}
+
+async function removeOwnPhoto({ personId }) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query(
+      'UPDATE people SET photo_path = NULL, updated_at = now() WHERE id = $1 AND photo_path IS NOT NULL RETURNING (SELECT photo_path FROM people WHERE id = $1) AS old_path',
+      [personId]
+    );
+    if (rows[0] && rows[0].old_path) await storage.deletePersonPhoto(rows[0].old_path);
+    return { ok: true };
+  });
+}
+
+async function getOwnPhotoUrl({ personId }) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query('SELECT photo_path FROM people WHERE id = $1', [personId]);
+    if (!rows[0] || !rows[0].photo_path) return { error: 'No photo on file.', status: 404 };
+    try {
+      return { url: await storage.getSignedPersonPhotoUrl(rows[0].photo_path) };
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 500 };
+    }
+  });
+}
+
 // Self-service — a person updating their own name/email/phone, any time,
 // active or still pending. Deliberately narrow: only these three columns,
 // and only ever scoped to the caller's own id (enforced by the route
@@ -680,7 +726,7 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 }
 
 module.exports = {
-  createPendingEmployee, getPhotoUrl, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
+  createPendingEmployee, getPhotoUrl, setOwnPhoto, removeOwnPhoto, getOwnPhotoUrl, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
   getNetworkAccessForPerson, setNetworkAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
   setEmployeeStatus, requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,

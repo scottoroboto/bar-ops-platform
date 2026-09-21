@@ -171,7 +171,7 @@ async function loadMyUpcoming() {
   try {
     const shifts = await api('/api/scheduling/my-shifts/upcoming');
     el.innerHTML = shifts.length ? shifts.map(s => `<div class="list-row">
-      <div><div class="name">${escapeHtml(s.schedule_name)} — ${escapeHtml(s.position_name)}</div>
+      <div><div class="name"><span class="loc-tag">${escapeHtml(shortLoc(s.location_name))}</span> ${escapeHtml(s.schedule_name)} — ${escapeHtml(s.position_name)}</div>
       <div class="sub">${dayLabel(s.shift_date)} · ${formatTime12(s.start_time)}–${formatTime12(s.end_time)}</div></div>
     </div>`).join('') : '<p class="muted">No upcoming shifts scheduled.</p>';
   } catch (e) {
@@ -191,7 +191,7 @@ async function loadMyWeek() {
       const day = shifts.filter(s => s.shift_date === date);
       return `<div class="list-row" style="align-items:flex-start;">
         <div style="width:120px; flex-shrink:0;"><b>${dayLabel(date)}</b></div>
-        <div style="flex:1;">${day.length ? day.map(s => `${escapeHtml(s.schedule_name)} — ${escapeHtml(s.position_name)}, ${formatTime12(s.start_time)}–${formatTime12(s.end_time)}`).join('<br>') : '<span class="muted">Off</span>'}</div>
+        <div style="flex:1;">${day.length ? day.map(s => `<span class="loc-tag">${escapeHtml(shortLoc(s.location_name))}</span> ${escapeHtml(s.schedule_name)} — ${escapeHtml(s.position_name)}, ${formatTime12(s.start_time)}–${formatTime12(s.end_time)}`).join('<br>') : '<span class="muted">Off</span>'}</div>
       </div>`;
     }).join('');
   } catch (e) {
@@ -431,10 +431,12 @@ async function loadSchedGrid() {
     DRAFT_COUNT = summary.count;
     renderDraftBanner();
 
-    // Every employee shows up as a row now, whether or not they have a shift
-    // this week — per Scotto, dropped the old "checked into this schedule"
-    // filter (Sep 2026). The schedule picker above now only scopes which
-    // schedules' shifts are pulled in, not who appears.
+    // Every employee with the Scheduling app turned on shows up as a row,
+    // whether or not they have a shift this week — per Scotto, dropped the
+    // old "checked into this schedule" filter (Sep 2026); the server's
+    // roster (getEmployeesForScheduling) leaves out anyone whose Scheduling
+    // toggle is off in Employees. The schedule picker above only scopes
+    // which schedules' shifts are pulled in, not who appears.
     const roster = EMPLOYEES.slice().sort((a, b) => a.name.localeCompare(b.name));
     const dates = weekDatesFrom(WEEK_START);
     if (!roster.length) { el.innerHTML = '<p class="muted">No employees yet.</p>'; return; }
@@ -456,7 +458,10 @@ function schedCellHtml(emp, date) {
       personId: s.person_id, scheduleId: s.schedule_id, positionId: s.position_id, date: s.shift_date,
       startTime: s.start_time, endTime: s.end_time, draftId: s.draftId, shiftId: s.id,
     }).replace(/"/g, '&quot;');
-    return `<div class="chip ${cls}" onclick='openShiftModal(${payload})'><span class="p">${escapeHtml(s.position_name)}</span> ${label}</div>`;
+    // Location tag first (T1/T2/T3), then position, then time — so
+    // someone scanning the grid sees where they're working before what
+    // (Scotto, 2026-09-21). Comes from the shift's schedule's location.
+    return `<div class="chip ${cls}" onclick='openShiftModal(${payload})'><span class="loc-tag">${escapeHtml(shortLoc(s.location_name))}</span> <span class="p">${escapeHtml(s.position_name)}</span> ${label}</div>`;
   }).join('');
   const addPayload = JSON.stringify({ personId: emp.id, scheduleId: defaultScheduleId, date }).replace(/"/g, '&quot;');
   return `<td style="min-width:120px; vertical-align:top;">${chips}<a href="#" class="add-link" onclick='event.preventDefault(); openShiftModal(${addPayload})'>+ add</a></td>`;
@@ -680,7 +685,7 @@ function renderPrintView(shifts, numWeeks) {
       if (!empNames.length) return `<tr><td colspan="8">No shifts to print.</td></tr>`;
       const cells = dates.map(d => {
         const cellShifts = shifts.filter(s => s.person_name === name && s.shift_date === d);
-        const lines = cellShifts.map(s => `<span style="display:block;">${escapeHtml(s.position_name)} ${formatTime12(s.start_time)}–${formatTime12(s.end_time)}</span>`).join('');
+        const lines = cellShifts.map(s => `<span style="display:block;"><b>${escapeHtml(shortLoc(s.location_name))}</b> ${escapeHtml(s.position_name)} ${formatTime12(s.start_time)}–${formatTime12(s.end_time)}</span>`).join('');
         return `<td>${lines}</td>`;
       }).join('');
       return `<tr><td class="print-emp-name">${escapeHtml(name)}</td>${cells}</tr>`;
@@ -756,17 +761,22 @@ async function decideTimeOff(id, approve) {
 // =========================================================
 async function renderSetup() {
   const el = document.getElementById('panelSetup');
+  // Managers add schedules too (2026-09-21), at their own location only;
+  // the server enforces the same. Archive/restore stay owner-only.
+  const myLocations = IS_OWNER ? LOCATIONS : LOCATIONS.filter(l => l.id === ME.locationId);
+  const canAddSchedule = IS_OWNER || myLocations.length > 0;
   el.innerHTML = `
     <div class="card">
       <h2>Schedules</h2>
       <p class="muted">A schedule is a named roster/crew under one location — not a time concept (e.g. "Bar" vs "Kitchen").</p>
       <div id="setupSchedules"><p class="muted">Loading…</p></div>
-      ${IS_OWNER ? `
+      ${canAddSchedule ? `
       <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; margin-top:10px;">
         <div style="flex:1; min-width:140px;"><label for="newSchedName">Name</label><input id="newSchedName" placeholder="e.g. Bar"></div>
         <div style="flex:1; min-width:140px;"><label for="newSchedLocation">Location</label><select id="newSchedLocation"></select></div>
         <div><button class="secondary" style="margin-top:0;" onclick="submitAddSchedule()">Add</button></div>
       </div>
+      ${IS_OWNER ? '' : '<p class="muted" style="font-size:12px;">A schedule you add is yours to build and publish right away. Archiving is owner-only.</p>'}
       <div id="schedResult"></div>` : ''}
     </div>
     <div class="card">
@@ -774,8 +784,8 @@ async function renderSetup() {
       <p class="muted">Which schedules each manager can build and publish for. (Owners always manage every schedule.) ${IS_OWNER ? 'Click Edit to change.' : 'Only the owner can change this.'}</p>
       <div id="setupEmployees"><p class="muted">Loading…</p></div>
     </div>`;
-  if (IS_OWNER) {
-    document.getElementById('newSchedLocation').innerHTML = LOCATIONS.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+  if (canAddSchedule) {
+    document.getElementById('newSchedLocation').innerHTML = myLocations.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
   }
   loadSetupSchedules();
   renderSetupEmployees();

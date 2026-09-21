@@ -15,6 +15,7 @@
 // or out — there is no anon/client path to either bucket at all, by
 // design. A file is only ever handed to a browser as a short-lived
 // signed URL minted here, never as a public URL or a raw bucket path.
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
 const RECEIPTS_BUCKET = 'cash-receipts';
@@ -110,10 +111,13 @@ async function getSignedReceiptUrl(path) {
 
 // ---- People photos ---------------------------------------------------
 // Same id-first shape as receipts: employees.createPendingEmployee mints
-// the person's uuid, uploads, then INSERTs with photo_path set.
+// the person's uuid, uploads, then INSERTs with photo_path set. Objects
+// live in a per-person folder under a random name, so replacing a photo
+// from My Account is upload-new / point the row at it / delete-old, and
+// never an overwrite of an object a signed URL might still be serving.
 async function uploadPersonPhoto({ buffer, mimetype, personId }) {
   const ext = extensionFor(mimetype);
-  return uploadTo(PHOTOS_BUCKET, `${personId}.${ext}`, buffer, mimetype, 'Photo');
+  return uploadTo(PHOTOS_BUCKET, `${personId}/${crypto.randomUUID()}.${ext}`, buffer, mimetype, 'Photo');
 }
 
 async function getSignedPersonPhotoUrl(path) {

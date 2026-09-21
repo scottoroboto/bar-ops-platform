@@ -151,6 +151,8 @@ table th, table td { border-bottom: 1px solid var(--line); }
 .chip.draft { background: var(--warn-bg); color: var(--warn-ink); border: 1.5px dashed var(--warn-line); }
 .chip.cancel { background: var(--danger-bg); color: #9C2B2B; text-decoration: line-through; border: 1px dashed var(--danger-line); }
 .chip .p { font-weight: 700; }
+/* T1/T2/T3 location tag — leads every shift label (grid chips, My shifts lists) */
+.loc-tag { display: inline-block; font-weight: 800; font-size: 10px; letter-spacing: .03em; padding: 1px 5px; border-radius: 6px; background: rgba(46,111,242,0.16); color: var(--ink2); vertical-align: 1px; }
 .add-link { font-size: 11px; color: var(--ink3); font-weight: 700; cursor: pointer; text-decoration: none; }
 
 /* ---- narrow baseline: applies under both mobile breakpoints below, and to any

@@ -51,11 +51,6 @@ function tileHtml({ href, icon, label, note, count, disabled, external }) {
 // rest of the grid — badges are a nice-to-have, not load-bearing.
 // T1/T2/T3, matching employees.js's own shortLoc() convention for the
 // same "Ticket N" location names.
-function shortLoc(name) {
-  const m = String(name || '').match(/(\d+)\s*$/);
-  return m ? ('T' + m[1]) : String(name || '').slice(0, 2).toUpperCase();
-}
-
 function critsysDotHtml(label, status) {
   return `<span class="critsys-group"><span class="critsys-dot ${status}"></span><span class="critsys-label">${label}</span></span>`;
 }

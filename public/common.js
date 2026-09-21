@@ -72,6 +72,14 @@ function logout() { clearSession(); window.location.href = '/index.html'; }
 // always sends/receives JSON, and surfaces the two session-related error
 // codes the backend uses (SESSION_EXPIRED, STEP_UP_REQUIRED) as
 // recognizable errors instead of generic failures.
+// "Ticket 1" -> "T1": the short location tag used on chips across the
+// app (Employees roster, Scheduling shift chips, dashboard). Anything
+// without a trailing number falls back to its first two letters.
+function shortLoc(name) {
+  const m = String(name || '').match(/(\d+)\s*$/);
+  return m ? ('T' + m[1]) : String(name || '').slice(0, 2).toUpperCase();
+}
+
 async function api(path, opts = {}) {
   const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
   const token = getToken();

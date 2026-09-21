@@ -46,11 +46,6 @@ function locationName(id) {
 
 // "Ticket 1" -> "T1", etc. — falls back to the first two letters for any
 // location that isn't named with a trailing number.
-function shortLoc(name) {
-  const m = String(name || '').match(/(\d+)\s*$/);
-  return m ? ('T' + m[1]) : String(name || '').slice(0, 2).toUpperCase();
-}
-
 // A maintenance employee is dispatched across every location rather than
 // tied to one (see db/patch_005's positions and the service-calls
 // destination-picker note on the same convention) — shown as a "Maint"

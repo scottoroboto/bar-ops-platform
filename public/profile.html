@@ -14,6 +14,15 @@
   <div class="card">
     <h1>My info</h1>
     <p class="muted">Keep this up to date any time — no need to wait for a review.</p>
+    <div class="photo-pick" id="photoRow">
+      <div class="detail-avatar" id="myAvatar" style="width:72px; height:72px; font-size:24px; margin:0;"></div>
+      <div style="flex:1; min-width:0;">
+        <label for="photo" style="margin-top:0;">Profile photo</label>
+        <input id="photo" type="file" accept="image/*" onchange="uploadPhoto()">
+        <p class="muted" id="photoHint" style="margin:6px 0 0; font-size:12px;">JPEG, PNG, HEIC or WebP, up to 10 MB. Managers see this next to your name.</p>
+        <button type="button" class="small ghost" id="photoRemove" style="display:none; margin-top:8px;" onclick="removePhoto()">Remove photo</button>
+      </div>
+    </div>
     <label for="name">Full name</label>
     <input id="name">
     <label for="email">Email</label>
@@ -64,11 +73,64 @@
     }
   }
 
+  // Profile photo — same picture an applicant can attach on the Apply
+  // page; here they can add, replace or remove it any time. The bucket is
+  // private, so the preview is a short-lived signed URL from /api/me/photo
+  // (404 = none, show initials).
+  function initialsOf(name) {
+    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    return parts.length ? (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase() : '?';
+  }
+  async function loadPhoto() {
+    const avatar = document.getElementById('myAvatar');
+    const person = getPerson();
+    avatar.textContent = initialsOf(person && person.name);
+    avatar.classList.remove('has-photo');
+    avatar.style.backgroundImage = '';
+    document.getElementById('photoRemove').style.display = 'none';
+    try {
+      const { url } = await api('/api/me/photo');
+      if (!url) return;
+      avatar.style.backgroundImage = `url("${url}")`;
+      avatar.classList.add('has-photo');
+      document.getElementById('photoRemove').style.display = '';
+    } catch (e) { /* none on file, or storage not configured — initials it is */ }
+  }
+  async function uploadPhoto() {
+    const input = document.getElementById('photo');
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { showMsg('That file isn\'t a photo — please pick an image.', 'error'); input.value = ''; return; }
+    if (file.size > 10 * 1024 * 1024) { showMsg('That photo is too big — please pick one under 10 MB.', 'error'); input.value = ''; return; }
+    const form = new FormData();
+    form.append('photo', file, file.name || 'photo');
+    showMsg('Uploading photo…', 'info');
+    try {
+      await apiUpload('/api/me/photo', form);
+      showMsg('Photo updated.', 'success');
+      await loadPhoto();
+    } catch (e) {
+      showMsg(e.message, 'error');
+    } finally {
+      input.value = '';
+    }
+  }
+  async function removePhoto() {
+    try {
+      await api('/api/me/photo', { method: 'DELETE' });
+      showMsg('Photo removed.', 'success');
+      await loadPhoto();
+    } catch (e) {
+      showMsg(e.message, 'error');
+    }
+  }
+
   (async function init() {
     const person = requireAuth();
     if (!person) return;
     renderTopbar('My Account');
     document.getElementById('name').value = person.name || '';
+    loadPhoto();
     try {
       const me = await api('/api/auth/me');
       document.getElementById('name').value = me.person.name || '';

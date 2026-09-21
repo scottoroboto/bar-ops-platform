@@ -1957,18 +1957,27 @@ res.json(await employees.listPending());
 // one public upload in the app and "it's just a picture" is exactly the
 // thing not to take on faith. Bucket-side allowed_mime_types /
 // file_size_limit (patch_031) back all three up.
-const applyPhotoUpload = multer({
+const photoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 1 }, // matches the people-photos bucket's file_size_limit (patch_031)
 }).single('photo');
-
-app.post('/api/employees/pending', (req, res, next) => {
-  applyPhotoUpload(req, res, (err) => {
+// Express middleware: parse an optional `photo` part into req.file with
+// plain error messages. Shared by the Apply page and My Account.
+function parsePhotoUpload(req, res, next) {
+  photoUpload(req, res, (err) => {
     if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ ok: false, error: 'That photo is too big — please pick one under 10 MB.' });
     if (err) return res.status(400).json({ ok: false, error: err.message || 'Could not read the uploaded photo.' });
     next();
   });
-}, async (req, res) => {
+}
+function photoFileError(file) {
+  if (!storage.PHOTO_MIMES.includes(file.mimetype) || !storage.looksLikeImage(file.buffer, file.mimetype)) {
+    return 'The photo needs to be a JPEG, PNG, HEIC or WebP image.';
+  }
+  return null;
+}
+
+app.post('/api/employees/pending', parsePhotoUpload, async (req, res) => {
 const name = (req.body.name || '').trim();
 const email = (req.body.email || '').trim();
 const phone = (req.body.phone || '').trim();
@@ -1982,11 +1991,7 @@ if (!phone || phone.replace(/\D/g, '').length < 10) return res.status(400).json(
 if (!position) return res.status(400).json({ ok: false, error: 'Position applied for is required.' });
 if (!requestedLocationId) return res.status(400).json({ ok: false, error: 'Location is required.' });
 const photoFile = req.file || null;
-if (photoFile) {
-  if (!storage.PHOTO_MIMES.includes(photoFile.mimetype) || !storage.looksLikeImage(photoFile.buffer, photoFile.mimetype)) {
-    return res.status(400).json({ ok: false, error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' });
-  }
-}
+if (photoFile && photoFileError(photoFile)) return res.status(400).json({ ok: false, error: photoFileError(photoFile) });
 try {
   const person = await employees.createPendingEmployee({ ...req.body, name, email, phone, position, requestedLocationId, photoFile });
   res.json({ ok: true, person });
@@ -2006,6 +2011,31 @@ try {
 // See server/jotform.js for what is (and very much is not) read out of the
 // submission.
 app.post('/api/webhooks/jotform-new-hire', jotform.parseBody, jotform.handleWebhook);
+
+// Self-service profile photo (My Account) — own row only, same
+// upload rules as the Apply page. GET returns a short-lived signed URL,
+// or { url: null } when there's none (a 200, not a 404 — "no photo" is
+// the normal case for most people and shouldn't log as an error).
+app.get('/api/me/photo', auth.requireSession('light'), async (req, res) => {
+const result = await employees.getOwnPhotoUrl({ personId: req.person.id });
+if (result.status === 404) return res.json({ url: null });
+if (result.error) return res.status(result.status || 500).json(result);
+res.json(result);
+});
+app.post('/api/me/photo', auth.requireSession('light'), parsePhotoUpload, async (req, res) => {
+if (!req.file) return res.status(400).json({ ok: false, error: 'Pick a photo first.' });
+const bad = photoFileError(req.file);
+if (bad) return res.status(400).json({ ok: false, error: bad });
+try {
+  res.json(await employees.setOwnPhoto({ personId: req.person.id, photoFile: req.file }));
+} catch (e) {
+  if (!e.statusCode) throw e;
+  res.status(e.statusCode).json({ ok: false, error: `Couldn't save the photo (${e.message}).` });
+}
+});
+app.delete('/api/me/photo', auth.requireSession('light'), async (req, res) => {
+res.json(await employees.removeOwnPhoto({ personId: req.person.id }));
+});
 
 // Self-service profile edit — any logged-in person, any time, for their own
 // row only (req.person.id, never a client-supplied id). Sensitive fields
@@ -3457,9 +3487,29 @@ app.get('/api/scheduling/schedules/admin', auth.requireSession('light'), async (
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   res.json(await scheduling.listSchedules());
 });
+// Add/rename: owner anywhere; a manager at their own location only
+// (Scotto, 2026-09-21: "managers can add positions and schedules"). A
+// manager renaming must already manage that schedule, and one they add
+// is granted to them on the spot (saveSchedule's grantManagerId).
+// Archive/restore stay owner-only below — adding a crew is routine,
+// retiring one is not.
 app.post('/api/scheduling/schedules', auth.requireSession('full'), async (req, res) => {
-  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can add or rename a schedule.' });
-  res.json(await scheduling.saveSchedule({ id: req.body.id, locationId: req.body.locationId, name: req.body.name }));
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const isOwner = req.person.role === 'owner';
+  let locationId = req.body.locationId;
+  if (!isOwner) {
+    if (!req.person.location_id) return res.status(403).json({ ok: false, error: 'Your account has no location, so you can’t add a schedule — ask the owner.' });
+    if (locationId && locationId !== req.person.location_id) return res.status(403).json({ ok: false, error: 'Managers can only add schedules at their own location.' });
+    locationId = req.person.location_id;
+    if (req.body.id) {
+      const manageable = await scheduling.getMyManageableScheduleIds(req.person);
+      if (!manageable.includes(req.body.id)) return res.status(403).json({ ok: false, error: 'You don’t manage that schedule.' });
+    }
+  }
+  res.json(await scheduling.saveSchedule({
+    id: req.body.id, locationId, name: req.body.name,
+    grantManagerId: !isOwner && !req.body.id ? req.person.id : null,
+  }));
 });
 app.post('/api/scheduling/schedules/:id/archive', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can archive a schedule.' });
