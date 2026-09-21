@@ -305,6 +305,11 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .status-row .label { font-size: 12px; font-weight: 600; }
 .sys-checked { font-size: 11px; color: var(--muted); margin-top: 8px; }
 .sys-hist { padding: 0 12px 12px; }
+/* Silencing controls (patch_032): under a tile, and a bar per expanded location */
+.sys-silence { padding: 0 12px 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11px; }
+.silence-menu { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.group-silence { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 18px 12px; align-items: center; }
+.group-silence-item { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .sys-equip { font-size: 11px; color: var(--muted); margin: 4px 0 10px; }
 
 .roadmap-card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 18px; }

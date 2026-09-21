@@ -2552,6 +2552,18 @@ app.post('/api/monitoring/systems/:id/update', auth.requireSession('full'), asyn
   res.json(result);
 });
 
+// Silence / unsilence (patch_032). One piece of equipment, or the whole
+// "system" = every active piece in a location + category. Managers and
+// the owner. Body: { duration: '1h' | '8h' | '1d' | 'forever' | 'off' }.
+app.post('/api/monitoring/systems/:id/silence', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await monitoring.setSilence({ systemId: req.params.id, duration: req.body.duration, by: req.person.id }));
+});
+app.post('/api/monitoring/silence-group', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await monitoring.setGroupSilence({ locationId: req.body.locationId, category: req.body.category, duration: req.body.duration, by: req.person.id }));
+});
+
 app.post('/api/monitoring/systems/:id/move', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   const result = await monitoring.moveSystem(req.params.id, req.body.direction);

@@ -6,7 +6,7 @@ let ROUTING_PEOPLE = []; // last-loaded /api/employees, for the Alert Routing "w
 
 const CATEGORY_LABEL = {
   network: 'Network', hvac: 'HVAC', refrigeration: 'Refrigeration', freezer: 'Freezer',
-  ice_machine: 'Ice Machine', power: 'Power', other: 'Other',
+  ice_machine: 'Ice Machine', power: 'Power', av: 'TVs & AV', other: 'Other',
 };
 
 // Status tab visual language (card-grid dashboard) — one small stroke-based
@@ -49,7 +49,7 @@ function categoryIcon(cat) { return CATEGORY_ICON[cat] || CATEGORY_ICON.other; }
 // see siteScoreCardHtml() below.
 const CATEGORY_MONO = {
   network: 'NET', hvac: 'HVAC', refrigeration: 'RFG', freezer: 'FRZ',
-  ice_machine: 'ICE', power: 'PWR', other: 'OTH',
+  ice_machine: 'ICE', power: 'PWR', av: 'AV', other: 'OTH',
 };
 
 // Category types with no live data source yet (see server/monitoring.js —
@@ -203,9 +203,98 @@ function siteScoreCardHtml(name, systems) {
       <div class="cat-row">${chips}</div>
     </div>
     <div class="score-expand" id="expand-${slug}">
+      ${IS_MANAGER ? groupSilenceBarHtml(systems, byCategory) : ''}
       <div class="sys-grid" style="padding:0 18px 18px;">${systems.map(systemTileHtml).join('')}</div>
     </div>
   </div>`;
+}
+
+// ---- Silencing (patch_032) ----
+// "Silence" on one tile quiets that piece of equipment; the bar at the
+// top of an expanded location quiets a whole system there (all TVs, all
+// network gear). Silenced things stay tracked and stay red on the
+// dashboard — they just send nothing. Durations are fixed choices so
+// nobody has to type a time on a phone.
+const SILENCE_CHOICES = [['1h', '1 hour'], ['8h', '8 hours'], ['1d', '1 day'], ['forever', 'Until turned back on']];
+
+function silencedUntilText(s) {
+  if (!s.silenced) return '';
+  const until = s.silenced_until ? new Date(s.silenced_until) : null;
+  const forever = !until || !isFinite(until.getTime()) || until.getFullYear() > 9000;
+  const who = s.silenced_by_name ? ` by ${escapeHtml(s.silenced_by_name)}` : '';
+  return forever ? `Silenced until turned back on${who}` : `Silenced until ${fmtDateTime(s.silenced_until)}${who}`;
+}
+
+function silenceMenuHtml(menuId, onPick) {
+  // onPick is a JS snippet with DURATION as a placeholder
+  return `<span class="silence-menu" id="${menuId}" style="display:none;">${SILENCE_CHOICES.map(([d, label]) =>
+    `<button class="small ghost" onclick="${onPick.replace(/DURATION/g, d)}">${label}</button>`).join('')}</span>`;
+}
+
+function toggleSilenceMenu(menuId) {
+  const el = document.getElementById(menuId);
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function tileSilenceHtml(s) {
+  if (!IS_MANAGER) return s.silenced ? `<div class="sys-silence"><span class="badge stale">${silencedUntilText(s)}</span></div>` : '';
+  if (s.silenced) {
+    return `<div class="sys-silence"><span class="badge stale">${silencedUntilText(s)}</span>
+      <button class="small ghost" onclick="silenceSystem('${s.id}','off')">Turn alerts back on</button></div>`;
+  }
+  const menuId = `smenu-${s.id}`;
+  return `<div class="sys-silence">
+    <button class="small ghost" onclick="toggleSilenceMenu('${menuId}')" title="Stop notifications for this one for a while">Silence…</button>
+    ${silenceMenuHtml(menuId, `silenceSystem('${s.id}','DURATION')`)}
+  </div>`;
+}
+
+function groupSilenceBarHtml(systems, byCategory) {
+  const locationId = systems[0] && systems[0].location_id;
+  return `<div class="group-silence">${Object.keys(byCategory).map(cat => {
+    const inCat = byCategory[cat];
+    const label = CATEGORY_LABEL[cat] || cat;
+    const allQuiet = inCat.every(x => x.silenced);
+    const menuId = `gmenu-${locSlug(systems[0].location_name)}-${cat}`;
+    if (allQuiet) {
+      return `<span class="group-silence-item"><span class="badge stale">All ${escapeHtml(label)} silenced</span>
+        <button class="small ghost" onclick="silenceGroup('${locationId}','${cat}','off')">Turn back on</button></span>`;
+    }
+    return `<span class="group-silence-item">
+      <button class="small ghost" onclick="toggleSilenceMenu('${menuId}')" title="Stop notifications for every ${escapeHtml(label)} item here">Silence all ${escapeHtml(label)}…</button>
+      ${silenceMenuHtml(menuId, `silenceGroup('${locationId}','${cat}','DURATION')`)}
+    </span>`;
+  }).join('')}</div>`;
+}
+
+async function silenceSystem(id, duration) {
+  try {
+    const result = await withStepUp(() => api(`/api/monitoring/systems/${id}/silence`, { method: 'POST', body: { duration } }));
+    if (!result.ok) { showMsg(result.error, 'error'); return; }
+    showMsg(duration === 'off' ? 'Alerts turned back on.' : 'Silenced.', 'success');
+    reloadStatusKeepingOpen();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
+async function silenceGroup(locationId, category, duration) {
+  try {
+    const result = await withStepUp(() => api('/api/monitoring/silence-group', { method: 'POST', body: { locationId, category, duration } }));
+    if (!result.ok) { showMsg(result.error, 'error'); return; }
+    showMsg(duration === 'off' ? `Alerts turned back on for ${result.count} item${result.count === 1 ? '' : 's'}.` : `Silenced ${result.count} item${result.count === 1 ? '' : 's'}.`, 'success');
+    reloadStatusKeepingOpen();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
+// Re-render the Status tab without collapsing the location card the
+// person was just working in.
+async function reloadStatusKeepingOpen() {
+  const open = Array.from(document.querySelectorAll('.site-scorecard.open')).map(el => el.id);
+  await loadStatus();
+  open.forEach(id => { const el = document.getElementById(id); if (el) el.classList.add('open'); });
 }
 
 function toggleLocationCard(slug) {
@@ -221,9 +310,10 @@ function systemTileHtml(s) {
         <div class="sys-icon">${categoryIcon(s.category)}</div>
         <div><div class="sys-name">${escapeHtml(s.name)}</div><div class="sys-sub">${CATEGORY_LABEL[s.category] || s.category} · ${escapeHtml(s.kind)}</div></div>
       </div>
-      <div class="status-row"><span class="dot" style="background:${m.dot}"></span><span class="label" style="color:${m.dot}">${m.label}</span></div>
+      <div class="status-row"><span class="dot" style="background:${m.dot}"></span><span class="label" style="color:${m.dot}">${m.label}</span>${s.silenced ? ' <span class="badge stale" title="' + silencedUntilText(s) + '">silenced</span>' : ''}</div>
       <div class="sys-checked">checked ${relTime(s.last_checked_at)} · history ▾</div>
     </div>
+    ${tileSilenceHtml(s)}
     <div id="hist-${s.id}" class="sys-hist" style="display:none;"></div>
   </div>`;
 }
@@ -304,8 +394,19 @@ function alertRowHtml(a) {
       <div class="name">${escapeHtml(a.system_name)} <span class="badge ${open ? 'danger' : 'off'}">${open ? 'open' : 'resolved'}</span></div>
       <div class="sub">${escapeHtml(a.location_name)} · ${escapeHtml(a.message)}</div>
       <div class="sub">opened ${fmtDateTime(a.opened_at)}${a.closed_at ? ' · closed ' + fmtDateTime(a.closed_at) : ''}</div>
+      <div class="sub">${alertNoticeText(a)}</div>
     </div>
   </div>`;
+}
+
+// What actually went out for this alert — so a quiet phone and a red
+// tile can be reconciled at a glance.
+function alertNoticeText(a) {
+  const open = !a.closed_at;
+  if (a.silenced && open) return 'silenced — no notifications while it stays quiet';
+  if (!a.notified_at) return open ? 'no notice sent yet — waits until it has been down 3 minutes' : 'recovered within 3 minutes — nobody was notified';
+  const reminders = Number(a.reminder_count || 0);
+  return `notified ${fmtDateTime(a.notified_at)}${reminders ? ` · ${reminders} reminder${reminders === 1 ? '' : 's'}` : ''}${open ? ' · reminder every 15 min while down' : ''}`;
 }
 
 // ---------------- Add / Manage (manager/owner) ----------------
@@ -516,6 +617,11 @@ async function renderNotifications() {
       <h2>Current routing</h2>
       <div id="routingList"><p class="muted">Loading…</p></div>
     </div>` : ''}
+    <div class="card">
+      <h2>How alerts are timed</h2>
+      <p class="muted" style="margin-bottom:6px;">Nothing is sent until something has been down for <b>3 minutes straight</b> — a blip never notifies. While it stays down you get one notice, then a reminder every <b>15 minutes</b>, and one note when it's back.</p>
+      <p class="muted">To quiet something on purpose, open Status, expand the location, and press <b>Silence…</b> on a piece of equipment, or <b>Silence all …</b> for a whole system there. Silenced things stay red on the board; they just stop notifying.</p>
+    </div>
     <div class="card">
       <h2>How should we reach you?</h2>
       <p class="muted">Your own alert notifications.</p>

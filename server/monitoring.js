@@ -75,7 +75,9 @@ async function listSystems(client, { locationId, category } = {}) {
     `SELECT ms.*, l.name AS location_name,
             (SELECT status FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_status,
             (SELECT checked_at FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_checked_at,
-            (SELECT id FROM system_alerts sa WHERE sa.system_id = ms.id AND sa.closed_at IS NULL LIMIT 1) AS open_alert_id
+            (SELECT id FROM system_alerts sa WHERE sa.system_id = ms.id AND sa.closed_at IS NULL LIMIT 1) AS open_alert_id,
+            (ms.silenced_until IS NOT NULL AND ms.silenced_until > now()) AS silenced,
+            (SELECT name FROM people WHERE id = ms.silenced_by) AS silenced_by_name
      FROM monitored_systems ms JOIN locations l ON l.id = ms.location_id
      WHERE ${clauses.join(' AND ')}
      ORDER BY l.name, ms.sort_order, ms.category, ms.name`,
@@ -224,7 +226,8 @@ async function listAlerts(client, { locationId, openOnly } = {}) {
   if (openOnly) clauses.push('sa.closed_at IS NULL');
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const { rows } = await client.query(
-    `SELECT sa.*, ms.name AS system_name, ms.category, l.name AS location_name
+    `SELECT sa.*, ms.name AS system_name, ms.category, l.name AS location_name,
+            (ms.silenced_until IS NOT NULL AND ms.silenced_until > now()) AS silenced
      FROM system_alerts sa
      JOIN monitored_systems ms ON ms.id = sa.system_id
      JOIN locations l ON l.id = ms.location_id
@@ -236,10 +239,35 @@ async function listAlerts(client, { locationId, openOnly } = {}) {
 }
 
 // ---------------------------------------------------------------------
-// Recording a poll result — opens an alert on a good->bad transition,
-// closes it on recovery, and fans out a notification either way. Runs
-// on the service connection since the poller has no logged-in person.
+// Recording a poll result. An alert row opens on the first bad poll (the
+// dashboard goes red right away) and closes on recovery — but who gets
+// TOLD, and when, is damped (patch_032, Scotto 2026-09-21):
+//
+//   * nothing is sent until it has stayed bad for DOWN_BEFORE_NOTIFY_MS;
+//     a blip that recovers sooner opens and closes with no notification;
+//   * while it stays bad, one reminder every REALERT_INTERVAL_MS;
+//   * "back up" goes out only if someone was told it was down;
+//   * a silenced system (monitored_systems.silenced_until in the future)
+//     gets none of the above — it's still tracked and still red, just
+//     quiet. Silence applied mid-outage also stops the reminders.
+//
+// Runs on the service connection since the poller has no logged-in
+// person.
 // ---------------------------------------------------------------------
+const DOWN_BEFORE_NOTIFY_MS = 3 * 60 * 1000;
+const REALERT_INTERVAL_MS = 15 * 60 * 1000;
+
+// silenced_until is a timestamptz; 'infinity' ("until turned back on")
+// comes out of pg as the number Infinity, which new Date() can't hold —
+// so check for it before the date math.
+function isSilenced(system) {
+  if (!system || system.silenced_until == null) return false;
+  const v = system.silenced_until;
+  if (v === Infinity || v === 'infinity' || v === 'Infinity') return true;
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? t > Date.now() : false;
+}
+
 async function recordStatus({ systemId, status, detail }) {
   return withServiceClient(async (svc) => {
     await svc.query(
@@ -253,20 +281,81 @@ async function recordStatus({ systemId, status, detail }) {
     );
     const openAlert = openRows[0];
     const isBad = status === 'offline' || status === 'warning';
+    const now = Date.now();
 
     if (isBad && !openAlert) {
       const system = await systemWithLocation(svc, systemId);
       const message = `${system.name} at ${system.location_name} is ${status}.`;
-      const { rows } = await svc.query(
-        'INSERT INTO system_alerts (system_id, status, message) VALUES ($1,$2,$3) RETURNING *',
+      await svc.query(
+        'INSERT INTO system_alerts (system_id, status, message) VALUES ($1,$2,$3)',
         [systemId, status, message]
       );
-      await notifyAlert(svc, system, rows[0], 'opened').catch((err) => console.error('[monitoring] notifyAlert(opened) error', err));
+      // Deliberately no notification here — see DOWN_BEFORE_NOTIFY_MS.
+    } else if (isBad && openAlert) {
+      const system = await systemWithLocation(svc, systemId);
+      if (isSilenced(system)) return;
+      const openedFor = now - new Date(openAlert.opened_at).getTime();
+      if (!openAlert.notified_at) {
+        if (openedFor >= DOWN_BEFORE_NOTIFY_MS) {
+          await svc.query('UPDATE system_alerts SET notified_at = now(), last_notified_at = now() WHERE id = $1', [openAlert.id]);
+          await notifyAlert(svc, system, openAlert, 'opened').catch((err) => console.error('[monitoring] notifyAlert(opened) error', err));
+        }
+      } else if (now - new Date(openAlert.last_notified_at || openAlert.notified_at).getTime() >= REALERT_INTERVAL_MS) {
+        await svc.query('UPDATE system_alerts SET last_notified_at = now(), reminder_count = reminder_count + 1 WHERE id = $1', [openAlert.id]);
+        await notifyAlert(svc, system, { ...openAlert, reminder_count: (openAlert.reminder_count || 0) + 1 }, 'reminder').catch((err) => console.error('[monitoring] notifyAlert(reminder) error', err));
+      }
     } else if (!isBad && openAlert) {
       await svc.query('UPDATE system_alerts SET closed_at = now() WHERE id = $1', [openAlert.id]);
+      if (!openAlert.notified_at) return; // nobody was told it was down, so nothing to close out
       const system = await systemWithLocation(svc, systemId);
+      if (isSilenced(system)) return;
       await notifyAlert(svc, system, openAlert, 'closed').catch((err) => console.error('[monitoring] notifyAlert(closed) error', err));
     }
+  });
+}
+
+// ---------------------------------------------------------------------
+// Silencing (manager/owner; enforced in the route). duration is one of
+// '1h' | '8h' | '1d' | 'forever' | 'off'. A group silence stamps every
+// active system in that location + category — that IS the "system"
+// (all TVs at Ticket 1, all network gear at Ticket 2). Anything that
+// was already open keeps its alert row; it just stops talking.
+// ---------------------------------------------------------------------
+const SILENCE_DURATIONS = { '1h': '1 hour', '8h': '8 hours', '1d': '1 day', forever: null };
+
+function silenceUntilSql(duration) {
+  if (duration === 'off') return 'NULL';
+  if (duration === 'forever') return "'infinity'::timestamptz";
+  const interval = SILENCE_DURATIONS[duration];
+  if (!interval) return null;
+  return `now() + interval '${interval}'`;
+}
+
+async function setSilence({ systemId, duration, by }) {
+  const untilSql = silenceUntilSql(duration);
+  if (!untilSql) return { ok: false, error: 'Pick 1 hour, 8 hours, 1 day, until turned back on, or off.' };
+  return withServiceClient(async (svc) => {
+    const { rows } = await svc.query(
+      `UPDATE monitored_systems SET silenced_until = ${untilSql}, silenced_at = CASE WHEN ${untilSql} IS NULL THEN NULL ELSE now() END, silenced_by = CASE WHEN ${untilSql} IS NULL THEN NULL ELSE $2::uuid END
+       WHERE id = $1 RETURNING *`,
+      [systemId, by]
+    );
+    if (!rows[0]) return { ok: false, error: 'Not found.' };
+    return { ok: true, system: rows[0] };
+  });
+}
+
+async function setGroupSilence({ locationId, category, duration, by }) {
+  const untilSql = silenceUntilSql(duration);
+  if (!untilSql) return { ok: false, error: 'Pick 1 hour, 8 hours, 1 day, until turned back on, or off.' };
+  if (!locationId || !category) return { ok: false, error: 'Location and category are required.' };
+  return withServiceClient(async (svc) => {
+    const { rowCount } = await svc.query(
+      `UPDATE monitored_systems SET silenced_until = ${untilSql}, silenced_at = CASE WHEN ${untilSql} IS NULL THEN NULL ELSE now() END, silenced_by = CASE WHEN ${untilSql} IS NULL THEN NULL ELSE $3::uuid END
+       WHERE location_id = $1 AND category = $2 AND active = true`,
+      [locationId, category, by]
+    );
+    return { ok: true, count: rowCount };
   });
 }
 
@@ -312,13 +401,24 @@ async function recipientsFor(svc, system) {
   return rows;
 }
 
+function minutesSince(iso) {
+  return Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+}
+
+// kind: 'opened' (first notice, after the 3-minute hold), 'reminder'
+// (every 15 minutes while still down), 'closed' (back to normal).
 async function notifyAlert(svc, system, alert, kind) {
   const recipients = await recipientsFor(svc, system);
+  const downFor = `${minutesSince(alert.opened_at)} min`;
   const subject = kind === 'opened'
     ? `⚠ ${system.name} is ${alert.status} — ${system.location_name}`
+    : kind === 'reminder'
+    ? `⚠ Still ${alert.status}: ${system.name} — ${system.location_name} (${downFor})`
     : `✓ ${system.name} recovered — ${system.location_name}`;
   const text = kind === 'opened'
-    ? `${alert.message}\n\nOpened: ${alert.opened_at}\n\nOpen the app to view.`
+    ? `${alert.message}\n\nDown since: ${alert.opened_at}\n\nYou'll get a reminder every 15 minutes while it stays down, and a note when it recovers. To quiet it, open the app and press Silence on it.`
+    : kind === 'reminder'
+    ? `${alert.message}\n\nStill ${alert.status}, ${downFor} so far (since ${alert.opened_at}). Reminder ${alert.reminder_count || 1}.\n\nTo quiet it, open the app and press Silence on it.`
     : `${system.name} at ${system.location_name} is back to normal.\n\nWas ${alert.status} from ${alert.opened_at} until now.`;
 
   for (const person of recipients) {
@@ -515,6 +615,7 @@ async function reportAvHealth({ locationId, items }) {
 }
 
 module.exports = {
+  setSilence, setGroupSilence, isSilenced, DOWN_BEFORE_NOTIFY_MS, REALERT_INTERVAL_MS,
   requireMonitoringAccess, listSystems, addSystem, updateSystem, archiveSystem, moveSystem,
   listStatusHistory, listAlerts, recordStatus,
   getNotifySettings, setNotifyChannel,
