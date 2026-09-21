@@ -17,7 +17,7 @@
   <div id="msgBox"></div>
 
   <div class="card" id="formCard">
-    <p class="muted" style="margin-top:0;">All fields are required.</p>
+    <p class="muted" style="margin-top:0;">All fields are required, except the photo.</p>
     <label for="name">Full name</label>
     <input id="name" autocomplete="name" placeholder="Jane Doe" required>
     <label for="email">Email</label>
@@ -28,7 +28,16 @@
     <select id="position" required><option value="">Loading…</option></select>
     <label for="location">Which location?</label>
     <select id="location" required><option value="">Loading…</option></select>
-    <button class="primary" onclick="submitApplication()">Submit</button>
+    <label for="photo">Photo of you <span class="muted">(optional)</span></label>
+    <div class="photo-pick" id="photoPick">
+      <div class="photo-preview" id="photoPreview" aria-hidden="true"></div>
+      <div style="flex:1; min-width:0;">
+        <input id="photo" type="file" accept="image/*" onchange="photoChosen()">
+        <p class="muted" id="photoHint" style="margin:6px 0 0; font-size:12px;">A quick selfie is fine — it helps the manager put a face to your name. JPEG, PNG, HEIC or WebP, up to 10 MB.</p>
+        <button type="button" class="small ghost" id="photoClear" style="display:none; margin-top:8px;" onclick="clearPhoto()">Remove photo</button>
+      </div>
+    </div>
+    <button class="primary" id="submitBtn" onclick="submitApplication()">Submit</button>
   </div>
 
   <div class="card" id="doneCard" style="display:none;">
@@ -71,6 +80,36 @@
     }
   }
 
+  // Optional profile photo. The browser's own picker handles camera vs.
+  // library on a phone (accept="image/*"). The preview is an object URL
+  // so nothing is read into memory twice; it's revoked on change/clear.
+  // Type and size are checked here for a friendly message; the server
+  // checks again (declared type, actual bytes, size) since this is a
+  // public form.
+  const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+  let photoPreviewUrl = null;
+  function photoChosen() {
+    const input = document.getElementById('photo');
+    const file = input.files && input.files[0];
+    if (photoPreviewUrl) { URL.revokeObjectURL(photoPreviewUrl); photoPreviewUrl = null; }
+    const preview = document.getElementById('photoPreview');
+    preview.style.backgroundImage = '';
+    document.getElementById('photoClear').style.display = 'none';
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { showMsg('That file isn\'t a photo — please pick an image.', 'error'); input.value = ''; return; }
+    if (file.size > PHOTO_MAX_BYTES) { showMsg('That photo is too big — please pick one under 10 MB.', 'error'); input.value = ''; return; }
+    showMsg('', '');
+    photoPreviewUrl = URL.createObjectURL(file);
+    // HEIC won't render in most browsers' <img>; the box just stays as
+    // the placeholder in that case, which is fine — the file still uploads.
+    preview.style.backgroundImage = `url("${photoPreviewUrl}")`;
+    document.getElementById('photoClear').style.display = '';
+  }
+  function clearPhoto() {
+    document.getElementById('photo').value = '';
+    photoChosen();
+  }
+
   async function submitApplication() {
     const name = document.getElementById('name').value.trim();
     const email = document.getElementById('email').value.trim();
@@ -85,13 +124,30 @@
     if (!phone || phone.replace(/\D/g, '').length < 10) { showMsg('Please enter a phone number with area code.', 'error'); return; }
     if (!position) { showMsg('Please choose the position you\'re applying for.', 'error'); return; }
     if (!requestedLocationId) { showMsg('Please choose a location.', 'error'); return; }
+    // Multipart so the optional photo can ride along; the server accepts
+    // the old JSON shape too, but one code path here is simpler.
+    const form = new FormData();
+    form.append('name', name);
+    form.append('email', email);
+    form.append('phone', phone);
+    form.append('position', position);
+    form.append('requestedLocationId', requestedLocationId);
+    const photoInput = document.getElementById('photo');
+    const photo = photoInput.files && photoInput.files[0];
+    if (photo) form.append('photo', photo, photo.name || 'photo');
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.textContent = photo ? 'Sending (uploading photo)…' : 'Sending…';
     try {
-      await api('/api/employees/pending', { method: 'POST', body: { name, email, phone, position, requestedLocationId } });
+      await apiUpload('/api/employees/pending', form);
       document.getElementById('formCard').style.display = 'none';
       document.getElementById('doneCard').style.display = '';
       showMsg('', '');
     } catch (e) {
       showMsg(e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Submit';
     }
   }
 

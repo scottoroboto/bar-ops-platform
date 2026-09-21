@@ -116,6 +116,46 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// api() above always JSON.stringifies its body and forces
+// application/json — fine for everything else in this app, but wrong for
+// a multipart file upload. Two places send a file (a Cash Handling
+// receipt, an applicant's profile photo on /apply.html), so the sibling
+// helper lives here. Mirrors api()'s auth header (omitted when there's
+// no session — the Apply page is public), timeout, and
+// SESSION_EXPIRED/error handling; just skips the JSON body handling and
+// lets the browser set its own multipart boundary (no Content-Type set
+// explicitly — fetch does this correctly on its own for a FormData body,
+// and setting one manually strips the boundary).
+async function apiUpload(path, formData) {
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  let res;
+  try {
+    res = await fetch(path, { method: 'POST', headers, body: formData, signal: controller.signal });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('That took too long to respond. The server may be waking up — please try again.');
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* non-JSON error page */ }
+  if (res.status === 401 && data && data.error === 'SESSION_EXPIRED') {
+    goLogin('Your session ended — please sign in again.');
+    throw Object.assign(new Error('Session expired'), { code: 'SESSION_EXPIRED' });
+  }
+  if (!res.ok) {
+    const err = new Error((data && (data.message || data.error)) || `Request failed (${res.status})`);
+    err.code = data && data.error;
+    throw err;
+  }
+  return data;
+}
+
+
 // Builds a small in-page modal asking for the password, and resolves with
 // what was entered (or null on cancel). Deliberately NOT window.prompt()/
 // alert() — those are native browser dialogs that block the entire tab,

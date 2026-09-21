@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { withServiceClient } = require('./db');
 const notify = require('./notify');
+const storage = require('./storage');
 
 // NOTE: 'monitoring' was added to employee_apps' app_key CHECK constraint
 // back in patch_010 but never added here — meaning no one could ever be
@@ -66,14 +67,51 @@ function welcomeEmailText({ username, tempPassword, pin, enabledApps }) {
 // Applied for" dropdown — same treatment as requestedLocationId: it's just
 // a starting point. The manager still reviews (and can change) it during
 // manager-review below, same as they always could.
-async function createPendingEmployee({ name, email, phone, position, requestedLocationId, jotformSubmissionId }) {
+//
+// photoFile (optional) is a multer file {buffer, mimetype} — the
+// applicant's profile photo. Same id-first shape as cash receipts
+// (server/storage.js): mint the person's uuid here, upload under it,
+// then INSERT with photo_path already set — one write, no orphaned row
+// if the upload throws. The route has already checked type/size.
+async function createPendingEmployee({ name, email, phone, position, requestedLocationId, jotformSubmissionId, photoFile }) {
   return withServiceClient(async (client) => {
-    const { rows } = await client.query(
-      `INSERT INTO people (name, email, phone, position, location_id, role, status, jotform_submission_id)
-       VALUES ($1,$2,$3,$4,$5,'staff','pending_review',$6) RETURNING *`,
-      [name, email || null, phone || null, position || null, requestedLocationId || null, jotformSubmissionId || null]
-    );
-    return rows[0];
+    const id = crypto.randomUUID();
+    let photoPath = null;
+    if (photoFile) {
+      photoPath = await storage.uploadPersonPhoto({ buffer: photoFile.buffer, mimetype: photoFile.mimetype, personId: id });
+    }
+    try {
+      const { rows } = await client.query(
+        `INSERT INTO people (id, name, email, phone, position, location_id, role, status, jotform_submission_id, photo_path)
+         VALUES ($1,$2,$3,$4,$5,$6,'staff','pending_review',$7,$8) RETURNING *`,
+        [id, name, email || null, phone || null, position || null, requestedLocationId || null, jotformSubmissionId || null, photoPath]
+      );
+      return rows[0];
+    } catch (e) {
+      // The row never landed, so don't leave its photo behind either.
+      if (photoPath) await storage.deletePersonPhoto(photoPath);
+      throw e;
+    }
+  });
+}
+
+// Signed URL for a person's photo, or a plain error the route can pass
+// on. `viewer` is req.person: a manager only gets photos of people they
+// can already see (applicants anywhere, employees at their location) —
+// mirrors listPending / listAllWithAccess so the photo endpoint can
+// never show more than the lists do.
+async function getPhotoUrl({ personId, viewer }) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query('SELECT id, status, location_id, photo_path FROM people WHERE id = $1', [personId]);
+    const p = rows[0];
+    if (!p) return { error: 'Not found.', status: 404 };
+    if (viewer.role !== 'owner' && p.status !== 'pending_review' && p.location_id !== viewer.location_id) return { error: 'Not found.', status: 404 };
+    if (!p.photo_path) return { error: 'No photo on file.', status: 404 };
+    try {
+      return { url: await storage.getSignedPersonPhotoUrl(p.photo_path) };
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 500 };
+    }
   });
 }
 
@@ -97,7 +135,8 @@ async function updateOwnProfile({ personId, name, email, phone, address }) {
 async function listPending() {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, name, email, phone, location_id, position, pay_rate, created_at
+      `SELECT id, name, email, phone, location_id, position, pay_rate, created_at,
+              (photo_path IS NOT NULL) AS has_photo
        FROM people WHERE status = 'pending_review' ORDER BY created_at ASC`
     );
     return rows;
@@ -331,7 +370,7 @@ async function listAllWithAccess(locationFilter) {
     }
     const { rows: people } = await client.query(
       `SELECT id, name, role, location_id, username, email, phone, address, status, position, pay_rate,
-              password_verified_at,
+              password_verified_at, (photo_path IS NOT NULL) AS has_photo,
               activated_at, COALESCE(activated_at, created_at) AS hire_date
        FROM people WHERE ${where} ORDER BY name`,
       params
@@ -383,13 +422,16 @@ async function removeCertification({ certificationId }) {
 // employee's record through this path. Hard-deleted rather than soft
 // (status='inactive') because a rejected applicant was never actually an
 // employee; 'inactive' is reserved for people who really did work here.
+// Their photo (if any) goes too — no reason to keep a picture of
+// someone who was never hired. Best-effort, after the row is gone.
 async function discardPending({ personId }) {
   return withServiceClient(async (client) => {
-    const { rowCount } = await client.query(
-      `DELETE FROM people WHERE id = $1 AND status = 'pending_review'`,
+    const { rows } = await client.query(
+      `DELETE FROM people WHERE id = $1 AND status = 'pending_review' RETURNING photo_path`,
       [personId]
     );
-    if (!rowCount) return { ok: false, error: 'Not found, or already activated.' };
+    if (!rows.length) return { ok: false, error: 'Not found, or already activated.' };
+    if (rows[0].photo_path) await storage.deletePersonPhoto(rows[0].photo_path);
     return { ok: true };
   });
 }
@@ -638,7 +680,7 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 }
 
 module.exports = {
-  createPendingEmployee, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
+  createPendingEmployee, getPhotoUrl, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
   getNetworkAccessForPerson, setNetworkAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
   setEmployeeStatus, requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,

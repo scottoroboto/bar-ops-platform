@@ -49,43 +49,8 @@ function sourceStatus(s) {
 
 function locationName(id) { const l = LOCATIONS.find(l => l.id === id); return l ? l.name : '—'; }
 
-// api() (common.js) always JSON.stringifies its body and forces
-// application/json — fine for everything else in this app, but wrong for
-// a multipart receipt upload. This is the one place in the app that
-// sends a file, so a tiny sibling helper lives here rather than changing
-// api() for every other page. Mirrors api()'s auth header, timeout, and
-// SESSION_EXPIRED/error handling; just skips the JSON body handling and
-// lets the browser set its own multipart boundary (no Content-Type set
-// explicitly — fetch does this correctly on its own for a FormData body,
-// and setting one manually strips the boundary).
-async function apiUpload(path, formData) {
-  const headers = {};
-  const token = getToken();
-  if (token) headers.Authorization = 'Bearer ' + token;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
-  let res;
-  try {
-    res = await fetch(path, { method: 'POST', headers, body: formData, signal: controller.signal });
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('That took too long to respond. The server may be waking up — please try again.');
-    throw e;
-  } finally {
-    clearTimeout(timeout);
-  }
-  let data = null;
-  try { data = await res.json(); } catch (e) { /* non-JSON error page */ }
-  if (res.status === 401 && data && data.error === 'SESSION_EXPIRED') {
-    goLogin('Your session ended — please sign in again.');
-    throw Object.assign(new Error('Session expired'), { code: 'SESSION_EXPIRED' });
-  }
-  if (!res.ok) {
-    const err = new Error((data && (data.message || data.error)) || `Request failed (${res.status})`);
-    err.code = data && data.error;
-    throw err;
-  }
-  return data;
-}
+// Multipart uploads go through apiUpload() in common.js (shared with
+// the Apply page's profile photo).
 
 // ---------------------------------------------------------------------
 // Manager / owner dashboard (drawers_bags, full_authority)

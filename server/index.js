@@ -16,6 +16,7 @@ const notify = require('./notify');
 const jotform = require('./jotform');
 const multer = require('multer');
 const resetRequests = require('./resetRequests');
+const storage = require('./storage');
 
 const app = express();
 app.use(cors());
@@ -1945,7 +1946,29 @@ res.json(await employees.listPending());
 // separate Jotform "hire pack" for the sensitive tax/banking half. The
 // Jotform webhook below is a secondary/optional intake path, not the
 // primary one.
-app.post('/api/employees/pending', async (req, res) => {
+//
+// Optional profile photo (batch 2, 2026-09-21): the form now posts
+// multipart with an optional `photo` part. multer only engages for a
+// multipart body and passes a plain JSON post straight through
+// (express.json above already parsed it), so the old JSON shape still
+// works. The photo is checked three ways before it goes anywhere near
+// the bucket — declared type on the allowlist, leading bytes actually
+// look like that image type, and multer's size cap — because this is the
+// one public upload in the app and "it's just a picture" is exactly the
+// thing not to take on faith. Bucket-side allowed_mime_types /
+// file_size_limit (patch_031) back all three up.
+const applyPhotoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 }, // matches the people-photos bucket's file_size_limit (patch_031)
+}).single('photo');
+
+app.post('/api/employees/pending', (req, res, next) => {
+  applyPhotoUpload(req, res, (err) => {
+    if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ ok: false, error: 'That photo is too big — please pick one under 10 MB.' });
+    if (err) return res.status(400).json({ ok: false, error: err.message || 'Could not read the uploaded photo.' });
+    next();
+  });
+}, async (req, res) => {
 const name = (req.body.name || '').trim();
 const email = (req.body.email || '').trim();
 const phone = (req.body.phone || '').trim();
@@ -1958,8 +1981,24 @@ if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).
 if (!phone || phone.replace(/\D/g, '').length < 10) return res.status(400).json({ ok: false, error: 'A phone number with area code is required.' });
 if (!position) return res.status(400).json({ ok: false, error: 'Position applied for is required.' });
 if (!requestedLocationId) return res.status(400).json({ ok: false, error: 'Location is required.' });
-const person = await employees.createPendingEmployee({ ...req.body, name, email, phone, position, requestedLocationId });
-res.json({ ok: true, person });
+const photoFile = req.file || null;
+if (photoFile) {
+  if (!storage.PHOTO_MIMES.includes(photoFile.mimetype) || !storage.looksLikeImage(photoFile.buffer, photoFile.mimetype)) {
+    return res.status(400).json({ ok: false, error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' });
+  }
+}
+try {
+  const person = await employees.createPendingEmployee({ ...req.body, name, email, phone, position, requestedLocationId, photoFile });
+  res.json({ ok: true, person });
+} catch (e) {
+  // A storage failure (storage.js tags those with statusCode — most
+  // likely the bucket/env isn't configured) is nothing the applicant
+  // can fix: tell them to try again without the photo rather than
+  // losing the whole application. Anything else is the same DB failure
+  // it always was: let Express's error handling deal with it as before.
+  if (!photoFile || !e.statusCode) throw e;
+  res.status(e.statusCode).json({ ok: false, error: `Couldn't save the photo (${e.message}). Try again without it.` });
+}
 });
 
 // Jotform calls this on every submission of the "Ticket Sports Bar New Hire
@@ -1989,6 +2028,19 @@ res.json(result);
 app.post('/api/employees/:id/discard', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
 const result = await employees.discardPending({ personId: req.params.id });
+res.json(result);
+});
+
+// A person's profile photo (applicants and employees alike), for the
+// Employees app's pending list and data card. Same audience as the
+// lists that show the person: owner sees everyone; a manager sees
+// applicants (listPending isn't location-scoped) and their own
+// location's people (listAllWithAccess is). Never the raw bucket path —
+// a freshly minted short-lived signed URL, same as receipts.
+app.get('/api/employees/:id/photo', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const result = await employees.getPhotoUrl({ personId: req.params.id, viewer: req.person });
+if (result.error) return res.status(result.status || 404).json(result);
 res.json(result);
 });
 

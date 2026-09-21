@@ -151,12 +151,38 @@ async function loadPending() {
   updateTabBadges();
 }
 
+// Profile photos (patch_031) are never sent as URLs in the lists — just
+// has_photo. The bucket is private, so each <img> needs a short-lived
+// signed URL from /api/employees/:id/photo; those are minted for 5
+// minutes, so they're remembered here for 4 and re-fetched after that.
+const PHOTO_URL_CACHE = {}; // personId -> { url, at }
+async function photoUrlFor(personId) {
+  const hit = PHOTO_URL_CACHE[personId];
+  if (hit && Date.now() - hit.at < 4 * 60 * 1000) return hit.url;
+  try {
+    const { url } = await api(`/api/employees/${personId}/photo`);
+    PHOTO_URL_CACHE[personId] = { url, at: Date.now() };
+    return url;
+  } catch (e) {
+    return null; // no photo / not visible / storage hiccup — the initials stay
+  }
+}
+// Fills every [data-photo-for] element in `root` with its person's photo
+// as a background image. Fire-and-forget after a render.
+function fillPhotos(root) {
+  root.querySelectorAll('[data-photo-for]').forEach(async (el) => {
+    const url = await photoUrlFor(el.getAttribute('data-photo-for'));
+    if (url) { el.style.backgroundImage = `url("${url}")`; el.classList.add('has-photo'); }
+  });
+}
+
 function renderPendingList() {
   const el = document.getElementById('pendingList');
   if (!PENDING_LIST.length) { el.innerHTML = '<p class="muted">Nothing pending right now.</p>'; return; }
   el.innerHTML = PENDING_LIST.map(p => `
     <div class="list-row">
-      <div>
+      ${p.has_photo ? `<div class="pending-thumb" data-photo-for="${p.id}" title="Applicant's photo"></div>` : ''}
+      <div style="flex:1; min-width:0;">
         <div class="name">${escapeHtml(p.name)}</div>
         <div class="sub">${escapeHtml(p.email || p.phone || 'no contact on file')} · ${p.position ? escapeHtml(p.position) + ' · ' : ''}${p.location_id ? escapeHtml(locationName(p.location_id)) : 'no location yet'}</div>
       </div>
@@ -173,6 +199,7 @@ function renderPendingList() {
       </div>
     </div>
   `).join('');
+  fillPhotos(el);
 }
 
 function startDiscardPending(id) { discardConfirmId = id; renderPendingList(); }
@@ -570,7 +597,11 @@ function openEmployeeDetail(id) {
   if (!p) return;
   const isOwner = ME.role === 'owner';
   document.getElementById('detailPersonId').value = p.id;
-  document.getElementById('detailAvatar').textContent = initials(p.name);
+  const avatar = document.getElementById('detailAvatar');
+  avatar.textContent = initials(p.name);
+  avatar.classList.remove('has-photo');
+  avatar.style.backgroundImage = '';
+  if (p.has_photo) { avatar.setAttribute('data-photo-for', p.id); fillPhotos(avatar.parentElement); } else avatar.removeAttribute('data-photo-for');
   document.getElementById('detailName').textContent = p.name;
   document.getElementById('detailMeta').textContent = `${cap(p.role)} · ${p.position || '—'}${p.status !== 'active' ? ' · ' + p.status : ''}`;
   document.getElementById('detailLocChips').innerHTML = locChipsHtml(p);
