@@ -1947,9 +1947,18 @@ res.json(await employees.listPending());
 // primary one.
 app.post('/api/employees/pending', async (req, res) => {
 const name = (req.body.name || '').trim();
-if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+const email = (req.body.email || '').trim();
+const phone = (req.body.phone || '').trim();
 const position = (req.body.position || '').trim() || null;
-const person = await employees.createPendingEmployee({ ...req.body, name, position });
+const requestedLocationId = (req.body.requestedLocationId || '').trim() || null;
+// All required (Scotto, 2026-09-21). apply.html says the same up front;
+// this is the backstop for anything that skips the form.
+if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ ok: false, error: 'A valid email is required.' });
+if (!phone || phone.replace(/\D/g, '').length < 10) return res.status(400).json({ ok: false, error: 'A phone number with area code is required.' });
+if (!position) return res.status(400).json({ ok: false, error: 'Position applied for is required.' });
+if (!requestedLocationId) return res.status(400).json({ ok: false, error: 'Location is required.' });
+const person = await employees.createPendingEmployee({ ...req.body, name, email, phone, position, requestedLocationId });
 res.json({ ok: true, person });
 });
 
@@ -1987,8 +1996,9 @@ res.json(result);
 app.post('/api/employees/invite', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
 const toEmail = (req.body.email || '').trim();
-if (!toEmail) return res.status(400).json({ ok: false, error: 'Email is required.' });
-const result = await employees.sendOnboardingInvite({ toEmail, toName: (req.body.name || '').trim() || null, sentBy: req.person.id });
+const toPhone = (req.body.phone || '').trim();
+if (!toEmail && !toPhone) return res.status(400).json({ ok: false, error: 'Enter an email address, a phone number, or both.' });
+const result = await employees.sendOnboardingInvite({ toEmail, toPhone, toName: (req.body.name || '').trim() || null, sentBy: req.person.id });
 res.json(result);
 });
 
@@ -2147,6 +2157,24 @@ app.get('/api/servicecalls/equipment-types/admin', auth.requireSession('light'),
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
 const { rows } = await pool.query('SELECT * FROM equipment_types ORDER BY active DESC, sort_order, name');
 res.json(rows);
+});
+
+// One-click A-Z (Scotto, 2026-09-21): after adding a few new types with
+// the arrows, re-alphabetizing by hand is tedious. Rewrites sort_order
+// for the active types in name order (case-insensitive); archived ones
+// are untouched, same as /move. Registered before the :id routes so
+// "sort-az" can never be swallowed as an id.
+app.post('/api/servicecalls/equipment-types/sort-az', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const result = await withServiceClient(async (client) => {
+const { rows } = await client.query('SELECT id, name FROM equipment_types WHERE active = true');
+rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+for (let i = 0; i < rows.length; i++) {
+await client.query('UPDATE equipment_types SET sort_order = $1 WHERE id = $2', [i + 1, rows[i].id]);
+}
+return { ok: true, count: rows.length };
+});
+res.json(result);
 });
 
 // Manual reorder ("move up/below one" per Scotto) — active types only;

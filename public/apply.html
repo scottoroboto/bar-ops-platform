@@ -17,16 +17,17 @@
   <div id="msgBox"></div>
 
   <div class="card" id="formCard">
+    <p class="muted" style="margin-top:0;">All fields are required.</p>
     <label for="name">Full name</label>
-    <input id="name" autocomplete="name" placeholder="Jane Doe">
+    <input id="name" autocomplete="name" placeholder="Jane Doe" required>
     <label for="email">Email</label>
-    <input id="email" type="email" autocomplete="email" placeholder="jane@example.com">
+    <input id="email" type="email" autocomplete="email" placeholder="jane@example.com" required>
     <label for="phone">Phone</label>
-    <input id="phone" type="tel" autocomplete="tel" placeholder="(555) 555-1234">
+    <input id="phone" type="tel" autocomplete="tel" placeholder="(555) 555-1234" required>
     <label for="position">Position applied for</label>
-    <select id="position"><option value="">Loading…</option></select>
+    <select id="position" required><option value="">Loading…</option></select>
     <label for="location">Which location?</label>
-    <select id="location"><option value="">Loading…</option></select>
+    <select id="location" required><option value="">Loading…</option></select>
     <button class="primary" onclick="submitApplication()">Submit</button>
   </div>
 
@@ -50,10 +51,10 @@
     const select = document.getElementById('location');
     try {
       const locations = await api('/api/locations');
-      select.innerHTML = '<option value="">Not sure / other</option>' +
+      select.innerHTML = '<option value="">Choose a location…</option>' +
         locations.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
     } catch (e) {
-      select.innerHTML = '<option value="">Not sure / other</option>';
+      select.innerHTML = '<option value="">Couldn\'t load locations — reload the page</option>';
     }
   }
 
@@ -63,10 +64,10 @@
     const select = document.getElementById('position');
     try {
       const positions = await api('/api/positions?excludeManagement=true');
-      select.innerHTML = '<option value="">Not sure / other</option>' +
+      select.innerHTML = '<option value="">Choose a position…</option>' +
         positions.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
     } catch (e) {
-      select.innerHTML = '<option value="">Not sure / other</option>';
+      select.innerHTML = '<option value="">Couldn\'t load positions — reload the page</option>';
     }
   }
 
@@ -74,9 +75,16 @@
     const name = document.getElementById('name').value.trim();
     const email = document.getElementById('email').value.trim();
     const phone = document.getElementById('phone').value.trim();
-    const position = document.getElementById('position').value || undefined;
-    const requestedLocationId = document.getElementById('location').value || undefined;
+    const position = document.getElementById('position').value;
+    const requestedLocationId = document.getElementById('location').value;
+    // Every field is required (Scotto, 2026-09-21) — a half-filled
+    // application just means a manager has to chase the person down.
+    // The server enforces the same list; this is the friendlier message.
     if (!name) { showMsg('Please enter your name.', 'error'); return; }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showMsg('Please enter a valid email address.', 'error'); return; }
+    if (!phone || phone.replace(/\D/g, '').length < 10) { showMsg('Please enter a phone number with area code.', 'error'); return; }
+    if (!position) { showMsg('Please choose the position you\'re applying for.', 'error'); return; }
+    if (!requestedLocationId) { showMsg('Please choose a location.', 'error'); return; }
     try {
       await api('/api/employees/pending', { method: 'POST', body: { name, email, phone, position, requestedLocationId } });
       document.getElementById('formCard').style.display = 'none';

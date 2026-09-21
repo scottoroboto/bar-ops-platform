@@ -398,14 +398,34 @@ async function discardPending({ personId }) {
 // people row (they haven't applied yet), so notifications_log gets a
 // synthetic relatedId just to satisfy its NOT NULL constraint — this is an
 // invite, not an update to a real record.
-async function sendOnboardingInvite({ toEmail, toName, sentBy }) {
-  if (!toEmail) return { ok: false, error: 'Email is required.' };
+// Email and/or text (Scotto, 2026-09-21: "all managers need a send
+// onboard link — email and text box"). Either or both; at least one.
+// SMS goes through notify.sendSms, so until Twilio is configured it's
+// logged as simulated exactly like every other text in the app -- the
+// result says which channel actually went out so the UI can be honest.
+async function sendOnboardingInvite({ toEmail, toPhone, toName, sentBy }) {
+  const email = (toEmail || '').trim();
+  const phone = (toPhone || '').trim();
+  if (!email && !phone) return { ok: false, error: 'Enter an email address, a phone number, or both.' };
   return withServiceClient(async (client) => {
     const link = `${appBaseUrl()}/apply.html`;
     const greeting = toName ? `Hi ${toName},` : 'Hi,';
-    const text = `${greeting}\n\nYou've been invited to apply to join the team at Ticket Sports Bar. It only takes about a minute:\n\n${link}\n\nSee you soon!`;
-    const result = await notify.sendEmail(client, 'onboarding_invite', crypto.randomUUID(), toEmail, 'Join the team at Ticket Sports Bar', text);
-    return result;
+    const relatedId = crypto.randomUUID();
+    const out = { ok: true, email: null, sms: null };
+    if (email) {
+      const text = `${greeting}\n\nYou've been invited to apply to join the team at Ticket Sports Bar. It only takes about a minute:\n\n${link}\n\nSee you soon!`;
+      const r = await notify.sendEmail(client, 'onboarding_invite', relatedId, email, 'Join the team at Ticket Sports Bar', text);
+      out.email = r.ok ? (r.simulated ? 'simulated' : 'sent') : 'failed';
+      if (!r.ok) out.error = r.error;
+    }
+    if (phone) {
+      const body = `${greeting.replace(/,$/, '')} — you're invited to apply to join the team at Ticket Sports Bar. Takes about a minute: ${link}`;
+      const r = await notify.sendSms(client, 'onboarding_invite', relatedId, phone, body);
+      out.sms = r.ok ? (r.simulated ? 'simulated' : 'sent') : 'failed';
+      if (!r.ok) out.error = out.error ? `${out.error}; ${r.error}` : r.error;
+    }
+    if (out.email === 'failed' || out.sms === 'failed') out.ok = false;
+    return out;
   });
 }
 

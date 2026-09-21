@@ -192,9 +192,10 @@ async function confirmDiscardPending(id) {
 async function sendOnboardingInvite() {
   const name = document.getElementById('inviteName').value.trim();
   const email = document.getElementById('inviteEmail').value.trim();
+  const phone = document.getElementById('invitePhone').value.trim();
   const resultEl = document.getElementById('inviteResult');
   const btn = document.getElementById('sendInviteBtn');
-  if (!email) { resultEl.innerHTML = '<p class="msg error">Enter an email address.</p>'; return; }
+  if (!email && !phone) { resultEl.innerHTML = '<p class="msg error">Enter an email address, a phone number, or both.</p>'; return; }
   // The server can take a little while to respond (e.g. right after the app
   // has been idle), and with no feedback here a slow request just looks like
   // the button did nothing. Show a visible "working on it" state immediately
@@ -204,11 +205,17 @@ async function sendOnboardingInvite() {
   btn.textContent = 'Sending…';
   resultEl.innerHTML = '<p class="msg info">Sending…</p>';
   try {
-    const result = await withStepUp(() => api('/api/employees/invite', { method: 'POST', body: { name, email } }));
+    const result = await withStepUp(() => api('/api/employees/invite', { method: 'POST', body: { name, email, phone } }));
     if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error || 'Could not send invite.')}</p>`; return; }
-    resultEl.innerHTML = `<p class="msg success">Onboarding link sent to ${escapeHtml(email)}.</p>`;
+    // Say what actually happened per channel -- "simulated" means texting
+    // (or email) isn't configured yet, so nothing really went out.
+    const parts = [];
+    if (result.email) parts.push(result.email === 'sent' ? `emailed to ${escapeHtml(email)}` : `email to ${escapeHtml(email)} logged only (email isn’t configured)`);
+    if (result.sms) parts.push(result.sms === 'sent' ? `texted to ${escapeHtml(phone)}` : `text to ${escapeHtml(phone)} logged only (texting isn’t turned on yet)`);
+    resultEl.innerHTML = `<p class="msg success">Onboarding link ${parts.join(' and ')}.</p>`;
     document.getElementById('inviteName').value = '';
     document.getElementById('inviteEmail').value = '';
+    document.getElementById('invitePhone').value = '';
   } catch (e) {
     resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   } finally {

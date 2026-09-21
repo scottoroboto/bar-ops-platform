@@ -404,6 +404,9 @@ async function renderManage() {
       <h2>Equipment types</h2>
       <p class="muted">Shown in the Equipment dropdown when reporting a new call. Archiving hides one from that dropdown — it doesn't touch past calls that already used it.</p>
       <div id="equipList"><p class="muted">Loading…</p></div>
+      <div class="stack-actions" style="margin-top:6px;">
+        <button class="small ghost" style="margin-top:0;" onclick="sortEquipmentAz()" title="Re-order all active equipment types alphabetically">Sort A–Z</button>
+      </div>
       <label for="newEquipName">Add an equipment type</label>
       <input id="newEquipName" placeholder="e.g. Neon Sign">
       <button class="secondary" onclick="submitAddEquipment()">Add</button>
@@ -453,6 +456,16 @@ async function moveEquipment(id, direction) {
   try {
     const result = await api(`/api/servicecalls/equipment-types/${id}/move`, { method: 'POST', body: { direction } });
     if (!result.ok) { showMsg(result.error, 'error'); return; }
+    loadManageEquipment();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
+async function sortEquipmentAz() {
+  try {
+    const result = await api('/api/servicecalls/equipment-types/sort-az', { method: 'POST', body: {} });
+    if (!result.ok) { showMsg(result.error || 'Could not sort.', 'error'); return; }
     loadManageEquipment();
   } catch (e) {
     showMsg(e.message, 'error');

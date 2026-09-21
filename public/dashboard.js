@@ -158,27 +158,30 @@ async function employeesReviewCount(person) {
   const counts = {};
   await Promise.all(Object.keys(jobs).map(async (k) => { counts[k] = await jobs[k]; }));
 
-  const tiles = keys.map((key) => {
+  // Apps the person can't open are left out entirely rather than shown
+  // greyed as "not enabled" (Scotto, 2026-09-21): a bartender's home
+  // screen should be just their apps, not a reminder of everyone else's.
+  // The ones they do have keep APP_INFO's order and close ranks. The
+  // "nothing's turned on yet" card below still covers the empty case.
+  const tiles = keys.flatMap((key) => {
     const info = APP_INFO[key];
     const entry = access.find(a => a.app_key === key);
     // Cash Handling and Inventory Control both have a second gate on top
     // of the ordinary app-key toggle: the app-key can be enabled for
     // someone whose Position still resolves to no_access (nobody's
-    // granted them an override either) — the tile should read "not
-    // enabled" for them just like it would for the toggle being off
-    // outright, not silently link to an empty app.
+    // granted them an override either) — the tile should be absent for
+    // them just like it would for the toggle being off outright, not
+    // silently link to an empty app.
     const enabled = key === 'cash_handling'
       ? !!(entry && entry.enabled) && cashHandlingTier !== 'no_access'
       : key === 'inventory_control'
       ? !!(entry && entry.enabled) && inventoryTier !== 'no_access'
             : !!(entry && entry.enabled);
-      if (info.comingSoon) {
-      return tileHtml({ icon: info.icon, label: info.label, note: 'coming soon', disabled: true });
+    if (!enabled) return [];
+    if (info.comingSoon) {
+      return [tileHtml({ icon: info.icon, label: info.label, note: 'coming soon', disabled: true })];
     }
-    if (!enabled) {
-      return tileHtml({ icon: info.icon, label: info.label, note: 'not enabled', disabled: true });
-    }
-    return tileHtml({ icon: info.icon, label: info.label, href: info.href, count: counts[key] });
+    return [tileHtml({ icon: info.icon, label: info.label, href: info.href, count: counts[key] })];
   });
 
   // Workforce (Intuit paystubs/W2s) — every active employee gets this, not
