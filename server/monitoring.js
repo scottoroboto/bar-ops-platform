@@ -387,7 +387,8 @@ async function recipientsFor(svc, system) {
        p.role = 'owner'
        OR EXISTS (
          SELECT 1 FROM employee_apps ea
-         WHERE ea.person_id = p.id AND ea.app_key = 'monitoring' AND ea.enabled = true AND p.location_id = $1
+         WHERE ea.person_id = p.id AND ea.app_key = 'monitoring' AND ea.enabled = true
+           AND (p.location_id = $1 OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.person_id = p.id AND el.location_id = $1))
        )
        OR EXISTS (
          SELECT 1 FROM monitoring_alert_routes r
@@ -468,8 +469,8 @@ async function listAlertRoutes({ locationFilter } = {}) {
     const params = [];
     let where = '';
     if (locationFilter) {
-      params.push(locationFilter);
-      where = `WHERE r.location_id = $1 OR r.location_id IS NULL`;
+      params.push(Array.isArray(locationFilter) ? locationFilter : [locationFilter]);
+      where = `WHERE r.location_id = ANY($1::uuid[]) OR r.location_id IS NULL`;
     }
     const { rows } = await svc.query(
       `SELECT r.*, p.name AS person_name, l.name AS location_name

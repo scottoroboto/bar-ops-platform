@@ -440,7 +440,7 @@ function renderAdd() {
       <h2>Registered systems</h2>
       <div id="manageList"><p class="muted">Loading…</p></div>
     </div>`;
-  fillLocationSelect(document.getElementById('asLocation'), ME.location_id);
+  fillLocationSelect(document.getElementById('asLocation'), myLocationIds(ME)[0]);
   loadManageList();
 }
 

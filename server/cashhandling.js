@@ -113,9 +113,9 @@ async function getSource(client, sourceId) {
 // own_drawer: only their own assigned drawer. drawers_bags: any
 // drawer/backup_bag at their own location, never a fixed point.
 // full_authority/owner: anything at their own location (owner: anywhere).
-function canCountSource({ tier, personId, personLocationId, isOwner, source }) {
+function canCountSource({ tier, personId, personLocationIds, isOwner, source }) {
   if (!source || !source.active) return false;
-  if (!isOwner && source.location_id !== personLocationId) return false;
+  if (!isOwner && !(personLocationIds || []).map(String).includes(String(source.location_id))) return false;
   if (tier === 'own_drawer') return source.kind === 'drawer' && source.assigned_person_id === personId;
   if (tier === 'drawers_bags') return source.kind !== 'fixed_point';
   if (tier === 'full_authority') return true;
@@ -432,7 +432,7 @@ async function listAccessChangeLog(client, { personId, limit } = {}) {
 async function listAllEffectiveAccess(client, { locationId } = {}) {
   const clauses = [`p.status = 'active'`];
   const params = [];
-  if (locationId) { params.push(locationId); clauses.push(`p.location_id = $${params.length}`); }
+  if (locationId) { params.push(locationId); clauses.push(`(p.location_id = $${params.length} OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.person_id = p.id AND el.location_id = $${params.length}))`); }
   const { rows } = await client.query(
     `SELECT p.id, p.name, p.role, p.position, p.location_id, loc.name AS location_name,
             COALESCE(ea.enabled, false) AS app_enabled,

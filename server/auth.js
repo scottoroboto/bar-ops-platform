@@ -45,7 +45,7 @@ return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 // ---------------------------------------------------------------------
 async function loginWithPassword({ username, password }) {
 return withServiceClient(async (client) => {
-const { rows } = await client.query('SELECT * FROM people WHERE username = $1', [username]);
+const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.username = $1', [username]);
 const person = rows[0];
 if (!person || person.status !== 'active' || !person.password_hash) {
 return { ok: false, error: 'Invalid username or password.' };
@@ -101,7 +101,7 @@ if (row.code_hash !== hashToken(code)) return { ok: false, error: 'Incorrect cod
 await client.query('UPDATE verification_codes SET consumed_at = now() WHERE id = $1', [row.id]);
 await client.query('UPDATE people SET password_verified_at = now() WHERE id = $1', [personId]);
 
-const { rows: personRows } = await client.query('SELECT * FROM people WHERE id = $1', [personId]);
+const { rows: personRows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.id = $1', [personId]);
 const person = personRows[0];
 const token = await mintSession(client, person, 'full', null);
 return { ok: true, token, person: publicPerson(person) };
@@ -118,7 +118,7 @@ return { ok: true, token, person: publicPerson(person) };
 // ---------------------------------------------------------------------
 async function loginWithPin({ username, pin, deviceToken }) {
 return withServiceClient(async (client) => {
-const { rows } = await client.query('SELECT * FROM people WHERE username = $1', [username]);
+const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.username = $1', [username]);
 const person = rows[0];
 if (!person || person.status !== 'active' || !person.pin_hash) {
 return { ok: false, error: 'Invalid username or PIN.' };
@@ -151,7 +151,7 @@ return { ok: true, token, person: publicPerson(person) };
 // ---------------------------------------------------------------------
 async function stepUp({ personId, password }) {
 return withServiceClient(async (client) => {
-const { rows } = await client.query('SELECT * FROM people WHERE id = $1', [personId]);
+const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.id = $1', [personId]);
 const person = rows[0];
 if (!person || !person.password_hash) return { ok: false, error: 'No password set for this account.' };
 const valid = await bcrypt.compare(password, person.password_hash);
@@ -193,8 +193,12 @@ VALUES ($1,$2,$3,$4, now() + ($5 || ' days')::interval + ($6 || ' minutes')::int
 return token;
 }
 
+// A people row plus every bar they work at (patch_033), for login paths.
+const PERSON_WITH_LOCATIONS = `SELECT p.*, ARRAY(SELECT el.location_id FROM employee_locations el WHERE el.person_id = p.id ORDER BY el.added_at) AS location_ids FROM people p`;
+
 function publicPerson(person) {
-return { id: person.id, name: person.name, role: person.role, username: person.username, locationId: person.location_id };
+const locationIds = (person.location_ids && person.location_ids.length) ? person.location_ids : (person.location_id ? [person.location_id] : []);
+return { id: person.id, name: person.name, role: person.role, username: person.username, locationId: person.location_id, locationIds };
 }
 
 // ---------------------------------------------------------------------
@@ -212,7 +216,8 @@ if (!token) return res.status(401).json({ error: 'Not signed in.' });
 const tokenHash = hashToken(token);
 const result = await withServiceClient(async (client) => {
 const { rows } = await client.query(
-`SELECT s.*, p.id AS p_id, p.name, p.role, p.location_id, p.status, p.email, p.phone, p.address
+`SELECT s.*, p.id AS p_id, p.name, p.role, p.location_id, p.status, p.email, p.phone, p.address,
+ARRAY(SELECT el.location_id FROM employee_locations el WHERE el.person_id = p.id ORDER BY el.added_at) AS location_ids
 FROM auth_sessions s JOIN people p ON p.id = s.person_id
 WHERE s.token_hash = $1`,
 [tokenHash]
@@ -226,7 +231,12 @@ if (rank[result.session_tier] < rank[minTier]) {
 return res.status(403).json({ error: 'STEP_UP_REQUIRED', message: 'This needs you to re-enter your password first.' });
 }
 
-req.person = { id: result.p_id, name: result.name, role: result.role, location_id: result.location_id, email: result.email, phone: result.phone, address: result.address };
+req.person = {
+id: result.p_id, name: result.name, role: result.role, location_id: result.location_id,
+// Every bar they work at (patch_033); location_id above is just one of them.
+location_ids: (result.location_ids && result.location_ids.length) ? result.location_ids : (result.location_id ? [result.location_id] : []),
+email: result.email, phone: result.phone, address: result.address,
+};
 req.withAuthedClient = (fn) => withAuthedClient(req.person, fn);
 next();
 };

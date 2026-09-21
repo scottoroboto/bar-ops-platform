@@ -763,7 +763,7 @@ async function renderSetup() {
   const el = document.getElementById('panelSetup');
   // Managers add schedules too (2026-09-21), at their own location only;
   // the server enforces the same. Archive/restore stay owner-only.
-  const myLocations = IS_OWNER ? LOCATIONS : LOCATIONS.filter(l => l.id === ME.locationId);
+  const myLocations = IS_OWNER ? LOCATIONS : LOCATIONS.filter(l => myLocationIds(ME).includes(String(l.id)));
   const canAddSchedule = IS_OWNER || myLocations.length > 0;
   el.innerHTML = `
     <div class="card">

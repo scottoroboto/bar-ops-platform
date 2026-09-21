@@ -277,7 +277,7 @@ function renderNewForm() {
     <div id="ncDestinations" class="sc-checkbox-grid"></div>
     <button class="primary" onclick="submitNewCall()">Submit</button>
   </div>`;
-  fillLocationSelect(document.getElementById('ncLocation'), ME.location_id);
+  fillLocationSelect(document.getElementById('ncLocation'), myLocationIds(ME)[0]);
   fillEquipmentSelect(document.getElementById('ncEquipment'));
   const destEl = document.getElementById('ncDestinations');
   destEl.innerHTML = DESTINATIONS.length

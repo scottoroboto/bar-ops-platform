@@ -41,6 +41,15 @@ const servicePool = new Pool({
     || 'postgresql://barplatform_service:barplatform_service_dev@localhost:5432/barplatform',
 });
 
+// The set of locations a person works at (patch_033). Falls back to the
+// single people.location_id for anything that hasn't been loaded with
+// the employee_locations join (a cached client person, an old session).
+function locationIdsOf(person) {
+  if (!person) return [];
+  if (Array.isArray(person.location_ids) && person.location_ids.length) return person.location_ids.map(String);
+  return person.location_id ? [String(person.location_id)] : [];
+}
+
 // Every authenticated request runs inside a transaction with three
 // session-local settings set first — the same settings the RLS policies
 // in db/schema.sql read. This is what makes "who is asking" enforceable
@@ -53,6 +62,9 @@ async function withAuthedClient(person, fn) {
     await client.query('SELECT set_config($1, $2, true)', ['app.current_person_id', person ? person.id : '']);
     await client.query('SELECT set_config($1, $2, true)', ['app.current_role', person ? person.role : '']);
     await client.query('SELECT set_config($1, $2, true)', ['app.current_location_id', person && person.location_id ? person.location_id : '']);
+    // Every bar this person works at (patch_033), for the set-valued
+    // policies; the single setting above stays for anything older.
+    await client.query('SELECT set_config($1, $2, true)', ['app.current_location_ids', locationIdsOf(person).join(',')]);
     const result = await fn(client);
     await client.query('COMMIT');
     return result;
@@ -83,4 +95,5 @@ async function withServiceClient(fn) {
   }
 }
 
-module.exports = { pool, servicePool, withAuthedClient, withServiceClient };
+module.exports = {
+  locationIdsOf, pool, servicePool, withAuthedClient, withServiceClient };

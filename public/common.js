@@ -72,6 +72,16 @@ function logout() { clearSession(); window.location.href = '/index.html'; }
 // always sends/receives JSON, and surfaces the two session-related error
 // codes the backend uses (SESSION_EXPIRED, STEP_UP_REQUIRED) as
 // recognizable errors instead of generic failures.
+// Every bar the signed-in person works at (patch_033). Sessions cached
+// before that change only carry the single locationId; either way this
+// returns an array, possibly empty (a maintenance person, the owner).
+function myLocationIds(person) {
+  const p = person || getPerson();
+  if (!p) return [];
+  if (Array.isArray(p.locationIds) && p.locationIds.length) return p.locationIds.map(String);
+  return p.locationId ? [String(p.locationId)] : [];
+}
+
 // "Ticket 1" -> "T1": the short location tag used on chips across the
 // app (Employees roster, Scheduling shift chips, dashboard). Anything
 // without a trailing number falls back to its first two letters.

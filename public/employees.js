@@ -57,8 +57,9 @@ function locationName(id) {
 // needs to change the day that becomes real data.
 function locChipsHtml(p) {
   if (p.role === 'maintenance') return '<span class="chip warn">Maint</span>';
-  if (!p.location_id) return '<span class="muted">—</span>';
-  return `<span class="chip">${escapeHtml(shortLoc(locationName(p.location_id)))}</span>`;
+  const ids = personLocationIds(p);
+  if (!ids.length) return '<span class="muted">—</span>';
+  return ids.map(id => `<span class="chip">${escapeHtml(shortLoc(locationName(id)))}</span>`).join(' ');
 }
 
 function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
@@ -81,6 +82,23 @@ function rateVisible(p) {
 
 function fillLocationSelect(sel) {
   sel.innerHTML = LOCATIONS.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+}
+
+// A person's bars (patch_033): the array from the server, or the single
+// column for anything that hasn't been migrated in memory yet.
+function personLocationIds(p) {
+  if (Array.isArray(p.location_ids) && p.location_ids.length) return p.location_ids.map(String);
+  return p.location_id ? [String(p.location_id)] : [];
+}
+
+// One checkbox per active location — Review and the owner's edit card
+// both use it, since a person can work at several bars, all equal.
+function fillLocationChecklist(container, selectedIds) {
+  const sel = new Set((selectedIds || []).map(String));
+  container.innerHTML = LOCATIONS.map(l => `<label class="loc-check"><input type="checkbox" value="${l.id}" ${sel.has(String(l.id)) ? 'checked' : ''}> ${escapeHtml(l.name)}</label>`).join('');
+}
+function readLocationChecklist(container) {
+  return Array.from(container.querySelectorAll('input[type=checkbox]:checked')).map(i => i.value);
 }
 
 // Review can set any position, management included (a manager/owner might
@@ -179,7 +197,7 @@ function renderPendingList() {
       ${p.has_photo ? `<div class="pending-thumb" data-photo-for="${p.id}" title="Applicant's photo"></div>` : ''}
       <div style="flex:1; min-width:0;">
         <div class="name">${escapeHtml(p.name)}</div>
-        <div class="sub">${escapeHtml(p.email || p.phone || 'no contact on file')} · ${p.position ? escapeHtml(p.position) + ' · ' : ''}${p.location_id ? escapeHtml(locationName(p.location_id)) : 'no location yet'}</div>
+        <div class="sub">${escapeHtml(p.email || p.phone || 'no contact on file')} · ${p.position ? escapeHtml(p.position) + ' · ' : ''}${personLocationIds(p).length ? escapeHtml(personLocationIds(p).map(locationName).join(', ')) : 'no location yet'}</div>
       </div>
       <div class="stack-actions" style="margin-top:0;">
         ${p.id === discardConfirmId ? `
@@ -188,7 +206,7 @@ function renderPendingList() {
           <button class="small danger" style="margin-top:0;" onclick="confirmDiscardPending('${p.id}')">Yes, discard</button>
         ` : `
           <button class="small ghost" onclick="startDiscardPending('${p.id}')">Discard</button>
-          <button class="small ghost" onclick="openReviewModal('${p.id}', '${escapeHtml(p.name)}', '${p.position || ''}', '${p.location_id || ''}', '${p.pay_rate || ''}')">Review</button>
+          <button class="small ghost" onclick="openReviewModal('${p.id}')">Review</button>
           ${ME.role === 'owner' ? `<button class="small primary" style="margin-top:0;" onclick="openActivateModal('${p.id}', '${escapeHtml(p.name)}')">Activate</button>` : ''}
         `}
       </div>
@@ -256,7 +274,7 @@ async function loadAllEmployees() {
   if (ME.role !== 'owner' && ME.role !== 'manager') return;
   document.getElementById('allEmployeesHint').textContent = ME.role === 'owner'
     ? 'Click a row to see their data card. Toggle which apps each person can use right from the list — this can be changed any time, not just at onboarding.'
-    : "Your location's roster. Click a row to see their data card, or request a pay raise.";
+    : "The roster for your bar" + (myLocationIds(ME).length > 1 ? 's' : '') + ". Click a row to see their data card, or request a pay raise.";
   ALL_EMPLOYEES = await api('/api/employees');
   renderLocFilters();
   renderAllEmployees();
@@ -280,7 +298,7 @@ function setLocFilter(key) {
 function applyLocFilter(list) {
   if (LOC_FILTER === 'all') return list;
   if (LOC_FILTER === 'maint') return list.filter(p => p.role === 'maintenance');
-  return list.filter(p => p.location_id === LOC_FILTER);
+  return list.filter(p => personLocationIds(p).includes(LOC_FILTER));
 }
 
 // Status filter — a plain select like Sort by, not a chip row like
@@ -298,7 +316,7 @@ function applySort(list) {
   const mode = document.getElementById('employeeSort').value;
   const arr = list.slice();
   if (mode === 'name_desc') arr.sort((a, b) => b.name.localeCompare(a.name));
-  else if (mode === 'location') arr.sort((a, b) => locationName(a.location_id).localeCompare(locationName(b.location_id)) || a.name.localeCompare(b.name));
+  else if (mode === 'location') arr.sort((a, b) => locationName(personLocationIds(a)[0]).localeCompare(locationName(personLocationIds(b)[0])) || a.name.localeCompare(b.name));
   else if (mode === 'role') arr.sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name));
   else arr.sort((a, b) => a.name.localeCompare(b.name)); // name_asc, and the default
   return arr;
@@ -476,13 +494,14 @@ async function toggleNetworkAccess(personId, locationId, enabled) {
 }
 
 // ---- Review modal ----
-function openReviewModal(id, name, position, locationId, payRate) {
-  document.getElementById('reviewPersonId').value = id;
-  document.getElementById('reviewName').value = name;
-  fillPositionSelect(document.getElementById('reviewPosition'), position || '');
-  fillLocationSelect(document.getElementById('reviewLocation'));
-  if (locationId) document.getElementById('reviewLocation').value = locationId;
-  document.getElementById('reviewPayRate').value = payRate || '';
+function openReviewModal(id) {
+  const p = PENDING_LIST.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('reviewPersonId').value = p.id;
+  document.getElementById('reviewName').value = p.name;
+  fillPositionSelect(document.getElementById('reviewPosition'), p.position || '');
+  fillLocationChecklist(document.getElementById('reviewLocations'), personLocationIds(p));
+  document.getElementById('reviewPayRate').value = p.pay_rate || '';
   document.getElementById('reviewModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
 }
@@ -493,11 +512,12 @@ function closeReviewModal() {
 async function submitReview() {
   const id = document.getElementById('reviewPersonId').value;
   const position = document.getElementById('reviewPosition').value.trim();
-  const locationId = document.getElementById('reviewLocation').value;
+  const locationIds = readLocationChecklist(document.getElementById('reviewLocations'));
   const payRate = document.getElementById('reviewPayRate').value;
+  if (!locationIds.length) { showMsg('Pick at least one location.', 'error'); return; }
   try {
     await withStepUp(() => api(`/api/employees/${id}/manager-review`, {
-      method: 'POST', body: { position, locationId, payRate: payRate ? Number(payRate) : null },
+      method: 'POST', body: { position, locationIds, payRate: payRate ? Number(payRate) : null },
     }));
     closeReviewModal();
     showMsg('Review saved.', 'success');
@@ -619,8 +639,7 @@ function openEmployeeDetail(id) {
   document.getElementById('detailEditFields').style.display = isOwner ? '' : 'none';
   if (isOwner) {
     fillPositionSelect(document.getElementById('detailPosition'), p.position || '');
-    fillLocationSelect(document.getElementById('detailLocation'));
-    if (p.location_id) document.getElementById('detailLocation').value = p.location_id;
+    fillLocationChecklist(document.getElementById('detailLocations'), personLocationIds(p));
     document.getElementById('detailPayRate').value = p.pay_rate || '';
     document.getElementById('detailAddress').value = p.address || '';
   }
@@ -729,13 +748,13 @@ function closeEmployeeDetail() {
 async function saveEmployeeDetail() {
   const id = document.getElementById('detailPersonId').value;
   const position = document.getElementById('detailPosition').value.trim();
-  const locationId = document.getElementById('detailLocation').value;
+  const locationIds = readLocationChecklist(document.getElementById('detailLocations'));
   const payRate = document.getElementById('detailPayRate').value;
   const address = document.getElementById('detailAddress').value.trim();
   const resultEl = document.getElementById('detailResult');
   try {
     const result = await withStepUp(() => api(`/api/employees/${id}/update`, {
-      method: 'POST', body: { position, locationId, payRate: payRate ? Number(payRate) : null, address },
+      method: 'POST', body: { position, locationIds, payRate: payRate ? Number(payRate) : null, address },
     }));
     if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
     closeEmployeeDetail();

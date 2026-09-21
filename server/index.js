@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
-const { pool, withServiceClient } = require('./db');
+const { pool, withServiceClient, locationIdsOf } = require('./db');
 const auth = require('./auth');
 const employees = require('./employees');
 const timeclock = require('./timeclock');
@@ -17,6 +17,20 @@ const jotform = require('./jotform');
 const multer = require('multer');
 const resetRequests = require('./resetRequests');
 const storage = require('./storage');
+
+// Which of their bars a request is about (patch_033 — a person can work
+// at several, all equal). Owner: whatever they asked for, or null = all.
+// Anyone else: what they asked for if it's one of theirs, else their
+// first. atMyLocation: is this row's location one of mine?
+function pickLocation(person, requested) {
+  if (person.role === 'owner') return requested || null;
+  const mine = locationIdsOf(person);
+  if (requested && mine.includes(String(requested))) return String(requested);
+  return mine[0] || null;
+}
+function atMyLocation(person, locationId) {
+  return person.role === 'owner' || locationIdsOf(person).includes(String(locationId));
+}
 
 const app = express();
 app.use(cors());
@@ -378,8 +392,8 @@ app.get('/api/venue-control/staff-links', auth.requireSession('light'), async (r
 let locationIds = null; // null = all
 if (req.person.role === 'owner') {
 locationIds = null;
-} else if (req.person.role === 'manager' && req.person.location_id) {
-locationIds = [req.person.location_id];
+} else if (req.person.role === 'manager' && locationIdsOf(req.person).length) {
+locationIds = locationIdsOf(req.person);
 } else {
 const token = req.query.deviceToken;
 if (!token) return res.json([]);
@@ -2087,7 +2101,7 @@ res.json(result);
 // A manager sees only their own location's roster; the owner sees everyone.
 app.get('/api/employees', auth.requireSession('light'), async (req, res) => {
 if (req.person.role === 'owner') return res.json(await employees.listAllWithAccess());
-if (req.person.role === 'manager') return res.json(await employees.listAllWithAccess(req.person.location_id));
+if (req.person.role === 'manager') return res.json(await employees.listAllWithAccess(locationIdsOf(req.person)));
 return res.status(403).json({ error: 'Managers/owners only.' });
 });
 
@@ -2124,8 +2138,8 @@ res.json(result);
 // Owner-only full edit — position/location/pay rate/address, any time, any employee.
 app.post('/api/employees/:id/update', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can edit an employee directly.' });
-const { position, locationId, payRate, address } = req.body;
-const result = await employees.ownerUpdateEmployee({ personId: req.params.id, position, locationId, payRate: payRate === '' || payRate == null ? null : Number(payRate), address });
+const { position, locationId, locationIds, payRate, address } = req.body;
+const result = await employees.ownerUpdateEmployee({ personId: req.params.id, position, locationId, locationIds, payRate: payRate === '' || payRate == null ? null : Number(payRate), address, updatedBy: req.person.id });
 res.json(result);
 });
 
@@ -2173,7 +2187,7 @@ res.json(result);
 // sees every pending request, across locations.
 app.get('/api/pay-rate-requests', auth.requireSession('light'), async (req, res) => {
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
-const locationFilter = req.person.role === 'manager' ? req.person.location_id : undefined;
+const locationFilter = req.person.role === 'manager' ? locationIdsOf(req.person) : undefined;
 res.json(await employees.listPayRateRequests({ status: req.query.status || 'pending', locationFilter }));
 });
 
@@ -2586,7 +2600,7 @@ app.post('/api/monitoring/notify-settings', auth.requireSession('light'), async 
 // plus any all-location ones); the owner sees and can create any route.
 app.get('/api/monitoring/alert-routes', auth.requireSession('light'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
-  const locationFilter = req.person.role === 'manager' ? req.person.location_id : undefined;
+  const locationFilter = req.person.role === 'manager' ? locationIdsOf(req.person) : undefined;
   res.json(await monitoring.listAlertRoutes({ locationFilter }));
 });
 app.post('/api/monitoring/alert-routes', auth.requireSession('full'), async (req, res) => {
@@ -2594,7 +2608,7 @@ app.post('/api/monitoring/alert-routes', auth.requireSession('full'), async (req
   // A manager can only route alerts for their own location, even if the
   // request body tries to say otherwise; the owner can route any location
   // or leave it blank for "every location".
-  const locationId = req.person.role === 'owner' ? (req.body.locationId || null) : req.person.location_id;
+  const locationId = pickLocation(req.person, req.body.locationId);
   const result = await monitoring.addAlertRoute({ personId: req.body.personId, locationId, category: req.body.category || null, addedBy: req.person.id });
   res.json(result);
 });
@@ -2624,7 +2638,7 @@ app.get('/api/cashhandling/dashboard', auth.requireSession('light'), async (req,
     const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
     if (!cashhandling.tierAtLeast(tier, 'drawers_bags')) return { error: 'Cash Handling isn’t turned on for your account yet, or your access level doesn’t include the dashboard — ask your manager.' };
     const isOwner = req.person.role === 'owner';
-    const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+    const locationId = pickLocation(req.person, req.query.locationId);
     const sources = await cashhandling.getDashboard(client, { locationId, tierScope: tier });
     return { tier, sources };
   });
@@ -2655,7 +2669,7 @@ app.get('/api/cashhandling/sources/:id', auth.requireSession('light'), async (re
     const source = await cashhandling.getSource(client, req.params.id);
     if (!source) return { error: 'Not found.', status: 404 };
     const isOwner = req.person.role === 'owner';
-    if (!isOwner && source.location_id !== req.person.location_id) return { error: 'Not found.', status: 404 };
+    if (!atMyLocation(req.person, source.location_id)) return { error: 'Not found.', status: 404 };
     if (tier === 'drawers_bags' && source.kind === 'fixed_point') return { error: 'Your access level doesn’t include Fixed Cash Points — ask your manager.' };
     const recentCounts = await cashhandling.listRecentCounts(client, { sourceId: source.id, limit: 10 });
     return { source, recentCounts };
@@ -2678,7 +2692,7 @@ app.post('/api/cashhandling/sources/:id/count', auth.requireSession('light'), as
     const onBehalfOf = req.body.onBehalfOf || null;
     if (onBehalfOf && tier === 'own_drawer') return { error: 'You can only cash out your own drawer.' };
     const canCount = cashhandling.canCountSource({
-      tier, personId: req.person.id, personLocationId: req.person.location_id, isOwner, source,
+      tier, personId: req.person.id, personLocationIds: locationIdsOf(req.person), isOwner, source,
     });
     if (!canCount) return { error: 'You don’t have access to count this source.' };
     const amount = Number(req.body.countedAmount);
@@ -2709,7 +2723,7 @@ app.get('/api/cashhandling/counts', auth.requireSession('light'), async (req, re
       return { counts: counts.slice(0, 25) };
     }
     const isOwner = req.person.role === 'owner';
-    const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+    const locationId = pickLocation(req.person, req.query.locationId);
     return { counts: await cashhandling.listRecentCounts(client, { locationId, limit: 50 }) };
   });
   if (result && result.error) return res.status(403).json(result);
@@ -2742,7 +2756,7 @@ app.post('/api/cashhandling/transactions', auth.requireSession('light'), (req, r
     const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
     if (!cashhandling.tierAtLeast(tier, 'full_authority')) return { error: 'Transactions are limited to full-authority Cash Handling access — ask your manager.' };
     const isOwner = req.person.role === 'owner';
-    const locationId = isOwner && req.body.locationId ? req.body.locationId : req.person.location_id;
+    const locationId = pickLocation(req.person, req.body.locationId);
     if (!locationId) return { error: 'No location to file this transaction under — pick one.' };
     const amount = Number(req.body.amount);
     if (!Number.isFinite(amount) || amount <= 0) return { error: 'Enter a valid amount.' };
@@ -2773,7 +2787,7 @@ app.get('/api/cashhandling/transactions', auth.requireSession('light'), async (r
     const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
     if (!cashhandling.tierAtLeast(tier, 'full_authority')) return { error: 'Transactions are limited to full-authority Cash Handling access — ask your manager.' };
     const isOwner = req.person.role === 'owner';
-    const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+    const locationId = pickLocation(req.person, req.query.locationId);
     return { transactions: await cashhandling.listTransactions(client, { locationId, limit: 50 }) };
   });
   if (result && result.error) return res.status(403).json(result);
@@ -2790,7 +2804,7 @@ app.get('/api/cashhandling/transactions/:id/receipt', auth.requireSession('light
     const txn = await cashhandling.getTransaction(client, req.params.id);
     if (!txn) return { error: 'Not found.', status: 404 };
     const isOwner = req.person.role === 'owner';
-    if (!isOwner && txn.location_id !== req.person.location_id) return { error: 'Not found.', status: 404 };
+    if (!atMyLocation(req.person, txn.location_id)) return { error: 'Not found.', status: 404 };
     if (!txn.receipt_path) return { error: 'No receipt on this transaction.', status: 404 };
     try {
       const url = await cashhandling.getTransactionReceiptUrl(client, txn.id);
@@ -2929,7 +2943,7 @@ async function requireAuditAccess(client, req) {
 
 function resolveAuditLocation(req) {
   const isOwner = req.person.role === 'owner';
-  return isOwner && req.body.locationId ? req.body.locationId : req.person.location_id;
+  return pickLocation(req.person, req.body.locationId);
 }
 
 for (const kind of ['weekly', 'manual']) {
@@ -2958,7 +2972,7 @@ for (const kind of ['weekly', 'manual']) {
       const checklist = await cashhandling.getAuditChecklist(kind, client, req.params.id);
       if (!checklist) return { error: 'Not found.', status: 404 };
       const isOwner = req.person.role === 'owner';
-      if (!isOwner && checklist.audit.location_id !== req.person.location_id) return { error: 'Not found.', status: 404 };
+      if (!atMyLocation(req.person, checklist.audit.location_id)) return { error: 'Not found.', status: 404 };
       return checklist;
     });
     if (result && result.error) return res.status(result.status || 403).json(result);
@@ -3005,7 +3019,7 @@ for (const kind of ['weekly', 'manual']) {
       const access = await requireAuditAccess(client, req);
       if (access.error) return access;
       const isOwner = req.person.role === 'owner';
-      const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+      const locationId = pickLocation(req.person, req.query.locationId);
       return { audits: await cashhandling.listAuditHistory(kind, client, { locationId, limit: 25 }) };
     });
     if (result && result.error) return res.status(result.status || 403).json(result);
@@ -3045,7 +3059,7 @@ app.get('/api/cashhandling/random-audit/assignments', auth.requireSession('light
     const access = await requireAuditAccess(client, req);
     if (access.error) return access;
     const isOwner = req.person.role === 'owner';
-    const locationId = isOwner && req.query.locationId ? req.query.locationId : req.person.location_id;
+    const locationId = pickLocation(req.person, req.query.locationId);
     return { assignments: await cashhandling.listSystemAuditAssignments(client, { locationId, limit: 50 }) };
   });
   if (result && result.error) return res.status(result.status || 403).json(result);
@@ -3116,7 +3130,7 @@ app.get('/api/inventory/areas', auth.requireSession('light'), async (req, res) =
   const result = await withServiceClient(async (client) => {
     const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
     if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
-    const locationId = req.person.role === 'owner' && req.query.locationId ? req.query.locationId : req.person.location_id;
+    const locationId = pickLocation(req.person, req.query.locationId);
     return { areas: await inventorycontrol.listAreas(client, locationId) };
   });
   if (result && result.error) return res.status(result.status || 403).json(result);
@@ -3129,7 +3143,7 @@ app.post('/api/inventory/areas', auth.requireSession('full'), async (req, res) =
     if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
     try {
       const area = await inventorycontrol.createArea(client, {
-        locationId: req.body.locationId || req.person.location_id,
+        locationId: pickLocation(req.person, req.body.locationId),
         name: req.body.name,
         createdBy: req.person.id,
       });
@@ -3281,7 +3295,7 @@ app.get('/api/inventory/counts', auth.requireSession('light'), async (req, res) 
     const tier = await inventorycontrol.getEffectiveInventoryTier(client, req.person.id);
     if (!inventorycontrol.tierAtLeast(tier, 'counter')) return { error: 'Inventory Control is not enabled for you.', status: 403 };
     const isLeadPlus = inventorycontrol.tierAtLeast(tier, 'lead');
-    const locationId = req.person.role === 'owner' && req.query.locationId ? req.query.locationId : req.person.location_id;
+    const locationId = pickLocation(req.person, req.query.locationId);
     const statusFilter = isLeadPlus ? (req.query.status || null) : 'in_progress';
     return { counts: await inventorycontrol.listCounts(client, { locationId, statusFilter, limit: 50 }) };
   });
@@ -3295,7 +3309,7 @@ app.post('/api/inventory/counts', auth.requireSession('full'), async (req, res) 
     if (!inventorycontrol.tierAtLeast(tier, 'lead')) return { error: 'Lead access or higher is required.', status: 403 };
     try {
       const count = await inventorycontrol.startCount(client, {
-        locationId: req.body.locationId || req.person.location_id,
+        locationId: pickLocation(req.person, req.body.locationId),
         name: req.body.name,
         mode: req.body.mode,
         areaIds: req.body.areaIds,
@@ -3510,9 +3524,10 @@ app.post('/api/scheduling/schedules', auth.requireSession('full'), async (req, r
   const isOwner = req.person.role === 'owner';
   let locationId = req.body.locationId;
   if (!isOwner) {
-    if (!req.person.location_id) return res.status(403).json({ ok: false, error: 'Your account has no location, so you can’t add a schedule — ask the owner.' });
-    if (locationId && locationId !== req.person.location_id) return res.status(403).json({ ok: false, error: 'Managers can only add schedules at their own location.' });
-    locationId = req.person.location_id;
+    const mine = locationIdsOf(req.person);
+    if (!mine.length) return res.status(403).json({ ok: false, error: 'Your account has no location, so you can’t add a schedule — ask the owner.' });
+    if (locationId && !mine.includes(String(locationId))) return res.status(403).json({ ok: false, error: 'Managers can only add schedules at a bar they work at.' });
+    locationId = locationId || mine[0];
     if (req.body.id) {
       const manageable = await scheduling.getMyManageableScheduleIds(req.person);
       if (!manageable.includes(req.body.id)) return res.status(403).json({ ok: false, error: 'You don’t manage that schedule.' });

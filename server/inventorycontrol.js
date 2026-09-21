@@ -648,7 +648,7 @@ async function listAccessChangeLog(client, { personId, limit } = {}) {
 async function listAllEffectiveAccess(client, { locationId } = {}) {
   const clauses = [`p.status = 'active'`];
   const params = [];
-  if (locationId) { params.push(locationId); clauses.push(`p.location_id = $${params.length}`); }
+  if (locationId) { params.push(locationId); clauses.push(`(p.location_id = $${params.length} OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.person_id = p.id AND el.location_id = $${params.length}))`); }
   const { rows } = await client.query(
     `SELECT p.id, p.name, p.role, p.position, p.location_id, loc.name AS location_name,
             COALESCE(ea.enabled, false) AS app_enabled,

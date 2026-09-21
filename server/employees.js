@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { withServiceClient } = require('./db');
+const { withServiceClient, locationIdsOf } = require('./db');
 const notify = require('./notify');
 const storage = require('./storage');
 
@@ -86,6 +86,7 @@ async function createPendingEmployee({ name, email, phone, position, requestedLo
          VALUES ($1,$2,$3,$4,$5,$6,'staff','pending_review',$7,$8) RETURNING *`,
         [id, name, email || null, phone || null, position || null, requestedLocationId || null, jotformSubmissionId || null, photoPath]
       );
+      if (requestedLocationId) await setPersonLocations(client, id, [requestedLocationId], null);
       return rows[0];
     } catch (e) {
       // The row never landed, so don't leave its photo behind either.
@@ -102,10 +103,13 @@ async function createPendingEmployee({ name, email, phone, position, requestedLo
 // never show more than the lists do.
 async function getPhotoUrl({ personId, viewer }) {
   return withServiceClient(async (client) => {
-    const { rows } = await client.query('SELECT id, status, location_id, photo_path FROM people WHERE id = $1', [personId]);
+    const { rows } = await client.query(
+      `SELECT id, status, location_id, photo_path, ${LOCATION_IDS_SQL} AS location_ids FROM people WHERE id = $1`, [personId]
+    );
     const p = rows[0];
     if (!p) return { error: 'Not found.', status: 404 };
-    if (viewer.role !== 'owner' && p.status !== 'pending_review' && p.location_id !== viewer.location_id) return { error: 'Not found.', status: 404 };
+    const shared = locationIdsOf(viewer).some((l) => (p.location_ids || []).map(String).includes(l) || String(p.location_id) === l);
+    if (viewer.role !== 'owner' && p.status !== 'pending_review' && !shared) return { error: 'Not found.', status: 404 };
     if (!p.photo_path) return { error: 'No photo on file.', status: 404 };
     try {
       return { url: await storage.getSignedPersonPhotoUrl(p.photo_path) };
@@ -114,6 +118,37 @@ async function getPhotoUrl({ personId, viewer }) {
     }
   });
 }
+
+// ---------------------------------------------------------------------
+// Locations a person works at (patch_033) — the set is what matters;
+// people.location_id is kept as a mirror of one of them purely so
+// server/timeclock.js (untouched) keeps stamping punches. Replaced
+// wholesale on save, same as the scheduling matrices.
+// ---------------------------------------------------------------------
+async function setPersonLocations(client, personId, locationIds, addedBy) {
+  const ids = [...new Set((locationIds || []).filter(Boolean).map(String))];
+  await client.query('DELETE FROM employee_locations WHERE person_id = $1 AND NOT (location_id = ANY($2::uuid[]))', [personId, ids]);
+  for (const id of ids) {
+    await client.query(
+      'INSERT INTO employee_locations (person_id, location_id, added_by) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+      [personId, id, addedBy || null]
+    );
+  }
+  // Keep the mirror column pointing at one of the current set.
+  await client.query(
+    `UPDATE people SET location_id = CASE WHEN location_id = ANY($2::uuid[]) THEN location_id ELSE $3::uuid END WHERE id = $1`,
+    [personId, ids, ids[0] || null]
+  );
+  return ids;
+}
+
+// Accepts either the new array or the old single id from a client.
+function normalizeLocationIds({ locationIds, locationId }) {
+  if (Array.isArray(locationIds)) return locationIds.filter(Boolean);
+  return locationId ? [locationId] : [];
+}
+
+const LOCATION_IDS_SQL = 'ARRAY(SELECT el.location_id FROM employee_locations el WHERE el.person_id = people.id ORDER BY el.added_at)';
 
 // Self-service photo (My Account). Same storage rules as the Apply page;
 // the route has already checked type/size. Upload the new object first,
@@ -182,7 +217,7 @@ async function listPending() {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
       `SELECT id, name, email, phone, location_id, position, pay_rate, created_at,
-              (photo_path IS NOT NULL) AS has_photo
+              (photo_path IS NOT NULL) AS has_photo, ${LOCATION_IDS_SQL} AS location_ids
        FROM people WHERE status = 'pending_review' ORDER BY created_at ASC`
     );
     return rows;
@@ -191,15 +226,18 @@ async function listPending() {
 
 // A manager (not the owner) sets the fields only they should — role stays
 // pending_review; this does NOT activate the employee.
-async function managerReview({ personId, position, locationId, payRate, reviewedBy }) {
+// locationIds (array) is the current shape; a lone locationId still works.
+async function managerReview({ personId, position, locationIds, locationId, payRate, reviewedBy }) {
+  const ids = normalizeLocationIds({ locationIds, locationId });
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `UPDATE people SET position = $1, location_id = $2, pay_rate = $3, updated_at = now()
-       WHERE id = $4 AND status = 'pending_review' RETURNING *`,
-      [position || null, locationId || null, payRate || null, personId]
+      `UPDATE people SET position = $1, pay_rate = $2, updated_at = now()
+       WHERE id = $3 AND status = 'pending_review' RETURNING *`,
+      [position || null, payRate || null, personId]
     );
     if (!rows[0]) return { ok: false, error: 'Not found, or already activated.' };
-    return { ok: true, person: rows[0] };
+    const location_ids = await setPersonLocations(client, personId, ids, reviewedBy);
+    return { ok: true, person: { ...rows[0], location_id: location_ids[0] || null, location_ids } };
   });
 }
 
@@ -406,16 +444,19 @@ async function setNetworkAccess({ personId, locationId, enabled, updatedBy }) {
 // hire_date, kept in sync here rather than adding a redundant column.
 // certifications is attached the same way appAccess already was: one extra
 // query across every row rather than N+1, keyed by person_id.
+// locationFilter: an array of location ids (a manager's bars) — anyone
+// at any of them is listed; undefined for the owner.
 async function listAllWithAccess(locationFilter) {
   return withServiceClient(async (client) => {
     const params = [];
     let where = "status != 'pending_review'";
-    if (locationFilter) {
-      params.push(locationFilter);
-      where += ` AND location_id = $${params.length}`;
+    const filterIds = Array.isArray(locationFilter) ? locationFilter : (locationFilter ? [locationFilter] : null);
+    if (filterIds) {
+      params.push(filterIds);
+      where += ` AND (location_id = ANY($${params.length}::uuid[]) OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.person_id = people.id AND el.location_id = ANY($${params.length}::uuid[])))`;
     }
     const { rows: people } = await client.query(
-      `SELECT id, name, role, location_id, username, email, phone, address, status, position, pay_rate,
+      `SELECT id, name, role, location_id, ${LOCATION_IDS_SQL} AS location_ids, username, email, phone, address, status, position, pay_rate,
               password_verified_at, (photo_path IS NOT NULL) AS has_photo,
               activated_at, COALESCE(activated_at, created_at) AS hire_date
        FROM people WHERE ${where} ORDER BY name`,
@@ -520,13 +561,18 @@ async function sendOnboardingInvite({ toEmail, toPhone, toName, sentBy }) {
 // Owner-only full edit — unlike managerReview (which only works while
 // status = 'pending_review'), this works on any employee at any time, since
 // only the owner can call it.
-async function ownerUpdateEmployee({ personId, position, locationId, payRate, address }) {
+async function ownerUpdateEmployee({ personId, position, locationIds, locationId, payRate, address, updatedBy }) {
+  const ids = normalizeLocationIds({ locationIds, locationId });
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `UPDATE people SET position = $1, location_id = $2, pay_rate = $3, address = $4, updated_at = now()
-       WHERE id = $5 RETURNING id, name, role, location_id, position, pay_rate, address, status`,
-      [position || null, locationId || null, payRate ?? null, address || null, personId]
+      `UPDATE people SET position = $1, pay_rate = $2, address = $3, updated_at = now()
+       WHERE id = $4 RETURNING id, name, role, location_id, position, pay_rate, address, status`,
+      [position || null, payRate ?? null, address || null, personId]
     );
+    if (rows[0]) {
+      rows[0].location_ids = await setPersonLocations(client, personId, ids, updatedBy);
+      rows[0].location_id = rows[0].location_ids[0] || null;
+    }
     if (!rows[0]) return { ok: false, error: 'Not found.' };
     return { ok: true, person: rows[0] };
   });
@@ -655,8 +701,8 @@ async function listPayRateRequests({ status = 'pending', locationFilter } = {}) 
     const params = [status];
     let where = 'r.status = $1';
     if (locationFilter) {
-      params.push(locationFilter);
-      where += ` AND p.location_id = $${params.length}`;
+      params.push(Array.isArray(locationFilter) ? locationFilter : [locationFilter]);
+      where += ` AND (p.location_id = ANY($${params.length}::uuid[]) OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.person_id = p.id AND el.location_id = ANY($${params.length}::uuid[])))`;
     }
     const { rows } = await client.query(
       `SELECT r.id, r.person_id, r.current_rate, r.requested_rate, r.requested_by, r.requested_at, r.status, r.decided_at, r.note,
@@ -726,7 +772,7 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 }
 
 module.exports = {
-  createPendingEmployee, getPhotoUrl, setOwnPhoto, removeOwnPhoto, getOwnPhotoUrl, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
+  createPendingEmployee, setPersonLocations, getPhotoUrl, setOwnPhoto, removeOwnPhoto, getOwnPhotoUrl, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
   getNetworkAccessForPerson, setNetworkAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
   setEmployeeStatus, requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,

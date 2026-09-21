@@ -471,6 +471,9 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
   border: 1px dashed var(--card-border); background: rgba(79,141,253,0.10) center/cover no-repeat;
 }
 .photo-pick input[type=file] { margin-bottom: 0; }
+.loc-check-grid { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 14px; }
+.loc-check { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+.loc-check input { width: auto; margin: 0; }
 .detail-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 22px; text-align: left; }
 .detail-section { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--card-border); text-align: left; }
 .detail-label {

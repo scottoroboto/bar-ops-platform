@@ -57,10 +57,14 @@ function locationName(id) { const l = LOCATIONS.find(l => l.id === id); return l
 // ---------------------------------------------------------------------
 function renderManagerShell() {
   const isOwner = ME.role === 'owner';
+  // The owner picks any bar; someone who works at more than one picks
+  // among theirs (patch_033); everyone else just sees their one.
+  const pickable = isOwner ? LOCATIONS : LOCATIONS.filter(l => myLocationIds(ME).includes(String(l.id)));
+  const canPick = isOwner || pickable.length > 1;
   document.getElementById('panelMain').innerHTML = `
     <h1 class="page-title">Cash Handling</h1>
     <div class="ch-loc-row">
-      ${isOwner
+      ${canPick
         ? `<select id="locSelect" onchange="onLocationChange()"></select>`
         : `<span class="badge on">${escapeHtml(locationName(SELECTED_LOCATION_ID))}</span>`}
       ${isOwner ? `<a href="/cash-access.html" class="muted">Manage access ›</a>` : ''}
@@ -80,9 +84,9 @@ function renderManagerShell() {
     <div id="panelManual" style="display:none;"></div>
     ${isOwner ? `<div id="panelSources" style="display:none;"></div>` : ''}
   `;
-  if (isOwner) {
+  if (canPick) {
     const sel = document.getElementById('locSelect');
-    sel.innerHTML = LOCATIONS.map(l => `<option value="${l.id}" ${l.id === SELECTED_LOCATION_ID ? 'selected' : ''}>${escapeHtml(l.name)}</option>`).join('');
+    sel.innerHTML = pickable.map(l => `<option value="${l.id}" ${l.id === SELECTED_LOCATION_ID ? 'selected' : ''}>${escapeHtml(l.name)}</option>`).join('');
   }
   setTab('dashboard');
 }
@@ -1035,7 +1039,7 @@ function renderReveal(count, returnTo) {
       return;
     }
     LOCATIONS = await api('/api/locations');
-    SELECTED_LOCATION_ID = ME.location_id || (LOCATIONS[0] && LOCATIONS[0].id) || null;
+    SELECTED_LOCATION_ID = myLocationIds(ME)[0] || (LOCATIONS[0] && LOCATIONS[0].id) || null;
     if (TIER === 'own_drawer') {
       renderOwnDrawerFlow();
     } else {
