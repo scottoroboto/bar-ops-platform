@@ -473,6 +473,12 @@ function renderAdd() {
       <button class="primary" onclick="submitAddSystem()">Add system</button>
     </div>
     <div class="card">
+      <h2>UniFi connection</h2>
+      <p class="muted">Checks the UniFi API with the key on the server and lists what it can see. Use it to confirm the key works and to pick up device IDs for registering.</p>
+      <button class="secondary" onclick="runUnifiProbe()">Check UniFi connection</button>
+      <div id="unifiProbe"></div>
+    </div>
+    <div class="card">
       <h2>TV hours</h2>
       <p class="muted">When TVs are expected to be on at each bar. A TV that stops answering inside these hours is flagged on that bar's iPad; outside them a dark TV is normal and nothing happens. An end time earlier than the start means it runs past midnight.</p>
       <div id="avHoursList"></div>
@@ -487,6 +493,41 @@ function renderAdd() {
   kindEl.addEventListener('input', syncWan); kindEl.addEventListener('change', syncWan);
   renderAvHours();
   loadManageList();
+}
+
+async function runUnifiProbe() {
+  const el = document.getElementById('unifiProbe');
+  el.innerHTML = '<p class="muted">Asking UniFi…</p>';
+  try {
+    const p = await api('/api/monitoring/unifi/probe');
+    if (!p.configured) { el.innerHTML = `<p class="msg error">${escapeHtml(p.error)}</p>`; return; }
+    const kindLabel = { unifi_gateway: 'gateway (UDM)', unifi_switch: 'switch', unifi_ap: 'WAP', unifi_other: 'other' };
+    el.innerHTML = `
+      ${p.errors.length ? `<p class="msg ${p.ok ? 'info' : 'error'}">${p.errors.map(escapeHtml).join('<br>')}</p>` : '<p class="msg success">Connected. UniFi answered.</p>'}
+      <div class="detail-label" style="margin-top:10px;">Consoles (${p.hosts.length})</div>
+      ${p.hosts.length ? p.hosts.map(h => `<div class="list-row"><div><div class="name">${escapeHtml(h.name || '(unnamed)')} <span class="badge ${/online|connected/i.test(h.state || '') ? 'on' : 'off'}">${escapeHtml(h.state || '?')}</span></div><div class="sub">host id <code>${escapeHtml(h.id || '?')}</code>${h.ip ? ' · ' + escapeHtml(h.ip) : ''}${h.wans ? ' · WANs: ' + h.wans.map(w => escapeHtml((w.name || '?') + (w.up === true ? ' up' : w.up === false ? ' down' : ''))).join(', ') : ''}</div></div>
+        <button class="small ghost" onclick="prefillSystem('unifi_wan','${escapeHtml(h.id || '')}','${escapeHtml((h.name || 'UDM') + ' fiber')}')">+ line</button></div>`).join('') : '<p class="muted">None — is the UDM signed in to your UniFi account (unifi.ui.com)?</p>'}
+      <div class="detail-label" style="margin-top:14px;">Devices (${p.devices.length})</div>
+      ${p.devices.length ? p.devices.map(d => `<div class="list-row"><div><div class="name">${escapeHtml(d.name || '(unnamed)')} <span class="badge ${d.raw === 'online' ? 'on' : d.raw === 'offline' ? 'danger' : 'off'}">${escapeHtml(d.status || '?')}</span></div><div class="sub">${escapeHtml(d.model || '?')} · ${escapeHtml(kindLabel[d.kind] || d.kind)} · mac <code>${escapeHtml(d.mac || '?')}</code>${d.ip ? ' · ' + escapeHtml(d.ip) : ''}</div></div>
+        <button class="small ghost" onclick="prefillSystem('${d.kind === 'unifi_other' ? 'unifi_switch' : d.kind}','${escapeHtml(d.mac || d.id || '')}','${escapeHtml(d.name || d.model || 'Device')}')">+ register</button></div>`).join('') : '<p class="muted">No devices reported.</p>'}
+      <div class="detail-label" style="margin-top:14px;">Internet readings (${p.isp.length})</div>
+      ${p.isp.length ? p.isp.map(i => `<div class="list-row"><div><div class="name">console <code>${escapeHtml(i.hostId || '?')}</code> · ${i.periods} sample${i.periods === 1 ? '' : 's'} in the last 30 min</div>
+        <div class="sub">${i.latest.length ? i.latest.map(l => `${escapeHtml(l.wan)}: ${l.downloadMbps != null ? '↓ ' + l.downloadMbps + ' Mbps' : 'no speed'}${l.uploadMbps != null ? ' ↑ ' + l.uploadMbps : ''}${l.latencyMs != null ? ' · ' + l.latencyMs + ' ms' : ''}${l.up === false ? ' · DOWN' : ''}`).join(' | ') : 'no WAN data in the newest sample'}</div>
+        <div class="sub" style="word-break:break-all;">raw: ${escapeHtml(i.rawLatest || '')}</div></div></div>`).join('') : '<p class="muted">No internet readings yet.</p>'}`;
+  } catch (e) {
+    el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// Fill the Register form from a probe row so nobody has to retype an id.
+function prefillSystem(kind, externalRef, name) {
+  document.getElementById('asCategory').value = 'network';
+  document.getElementById('asKind').value = kind;
+  document.getElementById('asKind').dispatchEvent(new Event('change'));
+  document.getElementById('asExternalRef').value = externalRef;
+  document.getElementById('asName').value = name;
+  document.getElementById('asName').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  showMsg(`Filled in the form for ${name} — check the name, add the expected speed if it's a line, then press Add system.`, 'info');
 }
 
 function renderAvHours() {

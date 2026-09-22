@@ -2572,6 +2572,12 @@ app.get('/api/monitoring/alerts', auth.requireSession('light'), async (req, res)
 // Owner/manager only — monitored_systems has no INSERT/UPDATE policy for
 // barplatform_app (same reasoning as locations/positions), so these go
 // through the service client with the role check enforced right here.
+// "Is UniFi talking to us?" — what the key can see, for Add / Manage.
+app.get('/api/monitoring/unifi/probe', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await monitoring.unifiProbe());
+});
+
 app.post('/api/monitoring/systems', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   const { locationId, category, kind, name, externalRef, config, make, model, serialNumber } = req.body;
@@ -3761,6 +3767,10 @@ if (n > 0) console.log(`Auto clocked out ${n} stale shift(s).`);
 setInterval(() => {
 monitoring.pollUnifiSystems().catch((err) => console.error('[monitoring] poll cycle error', err));
 }, 60 * 1000);
+
+// One UniFi connection check shortly after boot, so a new key shows up
+// in Render's logs as "N console(s), M device(s)" without anyone signing in.
+setTimeout(() => { monitoring.logUnifiProbe().catch((err) => console.error('[monitoring] UniFi check error', err)); }, 8000);
 
 // The 6am (bar time) daily summary — patch_034. Checked every minute;
 // monitoring_summary_runs makes it once per day however often this fires

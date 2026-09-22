@@ -987,6 +987,79 @@ async function pollUnifiSystems() {
 }
 
 // ---------------------------------------------------------------------
+// UniFi connection check (Scotto, 2026-09-22: "walk me through double
+// checking"). Calls the API with the configured key and reports, in
+// plain terms, what it can see: consoles (hosts), every adopted device
+// with the id/MAC the registry needs, and the newest ISP reading per
+// console. Never throws — every failure comes back as a message. Run
+// once at boot (logged) and on demand from Add / Manage.
+// ---------------------------------------------------------------------
+function guessKind(d) {
+  const m = `${d.model || ''} ${d.shortname || ''} ${d.name || ''} ${(d.uidb && d.uidb.id) || ''}`.toLowerCase();
+  if (/udm|ucg|uxg|dream|gateway|usg/.test(m)) return 'unifi_gateway';
+  if (/usw|switch|flex/.test(m)) return 'unifi_switch';
+  if (/u6|u7|uap|ap |access point|nano|lite|pro ap|beacon/.test(m)) return 'unifi_ap';
+  return 'unifi_other';
+}
+
+async function unifiProbe() {
+  if (!unifiConfigured()) return { ok: false, configured: false, error: 'UNIFI_API_KEY is not set on the server.' };
+  const out = { ok: true, configured: true, hosts: [], devices: [], isp: [], errors: [] };
+  try {
+    const resp = await unifiRequest('/hosts');
+    const list = resp.data || resp.hosts || (Array.isArray(resp) ? resp : []);
+    for (const h of list) {
+      const rs = h.reportedState || {};
+      out.hosts.push({
+        id: h.id || h.hostId, type: h.type || null, ip: h.ipAddress || rs.ip || null,
+        name: rs.hostname || rs.name || (h.userData && h.userData.name) || null,
+        state: rs.state || h.state || null,
+        wans: Array.isArray(rs.wans) ? rs.wans.map((w) => ({ name: w.name || w.interface || null, up: w.up ?? w.state ?? null, ip: w.ip || null, isp: w.ispName || null })) : null,
+      });
+    }
+  } catch (err) { out.errors.push(`hosts: ${err.message}`); out.ok = false; }
+  try {
+    const resp = await unifiRequest('/devices');
+    const groups = resp.data || resp.hosts || (Array.isArray(resp) ? resp : []);
+    for (const g of groups) {
+      const list = Array.isArray(g.devices) ? g.devices : [];
+      for (const d of list) {
+        out.devices.push({ hostId: g.hostId || null, hostName: g.hostName || null, id: d.id || null, mac: d.mac || null, name: d.name || null, model: d.model || d.shortname || null, ip: d.ip || null, status: d.status || d.state || null, kind: guessKind(d), raw: findDeviceStatus(d) });
+      }
+    }
+  } catch (err) { out.errors.push(`devices: ${err.message}`); out.ok = false; }
+  try {
+    const end = new Date(); const begin = new Date(end.getTime() - 30 * 60 * 1000);
+    const resp = await unifiRequest(`https://api.ui.com/ea/isp-metrics/5m?beginTimestamp=${encodeURIComponent(begin.toISOString())}&endTimestamp=${encodeURIComponent(end.toISOString())}`);
+    const items = resp.data || [];
+    for (const it of Array.isArray(items) ? items : []) {
+      const hostId = it.hostId || it.host_id || null;
+      const periods = it.periods || [];
+      const last = periods[periods.length - 1];
+      const keys = last && last.data ? Object.keys(last.data) : [];
+      out.isp.push({
+        hostId, periods: periods.length, wanKeys: keys,
+        latest: keys.map((k) => ({ wan: k, ...(latestWanSample({ data: [{ hostId, periods: [last] }] }, hostId, k) || {}) })),
+        rawLatest: last ? JSON.stringify(last).slice(0, 600) : null,
+      });
+    }
+    if (!out.isp.length) out.errors.push('isp-metrics: the API answered but returned no samples for the last 30 minutes (ISP metrics may take a while to appear after setup, or need the console\'s speed test enabled).');
+  } catch (err) { out.errors.push(`isp-metrics: ${err.message}`); }
+  return out;
+}
+
+// Logged at boot so a fresh key can be verified from Render's logs
+// without signing in anywhere.
+async function logUnifiProbe() {
+  if (!unifiConfigured()) { console.log('[monitoring] UniFi: no API key set — network polling off'); return; }
+  const p = await unifiProbe();
+  console.log(`[monitoring] UniFi check: ${p.hosts.length} console(s), ${p.devices.length} device(s), ${p.isp.length} ISP series${p.errors.length ? ' — ' + p.errors.join(' | ') : ''}`);
+  for (const h of p.hosts) console.log(`[monitoring]   console ${h.name || '?'} id=${h.id} state=${h.state || '?'} ip=${h.ip || '?'}`);
+  for (const d of p.devices) console.log(`[monitoring]   device ${d.name || '?'} model=${d.model || '?'} mac=${d.mac || '?'} id=${d.id || '?'} status=${d.status || '?'} -> ${d.raw} (${d.kind})`);
+  for (const i of p.isp) console.log(`[monitoring]   isp host=${i.hostId} wans=${i.wanKeys.join(',') || 'none'} latest=${JSON.stringify(i.latest)}`);
+}
+
+// ---------------------------------------------------------------------
 // AV Device Health (A9, docs/venue-control-gui-reconciliation.md) — the
 // on-site Venue Control agent already polls every TV/receiver it has a
 // control path for (agent/lib/poller.js, agent/lib/tv-poller.js, each on
@@ -1053,6 +1126,7 @@ async function reportAvHealth({ locationId, items }) {
 }
 
 module.exports = {
+  unifiProbe, logUnifiProbe, unifiConfigured,
   speedStatus, wanConfig, latestWanSample, findDeviceStatus, DEFAULT_WARN_PCT,
   setSilence, setGroupSilence, isSilenced, DOWN_BEFORE_NOTIFY_MS, DAILY_ALERT_EMAIL_BUDGET,
   getAttention, agentClear, agentServiceCall, setAvHours, withinAvHours, barParts,
