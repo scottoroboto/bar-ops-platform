@@ -180,9 +180,9 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
    purpose; pinch to zoom. */
 .net-row { display: flex; gap: 8px; align-items: stretch; background: #3a3d44; border: 1px solid #4a4e57; border-radius: 10px; padding: 5px; }
 .net-tile { display: flex; align-items: center; justify-content: space-between; gap: 5px; width: 112px; padding: 4px 5px; border-radius: 7px; color: #fff; text-decoration: none; flex-shrink: 0; }
-.net-tile .code { font-family: "Barlow Condensed", "Arial Narrow", -apple-system, sans-serif; font-size: 38px; font-weight: 800; font-style: italic; line-height: 1; letter-spacing: -0.03em; text-shadow: 0 1px 0 rgba(0,0,0,0.35); }
-.net-tile .speeds { display: flex; flex-direction: column; align-items: flex-end; text-align: right; margin-left: auto; gap: 6px; line-height: 1; padding: 2px 0; font-family: "Barlow Condensed", "Arial Narrow", -apple-system, sans-serif; }
-.net-tile .spd { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.net-tile .code { font-family: "Barlow Condensed", "Arial Narrow", -apple-system, sans-serif; font-size: 44px; font-weight: 800; font-style: italic; line-height: 1; letter-spacing: -0.04em; text-shadow: 0 1px 0 rgba(0,0,0,0.35); }
+.net-tile .speeds { display: flex; flex-direction: column; align-items: center; text-align: center; flex: 1; min-width: 0; gap: 6px; line-height: 1; padding: 2px 0; font-family: "Barlow Condensed", "Arial Narrow", -apple-system, sans-serif; }
+.net-tile .spd { display: flex; flex-direction: column; align-items: center; gap: 1px; }
 .net-tile .spd .k { font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em; opacity: 0.9; }
 .net-tile .spd .v { font-size: 19px; font-weight: 800; }
 .net-tile.online { background: #4caf3a; }
@@ -202,7 +202,7 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
   .netboard { width: 100%; gap: 5px; }
   .net-row { padding: 4px; gap: 5px; }
   .net-tile { width: 86px; gap: 3px; padding: 3px 3px; }
-  .net-tile .code { font-size: 31px; }
+  .net-tile .code { font-size: 36px; }
   .net-tile .spd .k { font-size: 8px; }
   .net-tile .speeds { gap: 4px; }
   .net-tile .spd .v { font-size: 15.5px; }
