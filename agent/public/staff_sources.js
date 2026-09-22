@@ -8,11 +8,29 @@ let FAVORITES = [];
 let TVS = [];
 let refreshTimer = null;
 
-function submitPin() {
-  STAFF_PIN = document.getElementById('pinInput').value;
+
+// The PIN is remembered on this device for the shift (Scotto, 2026-09-22:
+// "why is it necessary to PIN in on every page change"). Held in this
+// browser only, 12 hours, and dropped the moment the box rejects it, so
+// a changed PIN just brings the gate back. Shared by all three staff tabs.
+const PIN_KEY = 'vc_staff_pin';
+const PIN_TTL_MS = 12 * 60 * 60 * 1000;
+function rememberPin(pin) { try { localStorage.setItem(PIN_KEY, JSON.stringify({ pin, at: Date.now() })); } catch (e) { /* private mode */ } }
+function forgetPin() { try { localStorage.removeItem(PIN_KEY); } catch (e) { /* ignore */ } }
+function rememberedPin() {
+  try {
+    const r = JSON.parse(localStorage.getItem(PIN_KEY) || 'null');
+    return (r && r.pin && Date.now() - r.at < PIN_TTL_MS) ? r.pin : '';
+  } catch (e) { return ''; }
+}
+
+function submitPin(auto) {
+  STAFF_PIN = auto ? rememberedPin() : document.getElementById('pinInput').value;
+  if (!STAFF_PIN && auto) return;
   // GET /api/sources is harmless and always returns 200 (an empty array is
   // still success), so a clean response here is proof the PIN was accepted.
   api('/api/sources').then((sources) => {
+    rememberPin(STAFF_PIN);
     document.getElementById('pinGate').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     SOURCES = sources;
@@ -26,9 +44,13 @@ function submitPin() {
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(refreshSources, 15000); // matches the agent poller's own 15s cadence
   }).catch(() => {
-    document.getElementById('pinMsg').innerHTML = '<div class="msg error">Incorrect PIN.</div>';
+    forgetPin();
+    STAFF_PIN = '';
+    if (!auto) document.getElementById('pinMsg').innerHTML = '<div class="msg error">Incorrect PIN.</div>';
   });
 }
+// Straight in if this device already knows the PIN.
+submitPin(true);
 
 let clockTimer = null;
 
@@ -54,6 +76,7 @@ async function api(path, opts = {}) {
     headers: { 'Content-Type': 'application/json', 'x-staff-pin': STAFF_PIN, ...(opts.headers || {}) },
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) forgetPin(); // PIN changed on the box — ask again next load
   if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
   return data;
 }
