@@ -667,7 +667,7 @@ async function renderNotifications() {
       <h2>How alerts work</h2>
       <p class="muted" style="margin-bottom:6px;"><b>TVs</b> are handled at the bar first: a TV that stops answering during TV hours shows up on that bar's iPad after 3 minutes, with Turn On, Clear, and Service call. Nobody is emailed about a TV unless the bar presses Service call, or in the 6am summary.</p>
       <p class="muted" style="margin-bottom:6px;"><b>Everything else</b> (network, coolers, ice machines…) sends one notice once it has been down 3 minutes straight, and one when it's back. No reminders. If several things at one bar drop together, that's one email.</p>
-      <p class="muted"><b>The 6am summary</b> is one email a day listing what's still down and what came and went overnight. Nothing to report, no email. Alert emails are capped at ${DAILY_BUDGET} a day so they can never crowd out sign-in codes.</p>
+      <p class="muted"><b>The 6am summary</b> is one email a day listing what's still down and what came and went overnight. Nothing to report, no email. Alert emails are capped at <span id="budgetNote">${DAILY_BUDGET}</span> a day so they can never crowd out sign-in codes.</p>
     </div>
     <div class="card">
       <h2>My alert settings</h2>
@@ -792,6 +792,7 @@ async function loadNotifySettings() {
   try {
     const settings = await api('/api/monitoring/notify-settings');
     document.getElementById('prefsTable').innerHTML = prefsTableHtml('pref', settings);
+    if (settings.dailyBudget) document.getElementById('budgetNote').textContent = settings.dailyBudget;
     document.getElementById('notifyChannel').value = settings.notify_channel || 'email';
     document.getElementById('notifyChannel').onchange = updateSmsNote;
     updateSmsNote();

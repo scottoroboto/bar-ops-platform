@@ -289,7 +289,12 @@ async function listAlerts(client, { locationId, openOnly } = {}) {
 // person.
 // ---------------------------------------------------------------------
 const DOWN_BEFORE_NOTIFY_MS = 3 * 60 * 1000;
-const DAILY_ALERT_EMAIL_BUDGET = 30; // per bar-day, all categories; the 6am summary is outside it
+// Per bar-day, all categories; the 6am summary is outside it. 30 because
+// Resend's free plan allows 100 emails a day total and sign-in codes,
+// credentials and service-call notices share that pool. Raise it with
+// the ALERT_EMAIL_DAILY_BUDGET env var (Render -> Environment) once the
+// email plan allows more.
+const DAILY_ALERT_EMAIL_BUDGET = Number(process.env.ALERT_EMAIL_DAILY_BUDGET) > 0 ? Number(process.env.ALERT_EMAIL_DAILY_BUDGET) : 30;
 
 // silenced_until is a timestamptz; 'infinity' ("until turned back on")
 // comes out of pg as the number Infinity, which new Date() can't hold —
@@ -737,7 +742,7 @@ async function getNotifySettings(personId) {
     // never has to know the defaults.
     const effective = {};
     for (const c of PREF_CATEGORIES) effective[c] = modeFor(row.prefs, c);
-    return { ...row, prefs: row.prefs || {}, effective, defaults: { ...Object.fromEntries(PREF_CATEGORIES.map((c) => [c, DEFAULT_MODE[c] || 'immediate'])) } };
+    return { ...row, prefs: row.prefs || {}, effective, defaults: { ...Object.fromEntries(PREF_CATEGORIES.map((c) => [c, DEFAULT_MODE[c] || 'immediate'])) }, dailyBudget: DAILY_ALERT_EMAIL_BUDGET };
   });
 }
 
