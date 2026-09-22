@@ -4,7 +4,6 @@
 // "pick a source -> pick the TVs to move -> commit" bulk re-routing tool.
 // Same shape as sources.js/the old tvs.js: local API only (/api/tvs,
 // /api/sources, /api/zones), never a direct browser->device connection.
-let STAFF_PIN = '';
 let TVS = [];
 let ZONES = [];
 let SOURCES = [];
@@ -13,28 +12,54 @@ let clockTimer = null;
 let ATTENTION = [];           // TVs the cloud wants us to look at (cloud patch_034)
 let ATTENTION_BUSY = {};      // systemId -> 'on' | 'clear' | 'call' while a button is working
 let ATTENTION_MENU = null;    // systemId whose Clear duration menu is open
-
-
-// The PIN is remembered on this device for the shift (Scotto, 2026-09-22:
-// "why is it necessary to PIN in on every page change"). Held in this
-// browser only, 12 hours, and dropped the moment the box rejects it, so
-// a changed PIN just brings the gate back. Shared by all three staff tabs.
-const PIN_KEY = 'vc_staff_pin';
-const PIN_TTL_MS = 12 * 60 * 60 * 1000;
-function rememberPin(pin) { try { localStorage.setItem(PIN_KEY, JSON.stringify({ pin, at: Date.now() })); } catch (e) { /* private mode */ } }
-function forgetPin() { try { localStorage.removeItem(PIN_KEY); } catch (e) { /* ignore */ } }
-function rememberedPin() {
+// Getting in (cloud patch_036): no PIN. The Bar Ops app's TV Staff tile
+// sends the person here with a signed pass in the URL fragment
+// (#pass=...). We keep it in this browser until it runs out, strip it
+// from the address bar, and send it on every local API call. When the
+// box rejects it (expired, wrong site, bad signature) the gate comes back
+// and points at the app. Nothing here talks to the cloud.
+const PASS_KEY = 'vc_staff_pass';
+function readPassFromUrl() {
+  const m = (location.hash || '').match(/[#&]pass=([^&]+)/);
+  if (!m) return null;
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ }
+  return decodeURIComponent(m[1]);
+}
+function passInfo(pass) {
+  try { return JSON.parse(atob(pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))); } catch (e) { return null; }
+}
+function storedPass() {
   try {
-    const r = JSON.parse(localStorage.getItem(PIN_KEY) || 'null');
-    return (r && r.pin && Date.now() - r.at < PIN_TTL_MS) ? r.pin : '';
+    const p = localStorage.getItem(PASS_KEY) || '';
+    const info = p ? passInfo(p) : null;
+    return (info && info.exp > Date.now()) ? p : '';
   } catch (e) { return ''; }
 }
+function rememberPass(p) { try { localStorage.setItem(PASS_KEY, p); } catch (e) { /* private mode */ } }
+function forgetPass() { try { localStorage.removeItem(PASS_KEY); } catch (e) { /* ignore */ } }
+let STAFF_PASS = readPassFromUrl() || storedPass();
+if (STAFF_PASS) rememberPass(STAFF_PASS);
 
-function submitPin(auto) {
-  STAFF_PIN = auto ? rememberedPin() : document.getElementById('pinInput').value;
-  if (!STAFF_PIN && auto) return;
+function showGate(reason) {
+  document.getElementById('pinGate').style.display = '';
+  document.getElementById('app').style.display = 'none';
+  const msg = document.getElementById('pinMsg');
+  if (msg) msg.innerHTML = reason ? `<div class="msg error">${reason}</div>` : '';
+  fetch('/api/status').then((r) => r.json()).then((s) => {
+    const a = document.getElementById('openFromApp');
+    if (a && s.cloudUrl) a.href = s.cloudUrl.replace(/\/$/, '') + '/tv-staff.html';
+  }).catch(() => {});
+}
+function passLine() {
+  const info = STAFF_PASS ? passInfo(STAFF_PASS) : null;
+  if (!info) return '';
+  const until = new Date(info.exp).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return `${info.name || 'Staff'} · until ${until}`;
+}
+
+function enter() {
+  if (!STAFF_PASS) return showGate('');
   api('/api/tvs').then(async (tvs) => {
-    rememberPin(STAFF_PIN);
     document.getElementById('pinGate').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     TVS = tvs;
@@ -48,14 +73,13 @@ function submitPin(auto) {
     clockTimer = setInterval(updateTopbarClock, 15000);
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(refreshAll, 15000);
-  }).catch(() => {
-    forgetPin();
-    STAFF_PIN = '';
-    if (!auto) document.getElementById('pinMsg').innerHTML = '<div class="msg error">Incorrect PIN.</div>';
+  }).catch((e) => {
+    forgetPass();
+    STAFF_PASS = '';
+    showGate(/PASS_REQUIRED|401/.test(e.message) ? 'Your TV session has ended. Open TV Staff from the Bar Ops app again.' : escapeHtml(e.message));
   });
 }
-// Straight in if this device already knows the PIN.
-submitPin(true);
+enter();
 
 function updateTopbarClock() {
   const now = new Date();
@@ -67,15 +91,14 @@ function updateTopbarClock() {
   time.textContent = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   date.textContent = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
-document.getElementById('pinInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitPin(); });
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', 'x-staff-pin': STAFF_PIN, ...(opts.headers || {}) },
+    headers: { 'Content-Type': 'application/json', 'x-staff-pass': STAFF_PASS, ...(opts.headers || {}) },
   });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401) forgetPin(); // PIN changed on the box — ask again next load
+  if (res.status === 401) { forgetPass(); STAFF_PASS = ''; showGate('Your TV session has ended. Open TV Staff from the Bar Ops app again.'); }
   if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
   return data;
 }

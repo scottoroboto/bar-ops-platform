@@ -65,16 +65,48 @@ app.use('/api/admin', requireAdminPin);
 // admin gate above (staff shouldn't be able to run a network scan). If
 // neither PIN is set in .env, this is a no-op, same documented gap as
 // requireAdminPin -- see the warning in .env.example.
+// patch_036 (cloud): the pass. base64url(JSON).hexHMAC, signed by the
+// cloud with sha256(AGENT_TOKEN) — the same value it stores as this
+// site's agent_token_hash. Checked here with no round trip, so a pass
+// keeps working through an internet outage until its exp. See
+// server/tvpass.js in the cloud repo for the minting side.
+const crypto = require('crypto');
+const PASS_KEY = config.AGENT_TOKEN ? crypto.createHash('sha256').update(config.AGENT_TOKEN).digest('hex') : '';
+function verifyPass(pass) {
+  if (!PASS_KEY || typeof pass !== 'string') return null;
+  const dot = pass.lastIndexOf('.');
+  if (dot < 1) return null;
+  const payload = pass.slice(0, dot), sig = pass.slice(dot + 1);
+  const expect = crypto.createHmac('sha256', PASS_KEY).update(payload).digest('hex');
+  if (sig.length !== expect.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect))) return null;
+  let data;
+  try { data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch (e) { return null; }
+  if (!data || data.v !== 1 || !(data.exp > Date.now())) return null;
+  const site = (cache.get('config') || {}).site;
+  const siteId = site ? (site.id != null ? site.id : site.site_id) : null;
+  if (siteId != null && Number(siteId) !== Number(data.siteId)) return null;
+  return data;
+}
 function requireStaffPin(req, res, next) {
+  // A pass from the cloud (TV Staff in the Bar Ops app) is the normal way
+  // in. The name on it is the actor in the activity log.
+  const passData = verifyPass(req.get('x-staff-pass') || req.query.pass);
+  if (passData) {
+    req.vcActor = passData.actor === 'admin' ? 'admin' : (passData.name || 'staff');
+    req.vcPass = passData;
+    return next();
+  }
+  // Below: the old PINs, kept only as a setup/emergency path for a box whose
+  // .env still sets one. With no PIN set, a missing or bad pass is a 401.
+  if (!config.STAFF_PIN && !config.ADMIN_PIN) return res.status(401).json({ error: 'PASS_REQUIRED', message: 'Open the TVs from the Bar Ops app (TV Staff).' });
 // Phase 5 (lib/activity.js): who to blame in the audit log for this
 // request. Set before the PIN check itself so a matched admin PIN (which
 // also satisfies this gate, per the comment above) is correctly tagged
 // "admin" rather than "staff" -- see the ok check below.
 req.vcActor = (config.ADMIN_PIN && (req.get('x-staff-pin') || req.query.pin) === config.ADMIN_PIN) ? 'admin' : 'staff';
-if (!config.STAFF_PIN && !config.ADMIN_PIN) return next();
 const pin = req.get('x-staff-pin') || req.query.pin;
 const ok = (config.STAFF_PIN && pin === config.STAFF_PIN) || (config.ADMIN_PIN && pin === config.ADMIN_PIN);
-if (!ok) return res.status(401).json({ error: 'Invalid or missing staff PIN.' });
+if (!ok) return res.status(401).json({ error: 'PASS_REQUIRED', message: 'Open the TVs from the Bar Ops app (TV Staff).' });
 next();
 }
 app.use('/api/sources', requireStaffPin);

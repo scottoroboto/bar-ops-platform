@@ -17,6 +17,7 @@ const ICONS = {
   cash: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 9v0M18 15v0"/></svg>',
   inventory: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="11" rx="1.5"/><path d="M4 9l8-4 8 4"/><path d="M12 9v3"/></svg>',
   tv: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M8 21h8M12 18v3M8 2l4 4 4-4"/></svg>',
+  shift: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="7" width="15" height="10" rx="2"/><path d="M6 21h8M10 17v4"/><circle cx="19" cy="6" r="3.5"/><path d="M19 4.5V6l1 1"/></svg>',
 };
 
 // The roster row's app-access toggles, in the order the redesign settled
@@ -332,16 +333,58 @@ function renderAllEmployees() {
   el.innerHTML = rows.map(empRowHtml).join('');
 }
 
+// A timed TVs grant (patch_036): on now, off by itself after the TV pass
+// length set under TV Admin. Owner or manager; no cancel — it runs out.
+function tvShiftButtonHtml(p, compact) {
+  if (p.role === 'owner' || p.status !== 'active') return '';
+  const until = p.appAccessUntil && p.appAccessUntil.tv_staff;
+  if (until) {
+    return compact
+      ? `<div class="emp-tgl on" title="TV Staff on for a shift, until ${escapeHtml(fmtUntil(until))}"><div class="ic">${ICONS.shift}</div><span class="lbl">til ${escapeHtml(fmtUntil(until))}</span></div>`
+      : `<span class="badge on" title="TV Staff on for a shift" style="flex-shrink:0;">TVs until ${escapeHtml(fmtUntil(until))}</span>`;
+  }
+  if (p.appAccess && p.appAccess.tv_staff) return '';
+  return compact
+    ? `<div class="emp-tgl off" onclick="event.stopPropagation(); confirmTvShift(event, '${p.id}')" title="Turn TV Staff on for one shift"><div class="ic">${ICONS.shift}</div><span class="lbl">Shift</span></div>`
+    : `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); confirmTvShift(event, '${p.id}')">TVs for a shift</button>`;
+}
+function fmtUntil(iso) {
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const t = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return sameDay ? t : `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${t}`;
+}
+function confirmTvShift(evt, personId) {
+  const person = ALL_EMPLOYEES.find(p => p.id === personId);
+  const name = person ? person.name : 'this person';
+  openToggleConfirm(evt.currentTarget, `Turn on TV Staff for ${name} for one shift? It turns itself off after the pass length set under TV Admin.`, () => grantTvShift(personId));
+}
+async function grantTvShift(personId) {
+  try {
+    const result = await withStepUp(() => api(`/api/employees/${personId}/app-access`, { method: 'POST', body: { appKey: 'tv_staff', until: 'shift' } }));
+    if (result && result.ok === false) { showMsg(result.error || 'Could not grant TV Staff.', 'error'); return; }
+    showMsg(`TV Staff is on for them until ${fmtUntil(result.expiresAt)}.`, 'success');
+    await loadAllEmployees();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+function lockBadgeHtml(p) {
+  if (p.password_locked_at) return ' <span class="badge danger" title="Five wrong passwords — reset their sign-in from their card">locked</span>';
+  if (p.pin_locked_at) return ' <span class="badge stale" title="Five wrong PINs — they can sign in with their password and set a new PIN">PIN locked</span>';
+  return '';
+}
+
 function empRowHtml(p) {
   let rightHtml = '';
   if (ME.role === 'owner') {
-    rightHtml = `<div class="emp-toggles">${empToggleDefs(p).map(t => empToggleHtml(p, t)).join('')}${empStatusToggleHtml(p)}</div>`;
+    rightHtml = `<div class="emp-toggles">${empToggleDefs(p).map(t => empToggleHtml(p, t)).join('')}${tvShiftButtonHtml(p, true)}${empStatusToggleHtml(p)}</div>`;
   } else if (ME.role === 'manager') {
-    rightHtml = `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button>`;
+    rightHtml = `<div class="emp-toggles">${tvShiftButtonHtml(p)}<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button></div>`;
   }
   return `
     <div class="emp-row" onclick="openEmployeeDetail('${p.id}')">
-      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}</div>
+      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}${lockBadgeHtml(p)}</div>
       <div class="emp-roleinfo">${escapeHtml(cap(p.role))} &middot; ${escapeHtml(p.position || '—')}</div>
       <div class="emp-locs">${locChipsHtml(p)}</div>
       ${rightHtml}
@@ -654,11 +697,18 @@ function openEmployeeDetail(id) {
   // that's set, either they signed in for real or a reset already
   // covered it, and "Forgot?" on the login page is the right tool from
   // there, not this.
-  const canResendCreds = isOwner && p.status === 'active' && p.username && !p.password_verified_at;
+  // patch_036: a locked account (five wrong passwords) is the other case —
+  // the same button hands out fresh credentials and clears the lock.
+  const locked = !!(p.password_locked_at || p.pin_locked_at);
+  const canResendCreds = isOwner && p.status === 'active' && p.username && (!p.password_verified_at || locked);
   document.getElementById('detailCredentialsFields').style.display = canResendCreds ? '' : 'none';
   if (canResendCreds) {
     const first = (p.name || '').split(' ')[0] || 'They';
-    document.getElementById('detailCredentialsHint').textContent = p.email
+    document.getElementById('detailCredentialsHint').textContent = p.password_locked_at
+      ? `${first}'s account is locked after five wrong passwords. Resend to give them a new password and PIN and clear the lock.`
+      : p.pin_locked_at
+      ? `${first}'s PIN is locked after five wrong tries. They can fix it themselves by signing in with their password and setting a new PIN, or resend to give them a fresh password and PIN now.`
+      : p.email
       ? `${first} hasn't signed in yet. If the original "account is ready" email never reached them, resend it with new credentials.`
       : `${first} hasn't signed in yet, and has no email on file — resending will only generate new credentials here for you to hand over.`;
   }

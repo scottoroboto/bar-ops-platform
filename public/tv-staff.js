@@ -52,14 +52,17 @@ function rowHtml(r) {
   let rows = [];
   try {
     const deviceToken = getDeviceToken();
-    rows = await api('/api/venue-control/staff-links' + (deviceToken ? '?deviceToken=' + encodeURIComponent(deviceToken) : ''));
+    // patch_036: the everyday PIN session isn't enough here — the server
+    // answers STEP_UP_REQUIRED and withStepUp asks for the password. The
+    // bar's trusted iPad is let through on device trust alone.
+    rows = await withStepUp(() => api('/api/venue-control/staff-links' + (deviceToken ? '?deviceToken=' + encodeURIComponent(deviceToken) : '')));
   } catch (e) {
     hint.innerHTML = `<span class="msg error">${escapeHtml(e.message)}</span>`;
     return;
   }
 
   if (!rows.length) {
-    hint.textContent = "No bar's TV box is set up for this account or device yet. The owner turns a location on under TV Admin → Sites.";
+    hint.textContent = "TV Staff isn't switched on for you, or no bar's TV box is set up yet. A manager can turn it on for a shift from Employees.";
     return;
   }
 

@@ -18,12 +18,11 @@
 </style>
 </head>
 <body class="staff">
-<div class="wrap" id="pinGate">
+<div class="wrap" id="pinGate" style="display:none;">
   <div class="card">
     <h2>Layouts</h2>
-    <p class="muted">Enter the staff PIN to apply a room layout.</p>
-    <div class="field"><input type="password" id="pinInput" placeholder="Staff PIN" autocomplete="off"></div>
-    <button class="primary" onclick="submitPin()">Continue</button>
+    <p class="muted">This screen opens from the Bar Ops app. Tap <strong>TV Staff</strong> there and you'll land back here signed in.</p>
+    <a class="primary" id="openFromApp" href="#" style="display:inline-block; text-decoration:none;">Open the Bar Ops app</a>
     <div id="pinMsg"></div>
   </div>
 </div>

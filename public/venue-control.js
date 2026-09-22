@@ -129,10 +129,25 @@ function showVcPanel(name) {
 
 let SITES = [];
 
+async function loadPassLength() {
+  try {
+    const r = await api('/api/venue-control/pass-length');
+    document.getElementById('passLength').value = r.passLength;
+  } catch (e) { /* leave the default showing */ }
+}
+async function savePassLength(value) {
+  try {
+    const r = await withStepUp(() => api('/api/venue-control/pass-length', { method: 'POST', body: { passLength: value } }));
+    if (r && r.ok === false) { showMsg(r.error, 'error'); return loadPassLength(); }
+    showMsg('TV Staff pass length saved. Passes already handed out keep their original time.', 'success');
+  } catch (e) { showMsg(e.message, 'error'); loadPassLength(); }
+}
+
 async function loadSites() {
   try {
     SITES = await api('/api/venue-control/sites');
     renderSitesList();
+    loadPassLength();
     populateSourcesLocationSelect();
     populateDeviceLocationSelect();
   } catch (e) {

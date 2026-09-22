@@ -354,7 +354,8 @@ async function resendCredentials({ personId, resentBy }) {
     if (!person) return { ok: false, error: 'Employee not found.' };
     if (person.status !== 'active') return { ok: false, error: 'Not active yet — activate them first.' };
     if (!person.username) return { ok: false, error: 'No credentials to resend yet.' };
-    if (person.password_verified_at) {
+    const locked = !!(person.password_locked_at || person.pin_locked_at);
+    if (person.password_verified_at && !locked) {
       return { ok: false, error: "They've already signed in once — use a credential reset instead of a resend." };
     }
 
@@ -363,9 +364,12 @@ async function resendCredentials({ personId, resentBy }) {
     const passwordHash = await bcrypt.hash(tempPassword, 10);
     const pinHash = await bcrypt.hash(pin, 10);
     await client.query(
-      'UPDATE people SET password_hash = $1, pin_hash = $2, updated_at = now() WHERE id = $3',
+      `UPDATE people SET password_hash = $1, pin_hash = $2, updated_at = now(),
+              pin_failed_count = 0, pin_locked_at = NULL, password_failed_count = 0, password_locked_at = NULL
+        WHERE id = $3`,
       [passwordHash, pinHash, personId]
     );
+    if (locked) await client.query('DELETE FROM auth_sessions WHERE person_id = $1', [personId]);
 
     const { rows: accessRows } = await client.query(
       'SELECT app_key FROM employee_apps WHERE person_id = $1 AND enabled = true',
@@ -386,7 +390,7 @@ async function resendCredentials({ personId, resentBy }) {
 }
 
 // Owner can revisit toggles at any point during employment — not just at onboarding.
-async function setAppAccess({ personId, appKey, enabled, updatedBy }) {
+async function setAppAccess({ personId, appKey, enabled, expiresAt = null, updatedBy }) {
   if (!APP_KEYS.includes(appKey)) return { ok: false, error: 'Unknown app.' };
   return withServiceClient(async (client) => {
     if (enabled && MANAGER_ONLY_APP_KEYS.includes(appKey)) {
@@ -395,13 +399,16 @@ async function setAppAccess({ personId, appKey, enabled, updatedBy }) {
         return { ok: false, error: 'Only a manager can be granted Employees access.' };
       }
     }
+    // expires_at (patch_036): a timed grant; NULL is permanent. Any change
+    // to the switch resets it, so turning a timed grant permanently on or
+    // off from the roster behaves as the roster shows.
     await client.query(
-      `INSERT INTO employee_apps (person_id, app_key, enabled, updated_by)
-       VALUES ($1,$2,$3,$4)
-       ON CONFLICT (person_id, app_key) DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-      [personId, appKey, enabled, updatedBy]
+      `INSERT INTO employee_apps (person_id, app_key, enabled, expires_at, updated_by)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (person_id, app_key) DO UPDATE SET enabled = EXCLUDED.enabled, expires_at = EXCLUDED.expires_at, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [personId, appKey, enabled, expiresAt, updatedBy]
     );
-    return { ok: true };
+    return { ok: true, expiresAt };
   });
 }
 
@@ -459,13 +466,19 @@ async function listAllWithAccess(locationFilter) {
     const { rows: people } = await client.query(
       `SELECT id, name, role, location_id, ${LOCATION_IDS_SQL} AS location_ids, username, email, phone, address, status, position, pay_rate,
               password_verified_at, (photo_path IS NOT NULL) AS has_photo,
+              pin_locked_at, password_locked_at,
               activated_at, COALESCE(activated_at, created_at) AS hire_date
        FROM people WHERE ${where} ORDER BY name`,
       params
     );
     const { rows: access } = await client.query('SELECT * FROM employee_apps');
     const byPerson = {};
-    access.forEach(a => { (byPerson[a.person_id] ||= {})[a.app_key] = a.enabled; });
+    const untilByPerson = {};
+    access.forEach(a => {
+      const live = a.enabled && (!a.expires_at || new Date(a.expires_at) > new Date());
+      (byPerson[a.person_id] ||= {})[a.app_key] = live;
+      if (live && a.expires_at) (untilByPerson[a.person_id] ||= {})[a.app_key] = a.expires_at;
+    });
     const { rows: netAccess } = await client.query('SELECT * FROM network_status_access');
     const netByPerson = {};
     netAccess.forEach(n => { (netByPerson[n.person_id] ||= {})[n.location_id] = n.enabled; });
@@ -474,7 +487,7 @@ async function listAllWithAccess(locationFilter) {
     );
     const certsByPerson = {};
     certs.forEach(c => { (certsByPerson[c.person_id] ||= []).push(c); });
-    return people.map(p => ({ ...p, appAccess: byPerson[p.id] || {}, networkAccess: netByPerson[p.id] || {}, certifications: certsByPerson[p.id] || [] }));
+    return people.map(p => ({ ...p, appAccess: byPerson[p.id] || {}, appAccessUntil: untilByPerson[p.id] || {}, networkAccess: netByPerson[p.id] || {}, certifications: certsByPerson[p.id] || [] }));
   });
 }
 

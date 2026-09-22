@@ -129,6 +129,9 @@ async function decideReset({ requestId, approve, decidedBy, note }) {
       await client.query('UPDATE people SET pin_hash = $1, updated_at = now() WHERE id = $2', [pinHash, person.id]);
     }
 
+    // A reset also clears any sign-in lock (patch_036) — this is the owner's
+    // way out for someone who hit five wrong passwords.
+    await client.query('UPDATE people SET pin_failed_count = 0, pin_locked_at = NULL, password_failed_count = 0, password_locked_at = NULL WHERE id = $1', [person.id]);
     await client.query('DELETE FROM auth_sessions WHERE person_id = $1', [person.id]);
 
     await client.query(

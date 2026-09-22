@@ -41,8 +41,8 @@ async function doPinLogin() {
     if (deviceToken) body.deviceToken = deviceToken;
     const result = await api('/api/auth/login-pin', { method: 'POST', body });
     if (!result.ok) {
-      if (result.error === 'NEEDS_FIRST_LOGIN') {
-        showMsg(result.message, 'info');
+      if (result.error === 'NEEDS_FIRST_LOGIN' || result.error === 'PIN_LOCKED') {
+        showMsg(result.message, result.error === 'PIN_LOCKED' ? 'error' : 'info');
         showTab('full');
         document.getElementById('fullUsername').value = username;
         return;
@@ -63,7 +63,7 @@ async function doPasswordLogin() {
   showMsg('');
   try {
     const result = await api('/api/auth/login-password', { method: 'POST', body: { username, password } });
-    if (!result.ok) { showMsg(result.error || 'Sign-in failed.', 'error'); return; }
+    if (!result.ok) { showMsg(result.message || result.error || 'Sign-in failed.', 'error'); return; }
     if (result.stage === 'verify_code') {
       pendingPersonId = result.personId;
       document.getElementById('passwordStep').style.display = 'none';

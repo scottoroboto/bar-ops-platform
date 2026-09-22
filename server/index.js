@@ -6,6 +6,7 @@ const cors = require('cors');
 const { pool, withServiceClient, locationIdsOf } = require('./db');
 const auth = require('./auth');
 const employees = require('./employees');
+const tvpass = require('./tvpass');
 const timeclock = require('./timeclock');
 const servicecalls = require('./servicecalls');
 const monitoring = require('./monitoring');
@@ -224,7 +225,7 @@ res.json({ ok: true, position });
 
 // ---------------- Auth ----------------
 app.post('/api/auth/login-password', async (req, res) => {
-const result = await auth.loginWithPassword(req.body);
+const result = await auth.loginWithPassword({ ...req.body, ip: clientPublicIp(req) });
 res.json(result);
 });
 app.post('/api/auth/verify-code', async (req, res) => {
@@ -232,11 +233,11 @@ const result = await auth.verifyFirstLoginCode(req.body);
 res.json(result);
 });
 app.post('/api/auth/login-pin', async (req, res) => {
-const result = await auth.loginWithPin(req.body);
+const result = await auth.loginWithPin({ ...req.body, ip: clientPublicIp(req) });
 res.json(result);
 });
 app.post('/api/auth/step-up', async (req, res) => {
-const result = await auth.stepUp(req.body);
+const result = await auth.stepUp({ ...req.body, ip: clientPublicIp(req) });
 res.json(result);
 });
 app.post('/api/auth/set-pin', auth.requireSession('full'), async (req, res) => {
@@ -255,7 +256,7 @@ res.json(result);
 });
 app.get('/api/auth/me', auth.requireSession('light'), async (req, res) => {
 const access = await req.withAuthedClient(async (client) => {
-const { rows } = await client.query('SELECT app_key, enabled FROM employee_apps WHERE person_id = $1', [req.person.id]);
+const { rows } = await client.query('SELECT app_key, (enabled AND (expires_at IS NULL OR expires_at > now())) AS enabled, expires_at FROM employee_apps WHERE person_id = $1', [req.person.id]);
 return rows;
 });
 // cash_sources/cash_counts and inventory_* have zero RLS policies (same
@@ -416,30 +417,41 @@ same_network: (r.agent_public_ip && myPublicIp) ? r.agent_public_ip === myPublic
 // so a box running on a different PORT would need this extended.
 app.get('/api/venue-control/staff-links', auth.requireSession('light'), async (req, res) => {
 // Who gets links (patch_035): the owner (every bar); anyone with the
-// 'tv_staff' app switched on (their bars); the bar's trusted iPad (that
-// bar), whoever is signed in on it. A manager with the switch off gets
-// nothing — the switch decides, not the role.
+// 'tv_staff' app switched on (their bars, while a timed grant lasts);
+// the bar's trusted iPad (that bar), whoever is signed in on it.
+// patch_036: everyone but the trusted iPad has to have typed their
+// password (a full session) — the everyday PIN is not enough to open
+// the TVs. Each link carries a signed pass for that bar's box.
+const token = req.query.deviceToken;
+let deviceLocationId = null;
+if (token) {
+const { rows } = await withServiceClient((client) => client.query('SELECT location_id FROM devices WHERE device_token = $1', [token]));
+deviceLocationId = rows[0] ? rows[0].location_id : null;
+}
 let locationIds = null; // null = all
 if (req.person.role === 'owner') {
+if (req.sessionTier !== 'full' && !deviceLocationId) return res.status(403).json({ error: 'STEP_UP_REQUIRED', message: 'Enter your password to open the TVs.' });
 locationIds = null;
 } else {
 const { rows: appRows } = await withServiceClient((client) => client.query(
-`SELECT 1 FROM employee_apps WHERE person_id = $1 AND app_key = 'tv_staff' AND enabled = true`, [req.person.id]
+`SELECT 1 FROM employee_apps WHERE person_id = $1 AND app_key = 'tv_staff' AND enabled = true AND (expires_at IS NULL OR expires_at > now())`, [req.person.id]
 ));
-const mine = appRows[0] ? locationIdsOf(req.person) : [];
-const token = req.query.deviceToken;
-if (token) {
-const { rows } = await withServiceClient((client) => client.query('SELECT location_id FROM devices WHERE device_token = $1', [token]));
-if (rows[0] && !mine.includes(rows[0].location_id)) mine.push(rows[0].location_id);
+let mine = [];
+if (appRows[0]) {
+if (req.sessionTier !== 'full' && !deviceLocationId) return res.status(403).json({ error: 'STEP_UP_REQUIRED', message: 'Enter your password to open the TVs.' });
+mine = locationIdsOf(req.person);
 }
+if (deviceLocationId && !mine.includes(deviceLocationId)) mine.push(deviceLocationId);
 if (!mine.length) return res.json([]);
 locationIds = mine;
 }
+const passLength = await tvpass.getPassLength();
+const passExpiresAt = tvpass.expiryFor(passLength);
 const params = [];
 let where = 'vs.enabled = true AND l.active = true';
 if (locationIds) { params.push(locationIds); where += ` AND l.id = ANY($${params.length}::uuid[])`; }
 const { rows } = await withServiceClient((client) => client.query(
-`SELECT l.id AS location_id, l.name AS location_name,
+`SELECT l.id AS location_id, l.name AS location_name, vs.id AS site_id, vs.agent_token_hash,
         va.lan_ip, va.public_ip, va.status AS agent_status, va.last_seen_at AS agent_last_seen_at
    FROM locations l
    JOIN vc_sites vs ON vs.location_id = l.id
@@ -470,9 +482,26 @@ online,
 lanIp,
 lastSeenAt: r.agent_last_seen_at,
 sameNetwork,
-url: lanIp ? `http://${lanIp}:8088/staff_tvs.html` : null,
+// The pass rides in the URL fragment: the box's page reads it, keeps it,
+// and strips it from the address bar; it never reaches a server log.
+url: lanIp && r.agent_token_hash
+? `http://${lanIp}:8088/staff_tvs.html#pass=${tvpass.mintPass({ agentTokenHash: r.agent_token_hash, siteId: r.site_id, locationId: r.location_id, person: req.person, actor: req.person.role === 'owner' ? 'admin' : 'staff', expiresAt: passExpiresAt })}`
+: null,
+passExpiresAt: passExpiresAt.toISOString(),
+passLength,
 };
 }));
+});
+
+// TV Staff pass length — one owner setting for every bar (patch_036).
+app.get('/api/venue-control/pass-length', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+const passLength = await tvpass.getPassLength();
+res.json({ passLength, options: tvpass.PASS_LENGTHS, description: tvpass.describeLength(passLength) });
+});
+app.post('/api/venue-control/pass-length', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+res.json(await tvpass.setPassLength(req.body.passLength, req.person.id));
 });
 
 app.post('/api/venue-control/sites/:locationId/set-enabled', auth.requireSession('full'), async (req, res) => {
@@ -859,6 +888,7 @@ const { rows: layoutItems } = layouts.length
 const config = {
 schema_version: 5,
 site: {
+id: req.vcSite.site_id, // patch_036: the box checks a pass is for this site
 location_id: req.vcSite.location_id,
 name: req.vcSite.location_name,
 timezone: req.vcSite.timezone,
@@ -2171,8 +2201,18 @@ res.json(result);
 });
 
 app.post('/api/employees/:id/app-access', auth.requireSession('full'), async (req, res) => {
-if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change app access.' });
-const result = await employees.setAppAccess({ personId: req.params.id, appKey: req.body.appKey, enabled: req.body.enabled, updatedBy: req.person.id });
+// patch_036: 'until: shift' is a timed grant — on now, off by itself
+// after the TV pass length. A manager may hand out a timed TVs grant to
+// someone at one of their bars (covering when the manager isn't there);
+// everything else stays owner-only.
+const timed = req.body.until === 'shift';
+if (req.person.role !== 'owner') {
+const allowed = req.person.role === 'manager' && timed && req.body.appKey === 'tv_staff' && await canManagePerson(req.person, req.params.id);
+if (!allowed) return res.status(403).json({ error: 'Only the owner can change app access.' });
+}
+let expiresAt = null;
+if (timed) expiresAt = tvpass.expiryFor(await tvpass.getPassLength());
+const result = await employees.setAppAccess({ personId: req.params.id, appKey: req.body.appKey, enabled: timed ? true : req.body.enabled, expiresAt, updatedBy: req.person.id });
 res.json(result);
 });
 

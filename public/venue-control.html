@@ -57,6 +57,13 @@
       Venue Control off just doesn't have a site set up yet — nothing else
       about it changes.</p>
     <div id="sitesList"><p class="muted">Loading…</p></div>
+    <div class="toggle-row" style="margin-top:12px; border-top:1px solid var(--card-border); padding-top:12px;">
+      <span class="label">TV Staff pass length<br><span class="muted" style="font-size:12px;">How long a phone or the iPad stays in the TV controls after opening TV Staff. Also the timer on a "for a shift" TVs grant in Employees.</span></span>
+      <select id="passLength" onchange="savePassLength(this.value)" style="width:auto; margin:0;">
+        <option value="1">1 hour</option><option value="2">2 hours</option><option value="4">4 hours</option>
+        <option value="8">8 hours</option><option value="12">12 hours</option><option value="eod">End of day (3:30am)</option>
+      </select>
+    </div>
   </div>
   </section>
 

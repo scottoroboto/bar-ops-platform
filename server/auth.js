@@ -43,21 +43,85 @@ return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 // Pending-review employees can't log in at all — this is the literal
 // enforcement of "nobody goes live until the owner activates them."
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// Sign-in lockouts (patch_036, Scotto 2026-09-22). Five wrong PINs lock
+// the PIN — self-serve: sign in with the password and set a new PIN under
+// My Account. Five wrong passwords lock the account until the owner
+// resets it. The owner's own account only cools down for 15 minutes, so
+// nobody can lock the owner out on purpose. Every miss says how many are
+// left ("4 attempts left" after the first). On top of that, repeated
+// misses from one address are slowed down (2s per extra miss, up to
+// 10s) so guessing is dull before the lock even triggers.
+// ---------------------------------------------------------------------
+const MAX_ATTEMPTS = 5;
+const OWNER_COOLDOWN_MS = 15 * 60 * 1000;
+const ipMisses = new Map(); // ip -> { count, at }
+function noteIpMiss(ip) {
+if (!ip) return;
+const cur = ipMisses.get(ip) || { count: 0, at: 0 };
+ipMisses.set(ip, { count: cur.count + 1, at: Date.now() });
+if (ipMisses.size > 5000) ipMisses.clear(); // never let this grow without bound
+}
+function clearIpMisses(ip) { if (ip) ipMisses.delete(ip); }
+async function throttleIp(ip) {
+if (!ip) return;
+const cur = ipMisses.get(ip);
+if (!cur) return;
+if (Date.now() - cur.at > 15 * 60 * 1000) { ipMisses.delete(ip); return; }
+const extra = cur.count - 2;
+if (extra > 0) await new Promise((r) => setTimeout(r, Math.min(10000, extra * 2000)));
+}
+function attemptsLeftText(left, what) {
+return left <= 0 ? '' : ` ${left} attempt${left === 1 ? '' : 's'} left before your ${what} locks.`;
+}
+// A locked owner password unlocks itself after the cooldown; anyone else
+// stays locked until an owner reset (resetRequests / resendCredentials).
+function passwordLockActive(person) {
+if (!person.password_locked_at) return false;
+if (person.role !== 'owner') return true;
+return Date.now() - new Date(person.password_locked_at).getTime() < OWNER_COOLDOWN_MS;
+}
+async function recordPasswordMiss(client, person) {
+const count = (person.password_failed_count || 0) + 1;
+const lock = count >= MAX_ATTEMPTS;
+await client.query('UPDATE people SET password_failed_count = $2, password_locked_at = CASE WHEN $3 THEN now() ELSE password_locked_at END WHERE id = $1', [person.id, lock ? 0 : count, lock]);
+if (!lock) return { ok: false, error: `Invalid username or password.${attemptsLeftText(MAX_ATTEMPTS - count, 'account')}` };
+return person.role === 'owner'
+? { ok: false, error: 'ACCOUNT_COOLDOWN', message: 'Too many wrong passwords. Try again in 15 minutes.' }
+: { ok: false, error: 'ACCOUNT_LOCKED', message: 'Your account is locked after 5 wrong passwords. Ask the owner to reset your sign-in.' };
+}
+function lockedPasswordResult(person) {
+if (person.role === 'owner') {
+const mins = Math.max(1, Math.ceil((OWNER_COOLDOWN_MS - (Date.now() - new Date(person.password_locked_at).getTime())) / 60000));
+return { ok: false, error: 'ACCOUNT_COOLDOWN', message: `Too many wrong passwords. Try again in ${mins} minute${mins === 1 ? '' : 's'}.` };
+}
+return { ok: false, error: 'ACCOUNT_LOCKED', message: 'Your account is locked after 5 wrong passwords. Ask the owner to reset your sign-in.' };
+}
+async function clearLocks(client, personId) {
+await client.query('UPDATE people SET pin_failed_count = 0, pin_locked_at = NULL, password_failed_count = 0, password_locked_at = NULL WHERE id = $1', [personId]);
+}
+
 // The first-login verification code (email today, text once Twilio is
 // set up). On unless FIRST_LOGIN_CODE is 'off' / 'false' / '0' on the server.
 function firstLoginCodeEnabled() {
 return !['off', 'false', '0', 'no'].includes(String(process.env.FIRST_LOGIN_CODE || 'on').trim().toLowerCase());
 }
 
-async function loginWithPassword({ username, password }) {
+async function loginWithPassword({ username, password, ip }) {
+await throttleIp(ip);
 return withServiceClient(async (client) => {
 const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.username = $1', [username]);
 const person = rows[0];
 if (!person || person.status !== 'active' || !person.password_hash) {
+noteIpMiss(ip);
 return { ok: false, error: 'Invalid username or password.' };
 }
+if (passwordLockActive(person)) return lockedPasswordResult(person);
 const valid = await bcrypt.compare(password, person.password_hash);
-if (!valid) return { ok: false, error: 'Invalid username or password.' };
+if (!valid) { noteIpMiss(ip); return recordPasswordMiss(client, person); }
+clearIpMisses(ip);
+// A correct password clears the password count and an expired owner cooldown.
+if (person.password_failed_count || person.password_locked_at) await client.query('UPDATE people SET password_failed_count = 0, password_locked_at = NULL WHERE id = $1', [person.id]);
 
 if (!person.password_verified_at && !firstLoginCodeEnabled()) {
 // The one-time code is switched off (FIRST_LOGIN_CODE=off — Scotto,
@@ -130,12 +194,17 @@ return { ok: true, token, person: publicPerson(person) };
 // trusted once by a manager/owner (see devices table); after that, whoever's
 // on shift just identifies themselves here.
 // ---------------------------------------------------------------------
-async function loginWithPin({ username, pin, deviceToken }) {
+async function loginWithPin({ username, pin, deviceToken, ip }) {
+await throttleIp(ip);
 return withServiceClient(async (client) => {
 const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.username = $1', [username]);
 const person = rows[0];
 if (!person || person.status !== 'active' || !person.pin_hash) {
+noteIpMiss(ip);
 return { ok: false, error: 'Invalid username or PIN.' };
+}
+if (person.pin_locked_at) {
+return { ok: false, error: 'PIN_LOCKED', message: 'Your PIN is locked after 5 wrong tries. Sign in with your username and password, then set a new PIN under My Account.' };
 }
 // The PIN is deliberately the *lightweight* everyday credential — it
 // must never become a way to skip the one-time 2FA gate. Until this
@@ -145,7 +214,18 @@ if (!person.password_verified_at) {
 return { ok: false, error: 'NEEDS_FIRST_LOGIN', message: 'First-time setup required — sign in with your username and password first.' };
 }
 const valid = await bcrypt.compare(pin, person.pin_hash);
-if (!valid) return { ok: false, error: 'Invalid username or PIN.' };
+if (!valid) {
+noteIpMiss(ip);
+const count = (person.pin_failed_count || 0) + 1;
+if (count >= MAX_ATTEMPTS) {
+await client.query('UPDATE people SET pin_failed_count = 0, pin_locked_at = now() WHERE id = $1', [person.id]);
+return { ok: false, error: 'PIN_LOCKED', message: 'That was the 5th wrong PIN — your PIN is now locked. Sign in with your username and password, then set a new PIN under My Account.' };
+}
+await client.query('UPDATE people SET pin_failed_count = $2 WHERE id = $1', [person.id, count]);
+return { ok: false, error: `Invalid username or PIN.${attemptsLeftText(MAX_ATTEMPTS - count, 'PIN')}` };
+}
+clearIpMisses(ip);
+if (person.pin_failed_count) await client.query('UPDATE people SET pin_failed_count = 0 WHERE id = $1', [person.id]);
 
 let deviceId = null;
 if (deviceToken) {
@@ -163,13 +243,21 @@ return { ok: true, token, person: publicPerson(person) };
 // get a short-lived FULL session for one sensitive action (e.g. an owner
 // opening the employee-activation screen).
 // ---------------------------------------------------------------------
-async function stepUp({ personId, password }) {
+async function stepUp({ personId, password, ip }) {
+await throttleIp(ip);
 return withServiceClient(async (client) => {
 const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.id = $1', [personId]);
 const person = rows[0];
 if (!person || !person.password_hash) return { ok: false, error: 'No password set for this account.' };
+if (passwordLockActive(person)) return lockedPasswordResult(person);
 const valid = await bcrypt.compare(password, person.password_hash);
-if (!valid) return { ok: false, error: 'Incorrect password.' };
+if (!valid) {
+noteIpMiss(ip);
+const r = await recordPasswordMiss(client, person);
+return r.message ? r : { ok: false, error: r.error.replace('Invalid username or password.', 'Incorrect password.') };
+}
+clearIpMisses(ip);
+if (person.password_failed_count) await client.query('UPDATE people SET password_failed_count = 0 WHERE id = $1', [person.id]);
 const token = await mintSession(client, person, 'full', null);
 return { ok: true, token, person: publicPerson(person) };
 });
@@ -178,7 +266,7 @@ return { ok: true, token, person: publicPerson(person) };
 async function setPin({ personId, pin }) {
 const pinHash = await bcrypt.hash(pin, 10);
 return withServiceClient(async (client) => {
-await client.query('UPDATE people SET pin_hash = $1 WHERE id = $2', [pinHash, personId]);
+await client.query('UPDATE people SET pin_hash = $1, pin_failed_count = 0, pin_locked_at = NULL WHERE id = $2', [pinHash, personId]);
 return { ok: true };
 });
 }
@@ -245,6 +333,7 @@ if (rank[result.session_tier] < rank[minTier]) {
 return res.status(403).json({ error: 'STEP_UP_REQUIRED', message: 'This needs you to re-enter your password first.' });
 }
 
+req.sessionTier = result.session_tier;
 req.person = {
 id: result.p_id, name: result.name, role: result.role, location_id: result.location_id,
 // Every bar they work at (patch_033); location_id above is just one of them.
@@ -257,5 +346,5 @@ next();
 }
 
 module.exports = {
-loginWithPassword, verifyFirstLoginCode, loginWithPin, stepUp, setPin, setPassword, requireSession, publicPerson, firstLoginCodeEnabled,
+loginWithPassword, verifyFirstLoginCode, loginWithPin, stepUp, setPin, setPassword, requireSession, publicPerson, firstLoginCodeEnabled, clearLocks,
 };
