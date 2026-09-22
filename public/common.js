@@ -111,6 +111,10 @@ async function api(path, opts = {}) {
     }));
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('That took too long to respond. The server may be waking up — please try again.');
+    // Safari reports any dropped connection as the bare "Load failed"
+    // (Chrome: "Failed to fetch") — a phone hopping from cellular to the
+    // bar's wifi mid-request, mostly. Say that instead.
+    if (e instanceof TypeError) throw new Error('Couldn’t reach the server — check your connection and try again.');
     throw e;
   } finally {
     clearTimeout(timeout);
@@ -155,6 +159,10 @@ async function apiUpload(path, formData) {
     res = await fetch(path, { method: 'POST', headers, body: formData, signal: controller.signal });
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('That took too long to respond. The server may be waking up — please try again.');
+    // Safari reports any dropped connection as the bare "Load failed"
+    // (Chrome: "Failed to fetch") — a phone hopping from cellular to the
+    // bar's wifi mid-request, mostly. Say that instead.
+    if (e instanceof TypeError) throw new Error('Couldn’t reach the server — check your connection and try again.');
     throw e;
   } finally {
     clearTimeout(timeout);
