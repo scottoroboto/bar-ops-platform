@@ -43,6 +43,12 @@ return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 // Pending-review employees can't log in at all — this is the literal
 // enforcement of "nobody goes live until the owner activates them."
 // ---------------------------------------------------------------------
+// The first-login verification code (email today, text once Twilio is
+// set up). On unless FIRST_LOGIN_CODE is 'off' / 'false' / '0' on the server.
+function firstLoginCodeEnabled() {
+return !['off', 'false', '0', 'no'].includes(String(process.env.FIRST_LOGIN_CODE || 'on').trim().toLowerCase());
+}
+
 async function loginWithPassword({ username, password }) {
 return withServiceClient(async (client) => {
 const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.username = $1', [username]);
@@ -52,6 +58,14 @@ return { ok: false, error: 'Invalid username or password.' };
 }
 const valid = await bcrypt.compare(password, person.password_hash);
 if (!valid) return { ok: false, error: 'Invalid username or password.' };
+
+if (!person.password_verified_at && !firstLoginCodeEnabled()) {
+// The one-time code is switched off (FIRST_LOGIN_CODE=off — Scotto,
+// 2026-09-22, until texts work): count the password itself as the
+// verification so PIN sign-in opens up too, and go straight through.
+await client.query('UPDATE people SET password_verified_at = now() WHERE id = $1', [person.id]);
+person.password_verified_at = new Date();
+}
 
 if (!person.password_verified_at) {
 // First time this credential has ever been used — require a one-time code.
