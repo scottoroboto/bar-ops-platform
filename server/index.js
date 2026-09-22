@@ -2587,8 +2587,8 @@ app.post('/api/monitoring/systems/:id/archive', auth.requireSession('full'), asy
 
 app.post('/api/monitoring/systems/:id/update', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
-  const { locationId, category, kind, name, make, model, serialNumber } = req.body;
-  const result = await monitoring.updateSystem({ id: req.params.id, locationId, category, kind, name, make, model, serialNumber });
+  const { locationId, category, kind, name, make, model, serialNumber, config } = req.body;
+  const result = await monitoring.updateSystem({ id: req.params.id, locationId, category, kind, name, make, model, serialNumber, config });
   res.json(result);
 });
 

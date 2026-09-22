@@ -59,7 +59,7 @@ function unifiConfigured() {
 // on the dashboard instead of crashing the poller — fix the field lookup
 // there once Scotto's key is in and we can see a real response.
 async function unifiRequest(path) {
-  const res = await fetch(`${UNIFI_API_BASE}${path}`, {
+  const res = await fetch(path.startsWith('http') ? path : `${UNIFI_API_BASE}${path}`, {
     headers: { 'X-API-KEY': process.env.UNIFI_API_KEY, Accept: 'application/json' },
   });
   if (!res.ok) {
@@ -75,6 +75,86 @@ function findDeviceStatus(device) {
   if (s.includes('online') || s === 'connected' || s === 'up') return 'online';
   if (s.includes('offline') || s === 'disconnected' || s === 'down') return 'offline';
   return 'unknown';
+}
+
+// ---------------------------------------------------------------------
+// WAN speed par (Scotto, 2026-09-22): each internet line is registered
+// as kind 'unifi_wan' with an expected speed ("par", e.g. 1000 Mbps for
+// fiber, 300 for cable) and a warn percentage (default 70). Every poll
+// compares the latest measured download against par: at or above the
+// percentage is green, below it is orange, no reading / line down is
+// red. Pure, so it's testable without the API.
+// ---------------------------------------------------------------------
+const DEFAULT_WARN_PCT = 70;
+
+function wanConfig(system) {
+  const c = (system && system.config) || {};
+  return {
+    hostId: c.hostId || c.host_id || null,
+    wan: String(c.wan || 'wan1').toLowerCase(),
+    parMbps: Number(c.par_mbps) > 0 ? Number(c.par_mbps) : null,
+    warnPct: Number(c.warn_pct) > 0 ? Number(c.warn_pct) : DEFAULT_WARN_PCT,
+  };
+}
+
+function speedStatus({ downloadMbps, parMbps, warnPct = DEFAULT_WARN_PCT, up = true }) {
+  if (up === false) return { status: 'offline', pct: null };
+  if (downloadMbps == null || !Number.isFinite(Number(downloadMbps))) return { status: 'unknown', pct: null };
+  if (!parMbps) return { status: 'online', pct: null }; // no par set yet: up is up
+  const pct = Math.round((Number(downloadMbps) / parMbps) * 100);
+  return { status: pct >= warnPct ? 'online' : 'warning', pct };
+}
+
+// Pulls one number out of the several shapes Ubiquiti has used for a
+// WAN throughput field: a plain kbps number, {kbps}, {value}, {speed}.
+function kbpsOf(v) {
+  if (v == null) return null;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'object') {
+    for (const k of ['kbps', 'value', 'speed', 'avg', 'bps']) {
+      if (typeof v[k] === 'number') return k === 'bps' ? v[k] / 1000 : v[k];
+    }
+  }
+  return null;
+}
+
+// Latest WAN sample for a host from an ISP-metrics response
+// (GET https://api.ui.com/ea/isp-metrics/5m): data[] -> { hostId,
+// periods[] -> { metricTime, data: { wan: {...} } } }. Defensive about
+// where hostId sits and which WAN key is present, and returns null (not
+// a throw) when nothing matches.
+function latestWanSample(metricsResp, hostId, wanKey) {
+  const items = (metricsResp && (metricsResp.data || metricsResp)) || [];
+  const mine = (Array.isArray(items) ? items : []).filter((it) => {
+    const h = it.hostId || it.host_id || (it.host && it.host.id) || it.siteId;
+    return !hostId || !h || String(h) === String(hostId);
+  });
+  let best = null;
+  for (const it of mine) {
+    for (const period of it.periods || []) {
+      const d = period.data || {};
+      const wan = d[wanKey] || d.wan || (d.wans && (d.wans[wanKey] || d.wans[0])) || null;
+      if (!wan) continue;
+      const t = new Date(period.metricTime || period.time || 0).getTime();
+      if (!best || t > best.t) best = { t, wan, metricTime: period.metricTime || null };
+    }
+  }
+  if (!best) return null;
+  const w = best.wan;
+  const downloadKbps = kbpsOf(w.download_kbps ?? w.downloadKbps ?? w.download);
+  const uploadKbps = kbpsOf(w.upload_kbps ?? w.uploadKbps ?? w.upload);
+  const uptime = typeof w.uptime === 'number' ? w.uptime : null;
+  const downtime = typeof w.downtime === 'number' ? w.downtime : null;
+  return {
+    metricTime: best.metricTime,
+    downloadMbps: downloadKbps == null ? null : Math.round(downloadKbps / 100) / 10,
+    uploadMbps: uploadKbps == null ? null : Math.round(uploadKbps / 100) / 10,
+    latencyMs: typeof w.avgLatency === 'number' ? w.avgLatency : null,
+    packetLoss: typeof w.packetLoss === 'number' ? w.packetLoss : null,
+    // down = no uptime in the period while there was downtime, or an explicit flag
+    up: w.up === false || w.status === 'down' ? false : !(uptime === 0 && downtime > 0),
+    ispName: w.ispName || null,
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -100,6 +180,7 @@ async function listSystems(client, { locationId, category } = {}) {
     `SELECT ms.*, l.name AS location_name,
             (SELECT status FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_status,
             (SELECT checked_at FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_checked_at,
+            (SELECT detail FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_detail,
             (SELECT id FROM system_alerts sa WHERE sa.system_id = ms.id AND sa.closed_at IS NULL LIMIT 1) AS open_alert_id,
             (SELECT service_call_id FROM system_alerts sa WHERE sa.system_id = ms.id AND sa.closed_at IS NULL LIMIT 1) AS open_service_call_id,
             (SELECT expected_on FROM system_alerts sa WHERE sa.system_id = ms.id AND sa.closed_at IS NULL LIMIT 1) AS open_alert_expected_on,
@@ -210,16 +291,19 @@ async function addSystem({ locationId, category, kind, name, externalRef, config
 // owner only (enforced in the route handler), any time, not just at
 // add-time. external_ref is deliberately excluded — that's the poll-
 // matching key (the UniFi device id), not something to hand-edit here.
-async function updateSystem({ id, locationId, category, kind, name, make, model, serialNumber }) {
+async function updateSystem({ id, locationId, category, kind, name, make, model, serialNumber, config }) {
   if (!locationId || !category || !kind || !name) {
     return { ok: false, error: 'Location, category, kind, and name are all required.' };
   }
   return withServiceClient(async (svc) => {
+    // config (par_mbps, warn_pct, hostId, wan) is merged over what's there,
+    // so an edit that doesn't mention it leaves it alone.
     const { rows } = await svc.query(
       `UPDATE monitored_systems
-       SET location_id = $1, category = $2, kind = $3, name = $4, make = $5, model = $6, serial_number = $7
+       SET location_id = $1, category = $2, kind = $3, name = $4, make = $5, model = $6, serial_number = $7,
+           config = COALESCE(config, '{}'::jsonb) || COALESCE($9::jsonb, '{}'::jsonb)
        WHERE id = $8 RETURNING *`,
-      [locationId, category, kind, name, make || null, model || null, serialNumber || null, id]
+      [locationId, category, kind, name, make || null, model || null, serialNumber || null, id, config && typeof config === 'object' ? JSON.stringify(config) : null]
     );
     if (!rows[0]) return { ok: false, error: 'Not found.' };
     return { ok: true, system: rows[0] };
@@ -833,37 +917,72 @@ async function pollUnifiSystems() {
   if (!unifiConfigured()) return;
 
   const systems = await withServiceClient((svc) =>
-    svc.query(`SELECT * FROM monitored_systems WHERE active = true AND kind LIKE 'unifi_%' AND external_ref IS NOT NULL`)
+    svc.query(`SELECT * FROM monitored_systems WHERE active = true AND kind LIKE 'unifi_%'`)
       .then((r) => r.rows)
   );
   if (!systems.length) return; // nothing registered yet — deploy-safe empty state
 
-  let devicesById = new Map();
-  try {
-    const hosts = await unifiRequest('/hosts');
-    const hostList = hosts.data || hosts.hosts || hosts || [];
-    for (const host of hostList) {
-      const hostId = host.id || host.hostId;
-      if (!hostId) continue;
-      try {
-        const deviceResp = await unifiRequest(`/hosts/${hostId}/devices`);
-        const deviceList = deviceResp.data || deviceResp.devices || deviceResp || [];
-        for (const d of deviceList) devicesById.set(d.id || d.mac || d.deviceId, d);
-      } catch (err) {
-        console.error(`[monitoring] UniFi devices fetch failed for host ${hostId}`, err.message);
+  const deviceSystems = systems.filter((s) => s.kind !== 'unifi_wan' && s.external_ref);
+  const wanSystems = systems.filter((s) => s.kind === 'unifi_wan');
+
+  // ---- devices (gateways, switches, APs) ----
+  if (deviceSystems.length) {
+    const devicesById = new Map();
+    try {
+      // GET /v1/devices — data[]: { hostId, hostName, devices[]: { id, mac, name, model, ip, status, ... } }
+      const resp = await unifiRequest('/devices');
+      const groups = resp.data || resp.hosts || (Array.isArray(resp) ? resp : []);
+      for (const g of groups) {
+        const list = Array.isArray(g.devices) ? g.devices : (Array.isArray(g) ? g : [g]);
+        for (const d of list) {
+          for (const key of [d.id, d.mac, d.deviceId]) if (key) devicesById.set(String(key).toLowerCase(), d);
+        }
+      }
+    } catch (err) {
+      console.error('[monitoring] UniFi devices fetch failed', err.message);
+      devicesById.clear();
+      // whole device pass skipped, not marked offline — an API outage isn't the device being down
+    }
+    if (devicesById.size) {
+      for (const system of deviceSystems) {
+        const device = devicesById.get(String(system.external_ref).toLowerCase());
+        const status = findDeviceStatus(device);
+        await recordStatus({ systemId: system.id, status, detail: device || null }).catch((err) =>
+          console.error(`[monitoring] recordStatus failed for ${system.name}`, err)
+        );
       }
     }
-  } catch (err) {
-    console.error('[monitoring] UniFi hosts fetch failed', err.message);
-    return; // whole poll cycle skipped, not marked offline — an API outage isn't the same as the device being down
   }
 
-  for (const system of systems) {
-    const device = devicesById.get(system.external_ref);
-    const status = findDeviceStatus(device);
-    await recordStatus({ systemId: system.id, status, detail: device || null }).catch((err) =>
-      console.error(`[monitoring] recordStatus failed for ${system.name}`, err)
-    );
+  // ---- internet lines: measured speed vs. par ----
+  if (wanSystems.length) {
+    let metrics = null;
+    try {
+      const end = new Date();
+      const begin = new Date(end.getTime() - 30 * 60 * 1000);
+      metrics = await unifiRequest(`https://api.ui.com/ea/isp-metrics/5m?beginTimestamp=${encodeURIComponent(begin.toISOString())}&endTimestamp=${encodeURIComponent(end.toISOString())}`);
+    } catch (err) {
+      console.error('[monitoring] UniFi ISP metrics fetch failed', err.message);
+      return;
+    }
+    for (const system of wanSystems) {
+      const cfg = wanConfig(system);
+      const sample = latestWanSample(metrics, cfg.hostId, cfg.wan);
+      const { status, pct } = sample
+        ? speedStatus({ downloadMbps: sample.downloadMbps, parMbps: cfg.parMbps, warnPct: cfg.warnPct, up: sample.up })
+        : { status: 'unknown', pct: null };
+      const detail = {
+        download_mbps: sample ? sample.downloadMbps : null,
+        upload_mbps: sample ? sample.uploadMbps : null,
+        latency_ms: sample ? sample.latencyMs : null,
+        packet_loss: sample ? sample.packetLoss : null,
+        par_mbps: cfg.parMbps, warn_pct: cfg.warnPct, pct_of_par: pct,
+        measured_at: sample ? sample.metricTime : null,
+      };
+      await recordStatus({ systemId: system.id, status, detail }).catch((err) =>
+        console.error(`[monitoring] recordStatus failed for ${system.name}`, err)
+      );
+    }
   }
 }
 
@@ -934,6 +1053,7 @@ async function reportAvHealth({ locationId, items }) {
 }
 
 module.exports = {
+  speedStatus, wanConfig, latestWanSample, findDeviceStatus, DEFAULT_WARN_PCT,
   setSilence, setGroupSilence, isSilenced, DOWN_BEFORE_NOTIFY_MS, DAILY_ALERT_EMAIL_BUDGET,
   getAttention, agentClear, agentServiceCall, setAvHours, withinAvHours, barParts,
   runDailySummaryIfDue, sendDailySummaries, setNotifySettings, modeFor, PREF_CATEGORIES,

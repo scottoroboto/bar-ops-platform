@@ -236,6 +236,18 @@ function toggleSilenceMenu(menuId) {
   el.style.display = el.style.display === 'none' ? '' : 'none';
 }
 
+// Internet line: measured speed against its par, from the last poll.
+function speedLineHtml(s) {
+  if (s.kind !== 'unifi_wan') return '';
+  const d = s.last_detail || {};
+  const par = (s.config || {}).par_mbps || d.par_mbps;
+  const warn = (s.config || {}).warn_pct || d.warn_pct || 70;
+  if (d.download_mbps == null) return `<div class="sys-speed muted">no speed reading yet${par ? ` · par ${par} Mbps, warn below ${warn}%` : ''}</div>`;
+  const pct = d.pct_of_par != null ? d.pct_of_par : (par ? Math.round(d.download_mbps / par * 100) : null);
+  const m = statusMeta(s.last_status || 'unknown');
+  return `<div class="sys-speed"><b style="color:${m.dot}">↓ ${d.download_mbps} Mbps</b>${d.upload_mbps != null ? ` · ↑ ${d.upload_mbps}` : ''}${pct != null ? ` · <b style="color:${m.dot}">${pct}%</b> of ${par} par (warn below ${warn}%)` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''}</div>`;
+}
+
 // TVs are handled at the bar first (patch_034): say where a down TV
 // stands instead of implying an email went out.
 function avStateNoteHtml(s) {
@@ -320,6 +332,7 @@ function systemTileHtml(s) {
         <div><div class="sys-name">${escapeHtml(s.name)}</div><div class="sys-sub">${CATEGORY_LABEL[s.category] || s.category} · ${escapeHtml(s.kind)}</div></div>
       </div>
       <div class="status-row"><span class="dot" style="background:${m.dot}"></span><span class="label" style="color:${m.dot}">${m.label}</span>${s.silenced ? ' <span class="badge stale" title="' + silencedUntilText(s) + '">silenced</span>' : ''}</div>
+      ${speedLineHtml(s)}
       <div class="sys-checked">checked ${relTime(s.last_checked_at)} · history ▾</div>
       ${avStateNoteHtml(s)}
     </div>
@@ -436,12 +449,21 @@ function renderAdd() {
       <label for="asKind">Kind</label>
       <input id="asKind" list="kindOptions" placeholder="e.g. unifi_switch, unifi_ap, unifi_gateway">
       <datalist id="kindOptions">
-        <option value="unifi_switch"><option value="unifi_ap"><option value="unifi_gateway">
+        <option value="unifi_wan"><option value="unifi_gateway"><option value="unifi_switch"><option value="unifi_ap">
       </datalist>
+      <p class="muted" style="font-size:12px; margin:-6px 0 8px;">Kinds: <b>unifi_wan</b> = an internet line (fiber or cable) checked against its expected speed; <b>unifi_gateway</b> = the UDM Pro; <b>unifi_switch</b>; <b>unifi_ap</b> = a WAP.</p>
       <label for="asName">Name</label>
       <input id="asName" placeholder="e.g. Zone 2 Switch">
-      <label for="asExternalRef">External ID <span class="muted">(optional — the UniFi device ID, for network kinds)</span></label>
+      <label for="asExternalRef">External ID <span class="muted">(optional — the UniFi device ID or MAC, for network kinds)</span></label>
       <input id="asExternalRef" placeholder="Leave blank until you have it">
+      <div id="asWanFields" style="display:none;">
+        <label for="asWan">Which line on the UDM</label>
+        <select id="asWan"><option value="wan1">WAN 1 (fiber)</option><option value="wan2">WAN 2 (cable)</option></select>
+        <label for="asPar">Expected speed, Mbps <span class="muted">("par" — 1000 for fiber, 300 for cable)</span></label>
+        <input id="asPar" type="number" min="1" placeholder="1000">
+        <label for="asWarnPct">Warn when below <span class="muted">(% of par)</span></label>
+        <input id="asWarnPct" type="number" min="1" max="100" value="70">
+      </div>
       <label for="asMake">Make <span class="muted">(optional)</span></label>
       <input id="asMake" placeholder="e.g. Ubiquiti">
       <label for="asModel">Model <span class="muted">(optional)</span></label>
@@ -460,6 +482,9 @@ function renderAdd() {
       <div id="manageList"><p class="muted">Loading…</p></div>
     </div>`;
   fillLocationSelect(document.getElementById('asLocation'), myLocationIds(ME)[0]);
+  const kindEl = document.getElementById('asKind');
+  const syncWan = () => { document.getElementById('asWanFields').style.display = kindEl.value.trim() === 'unifi_wan' ? '' : 'none'; };
+  kindEl.addEventListener('input', syncWan); kindEl.addEventListener('change', syncWan);
   renderAvHours();
   loadManageList();
 }
@@ -563,6 +588,13 @@ function editSystemRow(id) {
     <input id="es-model-${id}" value="${escapeHtml(s.model || '')}">
     <label>Serial</label>
     <input id="es-serial-${id}" value="${escapeHtml(s.serial_number || '')}">
+    ${s.kind === 'unifi_wan' ? `
+    <label>Which line on the UDM</label>
+    <select id="es-wan-${id}"><option value="wan1" ${(s.config || {}).wan !== 'wan2' ? 'selected' : ''}>WAN 1 (fiber)</option><option value="wan2" ${(s.config || {}).wan === 'wan2' ? 'selected' : ''}>WAN 2 (cable)</option></select>
+    <label>Expected speed, Mbps (par)</label>
+    <input id="es-par-${id}" type="number" min="1" value="${(s.config || {}).par_mbps || ''}">
+    <label>Warn when below (% of par)</label>
+    <input id="es-warn-${id}" type="number" min="1" max="100" value="${(s.config || {}).warn_pct || 70}">` : ''}
     <div class="stack-actions">
       <button class="ghost" onclick="editSystemRow('${id}')">Cancel</button>
       <button class="primary" style="margin-top:0;" onclick="submitEditSystem('${id}')">Save</button>
@@ -580,9 +612,13 @@ async function submitEditSystem(id) {
   const model = document.getElementById(`es-model-${id}`).value.trim();
   const serialNumber = document.getElementById(`es-serial-${id}`).value.trim();
   if (!kind || !name) { showMsg('Kind and name are both required.', 'error'); return; }
+  let config;
+  if (document.getElementById(`es-par-${id}`)) {
+    config = { wan: document.getElementById(`es-wan-${id}`).value, par_mbps: Number(document.getElementById(`es-par-${id}`).value) || null, warn_pct: Number(document.getElementById(`es-warn-${id}`).value) || 70 };
+  }
   try {
     const result = await withStepUp(() => api(`/api/monitoring/systems/${id}/update`, {
-      method: 'POST', body: { locationId, category, kind, name, make: make || null, model: model || null, serialNumber: serialNumber || null },
+      method: 'POST', body: { locationId, category, kind, name, make: make || null, model: model || null, serialNumber: serialNumber || null, config },
     }));
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     showMsg('Saved.', 'success');
@@ -602,9 +638,17 @@ async function submitAddSystem() {
   const model = document.getElementById('asModel').value.trim();
   const serialNumber = document.getElementById('asSerial').value.trim();
   if (!kind || !name) { showMsg('Kind and name are both required.', 'error'); return; }
+  const config = {};
+  if (kind === 'unifi_wan') {
+    config.wan = document.getElementById('asWan').value;
+    config.par_mbps = Number(document.getElementById('asPar').value) || null;
+    config.warn_pct = Number(document.getElementById('asWarnPct').value) || 70;
+    if (externalRef) config.hostId = externalRef; // for a line, External ID = the UDM's host id
+    if (!config.par_mbps) { showMsg('Enter the expected speed for this line.', 'error'); return; }
+  }
   try {
     const result = await withStepUp(() => api('/api/monitoring/systems', {
-      method: 'POST', body: { locationId, category, kind, name, externalRef: externalRef || null, config: {}, make: make || null, model: model || null, serialNumber: serialNumber || null },
+      method: 'POST', body: { locationId, category, kind, name, externalRef: externalRef || null, config, make: make || null, model: model || null, serialNumber: serialNumber || null },
     }));
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     showMsg('Added.', 'success');
