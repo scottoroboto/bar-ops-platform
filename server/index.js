@@ -2202,14 +2202,11 @@ res.json(result);
 
 app.post('/api/employees/:id/app-access', auth.requireSession('full'), async (req, res) => {
 // patch_036: 'until: shift' is a timed grant — on now, off by itself
-// after the TV pass length. A manager may hand out a timed TVs grant to
-// someone at one of their bars (covering when the manager isn't there);
-// everything else stays owner-only.
+// after the TV pass length. Owner only, like every other app switch
+// (Scotto, 2026-09-22: "I should be the only one who can authorize" —
+// the bar has the remotes and the TVs' own apps as failovers).
 const timed = req.body.until === 'shift';
-if (req.person.role !== 'owner') {
-const allowed = req.person.role === 'manager' && timed && req.body.appKey === 'tv_staff' && await canManagePerson(req.person, req.params.id);
-if (!allowed) return res.status(403).json({ error: 'Only the owner can change app access.' });
-}
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change app access.' });
 let expiresAt = null;
 if (timed) expiresAt = tvpass.expiryFor(await tvpass.getPassLength());
 const result = await employees.setAppAccess({ personId: req.params.id, appKey: req.body.appKey, enabled: timed ? true : req.body.enabled, expiresAt, updatedBy: req.person.id });

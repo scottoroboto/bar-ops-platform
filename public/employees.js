@@ -380,7 +380,7 @@ function empRowHtml(p) {
   if (ME.role === 'owner') {
     rightHtml = `<div class="emp-toggles">${empToggleDefs(p).map(t => empToggleHtml(p, t)).join('')}${tvShiftButtonHtml(p, true)}${empStatusToggleHtml(p)}</div>`;
   } else if (ME.role === 'manager') {
-    rightHtml = `<div class="emp-toggles">${tvShiftButtonHtml(p)}<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button></div>`;
+    rightHtml = `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button>`;
   }
   return `
     <div class="emp-row" onclick="openEmployeeDetail('${p.id}')">
