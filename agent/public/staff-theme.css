@@ -229,6 +229,14 @@ body.staff {
 .staff .failure-banner .text { color: #FFD9D2; font-size: 13.5px; }
 .staff .failure-banner .actions { display: flex; gap: 8px; }
 
+/* TV Remote press feedback: the pressed power button pulses and both lock until the
+   command comes back; the status line under them says what happened per TV. */
+.staff .remote-grid button.busy { animation: remote-pulse 1s ease-in-out infinite; }
+.staff .remote-grid button:disabled { opacity: 0.55; cursor: default; }
+@keyframes remote-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0.35); } 50% { box-shadow: 0 0 0 6px rgba(255,255,255,0); } }
+.staff .remote-status { min-height: 18px; margin: 6px 0 2px; font-size: 13px; color: var(--muted-strong); text-align: center; }
+.staff .remote-status.working { color: #FFD9A6; }
+
 /* "Check this TV" pop-up (cloud patch_034) -- sits above the two columns so it's
    the first thing on the page while a TV is flagged; gone as soon as it isn't. */
 .staff .attention-card { margin: 12px 0 0; border: 2px solid var(--off-fg, #E5566D); background: var(--off-bg, #3a1a20); }

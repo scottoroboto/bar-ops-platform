@@ -260,6 +260,9 @@ let SELECTED_TV_IDS = new Set();
 let collapsedZones = new Set();
 let TV_REMOTE_OPEN = false;
 let REMOTE_TARGETS = new Set();
+let REMOTE_BUSY = null;   // 'on' | 'off' while a power command is in flight (Scotto: a press needs visible feedback)
+let REMOTE_NOTE = '';     // one-line result/progress under the buttons
+let remoteNoteTimer = null;
 let remoteKeyBuffer = [];
 let remoteKeyBufferDisplay = '';
 let remoteIdleTimer = null;
@@ -766,9 +769,10 @@ function tvRemotePanelHtml() {
       </div>
       <hr>
       <div class="remote-grid cols-2">
-        <button class="on" onclick="remoteTvPower('on')">${ICON_POWER}<span>POWER ON</span></button>
-        <button class="off" onclick="remoteTvPower('off')">${ICON_POWER}<span>POWER OFF</span></button>
+        <button class="on ${REMOTE_BUSY === 'on' ? 'busy' : ''}" ${REMOTE_BUSY ? 'disabled' : ''} onclick="remoteTvPower('on')">${ICON_POWER}<span>${REMOTE_BUSY === 'on' ? 'TURNING ON…' : 'POWER ON'}</span></button>
+        <button class="off ${REMOTE_BUSY === 'off' ? 'busy' : ''}" ${REMOTE_BUSY ? 'disabled' : ''} onclick="remoteTvPower('off')">${ICON_POWER}<span>${REMOTE_BUSY === 'off' ? 'TURNING OFF…' : 'POWER OFF'}</span></button>
       </div>
+      <div class="remote-status ${REMOTE_BUSY ? 'working' : ''}" id="remoteStatus">${escapeHtml(REMOTE_NOTE)}</div>
       <div class="remote-grid cols-4">
         <button class="small" onclick="remoteTvVolume('up')">${ICON_VOL_UP}<span>VOL UP</span></button>
         <button class="small" onclick="remoteTvVolume('down')">${ICON_VOL_DOWN}<span>VOL DOWN</span></button>
@@ -794,28 +798,63 @@ function tvRemotePanelHtml() {
 async function bulkKeyToTargets(keys) {
   resetRemoteIdleTimer();
   if (!REMOTE_TARGETS.size) { alert('Tap at least one TV first.'); return; }
+  const n = REMOTE_TARGETS.size;
+  setRemoteNote(`Sending to ${n} TV${n === 1 ? '' : 's'}…`);
   try {
     await api('/api/tvs/bulk/key', { method: 'POST', body: JSON.stringify({ tv_ids: Array.from(REMOTE_TARGETS), keys }) });
-  } catch (e) { alert(e.message); }
+    setRemoteNote('Sent.', 2500);
+  } catch (e) { setRemoteNote(`Couldn't send: ${e.message}`, 8000); }
 }
 
 function remoteTvKey(key) { bulkKeyToTargets([key]); }
 
+// Feedback for every remote press. A power command can take up to 30s
+// per sleeping TV (the wake loop in the agent), and with nothing on
+// screen that just looked like a dead button — so the pressed button
+// shows "TURNING ON…", both power buttons lock until it's done, and the
+// line under them says what happened per TV.
+function setRemoteNote(text, ttlMs) {
+  REMOTE_NOTE = text || '';
+  const el = document.getElementById('remoteStatus');
+  if (el) { el.textContent = REMOTE_NOTE; el.classList.toggle('working', !!REMOTE_BUSY); }
+  if (remoteNoteTimer) clearTimeout(remoteNoteTimer);
+  if (ttlMs) remoteNoteTimer = setTimeout(() => { REMOTE_NOTE = ''; const e = document.getElementById('remoteStatus'); if (e) e.textContent = ''; }, ttlMs);
+}
+function targetName(id) { const t = TVS.find((x) => Number(x.id) === Number(id)); return t ? (t.tag || t.name) : `TV ${id}`; }
+
 async function remoteTvPower(state) {
   resetRemoteIdleTimer();
   if (!REMOTE_TARGETS.size) { alert('Tap at least one TV first.'); return; }
+  if (REMOTE_BUSY) return;
+  const ids = Array.from(REMOTE_TARGETS);
+  REMOTE_BUSY = state;
+  renderSourceColumn();
+  setRemoteNote(`Sending POWER ${state.toUpperCase()} to ${ids.length} TV${ids.length === 1 ? '' : 's'}… a sleeping TV can take up to 30 seconds.`);
   try {
-    await api('/api/tvs/bulk/power', { method: 'POST', body: JSON.stringify({ state, tv_ids: Array.from(REMOTE_TARGETS) }) });
+    const { results } = await api('/api/tvs/bulk/power', { method: 'POST', body: JSON.stringify({ state, tv_ids: ids }) });
+    const ok = (results || []).filter((r) => r.ok);
+    const failed = (results || []).filter((r) => !r.ok);
+    REMOTE_BUSY = null;
+    renderSourceColumn();
+    if (!failed.length) setRemoteNote(`${ok.length} of ${ids.length} confirmed ${state.toUpperCase()}.`, 8000);
+    else setRemoteNote(`${ok.length} of ${ids.length} confirmed. Didn't respond: ${failed.map((r) => r.name || targetName(r.target_id ?? r.id)).join(', ')}.`, 12000);
     await refreshAll();
-  } catch (e) { alert(e.message); }
+  } catch (e) {
+    REMOTE_BUSY = null;
+    renderSourceColumn();
+    setRemoteNote(`Couldn't send: ${e.message}`, 12000);
+  }
 }
 
 async function remoteTvVolume(op) {
   resetRemoteIdleTimer();
   if (!REMOTE_TARGETS.size) { alert('Tap at least one TV first.'); return; }
+  const n = REMOTE_TARGETS.size;
+  setRemoteNote(`Sending ${op.toUpperCase()} to ${n} TV${n === 1 ? '' : 's'}…`);
   try {
     await api('/api/tvs/bulk/volume', { method: 'POST', body: JSON.stringify({ op, tv_ids: Array.from(REMOTE_TARGETS) }) });
-  } catch (e) { alert(e.message); }
+    setRemoteNote(`${op.toUpperCase()} sent.`, 3000);
+  } catch (e) { setRemoteNote(`Couldn't send: ${e.message}`, 8000); }
 }
 
 function remoteTvKeypad(ch) {
