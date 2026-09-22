@@ -257,5 +257,5 @@ next();
 }
 
 module.exports = {
-loginWithPassword, verifyFirstLoginCode, loginWithPin, stepUp, setPin, setPassword, requireSession, publicPerson,
+loginWithPassword, verifyFirstLoginCode, loginWithPin, stepUp, setPin, setPassword, requireSession, publicPerson, firstLoginCodeEnabled,
 };

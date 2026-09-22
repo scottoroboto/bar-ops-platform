@@ -237,7 +237,11 @@ async function employeesReviewCount(person) {
   if (person.role === 'owner') {
     tiles.push(tileHtml({ icon: ICONS.venue_control, label: 'TV Admin', href: '/venue-control.html' }));
   }
-  if (person.role === 'owner' || person.role === 'manager' || trustedDevice) {
+  // patch_035: TV Staff is an app toggle now (Scotto, 2026-09-22 — "only
+  // the location's iPad and maybe a manager"). Owner always, the trusted
+  // iPad always, anyone else only with 'tv_staff' switched on for them.
+  const tvStaffEntry = access.find(a => a.app_key === 'tv_staff');
+  if (person.role === 'owner' || trustedDevice || (tvStaffEntry && tvStaffEntry.enabled)) {
     tiles.push(tileHtml({ icon: ICONS.venue_control, label: 'TV Staff', href: '/tv-staff.html' }));
   }
 

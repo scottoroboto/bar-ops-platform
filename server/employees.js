@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { withServiceClient, locationIdsOf } = require('./db');
 const notify = require('./notify');
+const auth = require('./auth');
 const storage = require('./storage');
 
 // NOTE: 'monitoring' was added to employee_apps' app_key CHECK constraint
@@ -19,7 +20,7 @@ const storage = require('./storage');
 // actually enforces the "only managers" half; it's tracked the same way
 // as the other four but does not yet gate access to this app the way the
 // other four gate their own (see setAppAccess/activateEmployee).
-const APP_KEYS = ['time_clock', 'service_calls', 'scheduling', 'monitoring', 'employees', 'cash_handling', 'inventory_control'];
+const APP_KEYS = ['time_clock', 'service_calls', 'scheduling', 'monitoring', 'employees', 'cash_handling', 'inventory_control', 'tv_staff'];
 const MANAGER_ONLY_APP_KEYS = ['employees'];
 
 function slugUsername(name) {
@@ -52,7 +53,7 @@ function welcomeEmailText({ username, tempPassword, pin, enabledApps }) {
     `Temporary password: ${tempPassword}\n` +
     `Your PIN for everyday clock-in/service-call use: ${pin}\n\n` +
     `The first time you sign in, use your username and temporary password. ` +
-    `We'll email a 6-digit code to this address to confirm it's you — enter that and you're in. ` +
+    (auth.firstLoginCodeEnabled() ? `We'll email a 6-digit code to this address to confirm it's you — enter that and you're in. ` : '') +
     `After that, your PIN is all you need day to day.\n\n` +
     `You now have access to: ${enabledApps.join(', ') || '(nothing yet — ask your manager)'}`;
 }

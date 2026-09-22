@@ -415,17 +415,25 @@ same_network: (r.agent_public_ip && myPublicIp) ? r.agent_public_ip === myPublic
 // Port is the agent's default 8088 -- it isn't reported on heartbeat yet,
 // so a box running on a different PORT would need this extended.
 app.get('/api/venue-control/staff-links', auth.requireSession('light'), async (req, res) => {
+// Who gets links (patch_035): the owner (every bar); anyone with the
+// 'tv_staff' app switched on (their bars); the bar's trusted iPad (that
+// bar), whoever is signed in on it. A manager with the switch off gets
+// nothing — the switch decides, not the role.
 let locationIds = null; // null = all
 if (req.person.role === 'owner') {
 locationIds = null;
-} else if (req.person.role === 'manager' && locationIdsOf(req.person).length) {
-locationIds = locationIdsOf(req.person);
 } else {
+const { rows: appRows } = await withServiceClient((client) => client.query(
+`SELECT 1 FROM employee_apps WHERE person_id = $1 AND app_key = 'tv_staff' AND enabled = true`, [req.person.id]
+));
+const mine = appRows[0] ? locationIdsOf(req.person) : [];
 const token = req.query.deviceToken;
-if (!token) return res.json([]);
+if (token) {
 const { rows } = await withServiceClient((client) => client.query('SELECT location_id FROM devices WHERE device_token = $1', [token]));
-if (!rows[0]) return res.json([]);
-locationIds = [rows[0].location_id];
+if (rows[0] && !mine.includes(rows[0].location_id)) mine.push(rows[0].location_id);
+}
+if (!mine.length) return res.json([]);
+locationIds = mine;
 }
 const params = [];
 let where = 'vs.enabled = true AND l.active = true';

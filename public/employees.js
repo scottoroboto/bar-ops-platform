@@ -16,6 +16,7 @@ const ICONS = {
   pin: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>',
   cash: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 9v0M18 15v0"/></svg>',
   inventory: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="11" rx="1.5"/><path d="M4 9l8-4 8 4"/><path d="M12 9v3"/></svg>',
+  tv: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M8 21h8M12 18v3M8 2l4 4 4-4"/></svg>',
 };
 
 // The roster row's app-access toggles, in the order the redesign settled
@@ -28,6 +29,7 @@ const TOGGLE_DEFS = [
   { key: 'monitoring', label: 'Monitor', icon: ICONS.monitor },
   { key: 'cash_handling', label: 'Cash', icon: ICONS.cash },
   { key: 'inventory_control', label: 'Inv', icon: ICONS.inventory },
+  { key: 'tv_staff', label: 'TVs', icon: ICONS.tv },
 ];
 const EMPLOYEES_TOGGLE_DEF = { key: 'employees', label: 'Emp', icon: ICONS.people };
 
@@ -544,6 +546,7 @@ function openActivateModal(id, name) {
   document.getElementById('accessTimeClock').checked = true;
   document.getElementById('accessCashHandling').checked = false;
   document.getElementById('accessInventory').checked = false;
+  document.getElementById('accessTvStaff').checked = false;
   document.getElementById('accessServiceCalls').checked = false;
   document.getElementById('accessScheduling').checked = false;
   document.getElementById('accessMonitoring').checked = false;
@@ -563,6 +566,7 @@ async function submitActivate() {
     service_calls: document.getElementById('accessServiceCalls').checked,
     cash_handling: document.getElementById('accessCashHandling').checked,
     inventory_control: document.getElementById('accessInventory').checked,
+    tv_staff: document.getElementById('accessTvStaff').checked,
     scheduling: document.getElementById('accessScheduling').checked,
     monitoring: document.getElementById('accessMonitoring').checked,
   };
