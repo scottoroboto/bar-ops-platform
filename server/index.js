@@ -271,6 +271,21 @@ res.json({ person: req.person, appAccess: access, cashHandlingTier, inventoryTie
 // active location regardless of network_status_access; see
 // db/patch_029_critical_systems_widget.sql). Returns [] (widget hides)
 // for anyone with nothing turned on.
+// Apps Home network board (Scotto's mockup) — same audience rule as the
+// older critical-systems widget below: the owner sees every bar, anyone
+// else the bars they've been granted in network_status_access.
+app.get('/api/dashboard/network', auth.requireSession('light'), async (req, res) => {
+let locationIds;
+if (req.person.role === 'owner') {
+  const { rows: locs } = await pool.query('SELECT id FROM locations WHERE active = true');
+  locationIds = locs.map(l => l.id);
+} else {
+  const access = await employees.getNetworkAccessForPerson(req.person.id);
+  locationIds = access.filter(a => a.enabled).map(a => a.location_id);
+}
+res.json(await withServiceClient((client) => monitoring.getNetworkBoard(client, locationIds)));
+});
+
 app.get('/api/dashboard/critical-systems', auth.requireSession('light'), async (req, res) => {
 let locationIds;
 if (req.person.role === 'owner') {

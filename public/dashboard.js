@@ -51,26 +51,40 @@ function tileHtml({ href, icon, label, note, count, disabled, external }) {
 // rest of the grid — badges are a nice-to-have, not load-bearing.
 // T1/T2/T3, matching employees.js's own shortLoc() convention for the
 // same "Ticket N" location names.
-function critsysDotHtml(label, status) {
-  return `<span class="critsys-group"><span class="critsys-dot ${status}"></span><span class="critsys-label">${label}</span></span>`;
+// Network board (Scotto's mockup, 2026-09-22): one row per bar. A big
+// T1/T2/T3 tile colored by the bar's overall state, with the line's
+// current down/up speed, then a chip per registered network device in
+// its own color. Colors: green good, orange trouble but working, red
+// bad, grey nothing reported.
+function chipLabel(name) {
+  // "SW48 PoE" -> two short lines like the mockup; long names wrap on
+  // their own, this just gives the common ones a tidy split.
+  return escapeHtml(String(name || '').toUpperCase());
 }
-
-function critsysRowHtml(r) {
-  return `<div class="critsys-row">
-    <span class="critsys-code">${escapeHtml(shortLoc(r.locationName))}</span>
-    <span class="critsys-groups">${critsysDotHtml('WAN', r.wan)}${critsysDotHtml('LAN', r.lan)}${critsysDotHtml('WAP', r.wap)}</span>
+function netRowHtml(r) {
+  const spd = r.speed
+    ? `<div class="spd"><span class="k">DOWN Mbps</span><span class="v">${Number(r.speed.down).toFixed(1)}</span></div>
+       <div class="spd"><span class="k">UP Mbps</span><span class="v">${r.speed.up != null ? Number(r.speed.up).toFixed(1) : '—'}</span></div>
+       ${r.speed.stale ? '<div class="spd-note">last test over a day ago</div>' : ''}`
+    : `<div class="spd-note">${r.devices.length ? 'no speed test yet' : 'nothing registered'}</div>`;
+  const chips = r.devices.map(d => `<span class="net-chip ${d.status}" title="${escapeHtml(d.name)}: ${d.status === 'online' ? 'good' : d.status === 'warning' ? 'trouble but working' : d.status === 'offline' ? 'down' : (r.cascade && d.kind !== 'unifi_gateway') ? 'unknown — the UDM is down' : 'nothing reported'}${d.silenced ? ' (silenced)' : ''}">${chipLabel(d.name)}</span>`).join('');
+  return `<div class="net-row">
+    <a class="net-tile ${r.status}" href="/monitoring.html" title="${escapeHtml(r.locationName)} — open Systems Monitoring">
+      <span class="code">${escapeHtml(shortLoc(r.locationName))}</span>
+      <span class="speeds">${spd}</span>
+    </a>
+    <div class="net-chips">${chips || '<span class="muted" style="font-size:12px;">Register this bar\'s gear under Systems Monitoring → Add / Manage.</span>'}</div>
   </div>`;
 }
 
 // Fire-and-forget from init() — a slow/failed fetch here shouldn't hold up
-// the app-tile grid; an empty result (nothing granted, see
-// server/monitoring.js's getCriticalSystemsStatus) just leaves the widget
-// out entirely rather than showing an empty card.
+// the app-tile grid; an empty result (nothing granted) just leaves the
+// board out entirely rather than showing an empty card.
 async function loadCriticalSystems() {
   const el = document.getElementById('criticalSystemsWidget');
   try {
-    const rows = await api('/api/dashboard/critical-systems');
-    el.innerHTML = rows.length ? `<div class="critsys-widget">${rows.map(critsysRowHtml).join('')}</div>` : '';
+    const rows = await api('/api/dashboard/network');
+    el.innerHTML = rows.length ? `<div class="netboard">${rows.map(netRowHtml).join('')}</div>` : '';
   } catch (e) {
     el.innerHTML = '';
   }

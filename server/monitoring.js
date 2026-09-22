@@ -248,6 +248,72 @@ async function getCriticalSystemsStatus(client, locationIds) {
   }));
 }
 
+// ---------------------------------------------------------------------
+// Network board for Apps Home (Scotto's mockup, 2026-09-22): one row per
+// bar — a big T1/T2/T3 tile colored by the bar's overall state with the
+// line's current down/up speed, then one chip per registered network
+// device, each colored by its own state.
+//
+// Colors (the matrix he approved):
+//   device: online -> green, warning -> orange, offline -> red,
+//           nothing reported / not monitored -> grey.
+//   bar:    red    if a core device is red (the line, the UDM, any
+//                  switch) or every device is red;
+//           orange if anything is orange, or a non-core device (WAP,
+//                  Meraki, cell) is red;
+//           green  if everything that reports is green;
+//           grey   if nothing reports at all.
+//   cascade: when the UDM itself is red the devices behind it can't be
+//            seen, so they show grey rather than a wall of red.
+// Speed comes from the bar's unifi_wan line (the active line UniFi
+// reports); older than 26 hours = stale (the UDM's speed test runs daily).
+// ---------------------------------------------------------------------
+const CORE_KINDS = new Set(['unifi_gateway', 'unifi_switch', 'unifi_wan']);
+
+function barStatusFrom(devices) {
+  const reporting = devices.filter((d) => d.status !== 'unknown');
+  if (!reporting.length) return 'unknown';
+  const coreRed = reporting.some((d) => d.status === 'offline' && CORE_KINDS.has(d.kind));
+  if (coreRed || reporting.every((d) => d.status === 'offline')) return 'offline';
+  if (reporting.some((d) => d.status === 'warning' || d.status === 'offline')) return 'warning';
+  return 'online';
+}
+
+async function getNetworkBoard(client, locationIds) {
+  if (!locationIds || locationIds.length === 0) return [];
+  const { rows: locs } = await client.query('SELECT id, name FROM locations WHERE id = ANY($1::uuid[]) AND active = true ORDER BY name', [locationIds]);
+  const { rows } = await client.query(
+    `SELECT ms.id, ms.location_id, ms.name, ms.kind, ms.sort_order, ms.config,
+            (ms.silenced_until IS NOT NULL AND ms.silenced_until > now()) AS silenced,
+            ss.status AS last_status, ss.checked_at AS last_checked_at, ss.detail AS last_detail
+     FROM monitored_systems ms
+     LEFT JOIN LATERAL (SELECT status, checked_at, detail FROM system_status s WHERE s.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) ss ON true
+     WHERE ms.active = true AND ms.category = 'network' AND ms.location_id = ANY($1::uuid[])
+     ORDER BY ms.sort_order, ms.name`,
+    [locationIds]
+  );
+  const STALE_MS = 26 * 3600 * 1000;
+  return locs.map((l) => {
+    const mine = rows.filter((r) => String(r.location_id) === String(l.id));
+    const gatewayDown = mine.some((r) => r.kind === 'unifi_gateway' && r.last_status === 'offline');
+    const devices = mine.map((r) => {
+      let status = ['online', 'warning', 'offline'].includes(r.last_status) ? r.last_status : 'unknown';
+      // A reading that hasn't refreshed in 15 minutes is no longer a fact.
+      if (status !== 'unknown' && r.last_checked_at && Date.now() - new Date(r.last_checked_at).getTime() > 15 * 60 * 1000) status = 'unknown';
+      if (gatewayDown && r.kind !== 'unifi_gateway') status = 'unknown';
+      return { id: r.id, name: r.name, kind: r.kind, status, silenced: r.silenced };
+    });
+    const line = mine.find((r) => r.kind === 'unifi_wan' && r.last_detail && r.last_detail.download_mbps != null);
+    const d = line ? line.last_detail : null;
+    const speed = d && Number(d.download_mbps) > 0 ? {
+      down: d.download_mbps, up: d.upload_mbps, pct: d.pct_of_par, par: d.par_mbps,
+      at: d.measured_at || null,
+      stale: !d.measured_at || Date.now() - new Date(d.measured_at).getTime() > STALE_MS,
+    } : null;
+    return { locationId: l.id, locationName: l.name, status: barStatusFrom(devices), cascade: gatewayDown, speed, devices };
+  });
+}
+
 // Manual reorder within a location — "move up/below one" per Scotto.
 // Swaps sort_order with whichever active sibling in the same location sits
 // immediately above/below in the current order; a no-op at either end of
@@ -1152,6 +1218,7 @@ async function reportAvHealth({ locationId, items }) {
 }
 
 module.exports = {
+  getNetworkBoard, barStatusFrom,
   unifiProbe, logUnifiProbe, unifiConfigured,
   speedStatus, wanConfig, latestWanSample, findDeviceStatus, DEFAULT_WARN_PCT,
   setSilence, setGroupSilence, isSilenced, DOWN_BEFORE_NOTIFY_MS, DAILY_ALERT_EMAIL_BUDGET,

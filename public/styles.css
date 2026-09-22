@@ -170,6 +170,30 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
    dashboard.js's loadCriticalSystems() / server/monitoring.js's
    getCriticalSystemsStatus). Narrower than the app-tile grid below it
    and centered, per Scotto's own sizing passes. */
+/* Network board on Apps Home (Scotto's mockup): a colored bar tile with
+   the line speed, then one chip per network device. Sized to sit above the
+   app tiles on a phone without scrolling. */
+.netboard { display: flex; flex-direction: column; gap: 8px; margin: 10px auto 18px; width: min(100%, 860px); }
+.net-row { display: flex; gap: 8px; align-items: stretch; background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 6px; }
+.net-tile { display: flex; align-items: center; gap: 8px; min-width: 128px; padding: 6px 8px; border-radius: 9px; color: #fff; text-decoration: none; flex-shrink: 0; }
+.net-tile .code { font-size: 26px; font-weight: 900; font-style: italic; letter-spacing: -0.02em; text-shadow: 0 1px 0 rgba(0,0,0,0.35); }
+.net-tile .speeds { display: flex; flex-direction: column; gap: 1px; line-height: 1.1; }
+.net-tile .spd { display: flex; flex-direction: column; }
+.net-tile .spd .k { font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; opacity: 0.85; }
+.net-tile .spd .v { font-size: 16px; font-weight: 800; }
+.net-tile .spd-note { font-size: 9.5px; font-weight: 600; opacity: 0.9; max-width: 92px; }
+.net-tile.online { background: #22a559; }
+.net-tile.warning { background: #d98a1e; }
+.net-tile.offline { background: #d8323f; }
+.net-tile.unknown { background: #4b5261; }
+.net-chips { display: flex; flex-wrap: wrap; gap: 5px; align-content: flex-start; align-items: flex-start; flex: 1; min-width: 0; }
+.net-chip { display: inline-flex; align-items: center; justify-content: center; text-align: center; min-width: 44px; max-width: 74px; padding: 4px 5px; border-radius: 6px; border: 2px solid; font-size: 9px; font-weight: 800; line-height: 1.1; letter-spacing: 0.02em; background: #0c0e13; white-space: normal; }
+.net-chip.online { border-color: var(--success); color: #8fe5b7; }
+.net-chip.warning { border-color: var(--warn); color: #f0c265; }
+.net-chip.offline { border-color: var(--danger); color: #ff8a9a; }
+.net-chip.unknown { border-color: #4b5261; color: var(--muted); }
+@media (max-width: 640px) { .netboard { width: 100%; } .net-tile { min-width: 118px; } }
+
 .critsys-widget { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 4px 14px; margin: 12px auto 20px; width: 64%; }
 .critsys-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--card-border); gap: 10px; }
 .critsys-row:first-child { border-top: none; }
