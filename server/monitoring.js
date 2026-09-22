@@ -15,6 +15,31 @@
 // it's being activated again; all three locations are in scope.
 const { withServiceClient } = require('./db');
 const notify = require('./notify');
+const servicecalls = require('./servicecalls');
+
+const BUSINESS_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
+
+// Wall-clock parts in the bar's own timezone (never the server's UTC).
+function barParts(date = new Date()) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: BUSINESS_TZ, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+  const parts = {};
+  dtf.formatToParts(date).forEach((p) => { if (p.type !== 'literal') parts[p.type] = p.value; });
+  return { ymd: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour), minute: Number(parts.minute), hhmm: `${parts.hour}:${parts.minute}` };
+}
+
+// Are TVs expected on at this bar right now? av_hours_start/end are
+// 'HH:MM[:SS]'; end before start means the window crosses midnight
+// (the default 10:00 -> 02:00). Equal = always.
+function withinAvHours(location, date = new Date()) {
+  const start = String(location.av_hours_start || '10:00').slice(0, 5);
+  const end = String(location.av_hours_end || '02:00').slice(0, 5);
+  if (start === end) return true;
+  const now = barParts(date).hhmm;
+  return start < end ? (now >= start && now < end) : (now >= start || now < end);
+}
 
 const UNIFI_API_BASE = 'https://api.ui.com/v1';
 
@@ -76,6 +101,8 @@ async function listSystems(client, { locationId, category } = {}) {
             (SELECT status FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_status,
             (SELECT checked_at FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_checked_at,
             (SELECT id FROM system_alerts sa WHERE sa.system_id = ms.id AND sa.closed_at IS NULL LIMIT 1) AS open_alert_id,
+            (SELECT service_call_id FROM system_alerts sa WHERE sa.system_id = ms.id AND sa.closed_at IS NULL LIMIT 1) AS open_service_call_id,
+            (SELECT expected_on FROM system_alerts sa WHERE sa.system_id = ms.id AND sa.closed_at IS NULL LIMIT 1) AS open_alert_expected_on,
             (ms.silenced_until IS NOT NULL AND ms.silenced_until > now()) AS silenced,
             (SELECT name FROM people WHERE id = ms.silenced_by) AS silenced_by_name
      FROM monitored_systems ms JOIN locations l ON l.id = ms.location_id
@@ -239,23 +266,30 @@ async function listAlerts(client, { locationId, openOnly } = {}) {
 }
 
 // ---------------------------------------------------------------------
-// Recording a poll result. An alert row opens on the first bad poll (the
-// dashboard goes red right away) and closes on recovery — but who gets
-// TOLD, and when, is damped (patch_032, Scotto 2026-09-21):
+// Recording a poll result (redesigned 2026-09-22, patch_034). An alert
+// row opens on the first bad poll (the dashboard goes red right away)
+// and closes on recovery. Who is TOLD:
 //
-//   * nothing is sent until it has stayed bad for DOWN_BEFORE_NOTIFY_MS;
-//     a blip that recovers sooner opens and closes with no notification;
-//   * while it stays bad, one reminder every REALERT_INTERVAL_MS;
-//   * "back up" goes out only if someone was told it was down;
-//   * a silenced system (monitored_systems.silenced_until in the future)
-//     gets none of the above — it's still tracked and still red, just
-//     quiet. Silence applied mid-outage also stops the reminders.
+//   * nothing until it has stayed bad for DOWN_BEFORE_NOTIFY_MS; a blip
+//     that recovers sooner opens and closes with no notification;
+//   * TVs & AV ('av'): never emailed from here. The on-site box shows
+//     the TV on the bar's iPad (getAttention) and the bartender decides:
+//     Turn On, Clear (silence), or Service call (agentServiceCall, which
+//     is the one path that emails for a TV). Outside the bar's TV hours
+//     a dark TV is normal, so the alert opens with expected_on=false and
+//     is never flagged or summarised.
+//   * every other category: one email per bar per category listing
+//     everything that just became eligible (a pile-up is one email),
+//     to people whose setting for that category is "right away"; one
+//     "recovered" when it comes back. No reminders — the 6am summary
+//     carries what's still down.
+//   * a silenced system gets none of the above.
 //
 // Runs on the service connection since the poller has no logged-in
 // person.
 // ---------------------------------------------------------------------
 const DOWN_BEFORE_NOTIFY_MS = 3 * 60 * 1000;
-const REALERT_INTERVAL_MS = 15 * 60 * 1000;
+const DAILY_ALERT_EMAIL_BUDGET = 30; // per bar-day, all categories; the 6am summary is outside it
 
 // silenced_until is a timestamptz; 'infinity' ("until turned back on")
 // comes out of pg as the number Infinity, which new Date() can't hold —
@@ -286,59 +320,88 @@ async function recordStatus({ systemId, status, detail }) {
     if (isBad && !openAlert) {
       const system = await systemWithLocation(svc, systemId);
       const message = `${system.name} at ${system.location_name} is ${status}.`;
+      const expectedOn = system.category === 'av' ? withinAvHours(system) : true;
       await svc.query(
-        'INSERT INTO system_alerts (system_id, status, message) VALUES ($1,$2,$3)',
-        [systemId, status, message]
+        'INSERT INTO system_alerts (system_id, status, message, expected_on) VALUES ($1,$2,$3,$4)',
+        [systemId, status, message, expectedOn]
       );
       // Deliberately no notification here — see DOWN_BEFORE_NOTIFY_MS.
     } else if (isBad && openAlert) {
+      if (openAlert.notified_at || !openAlert.expected_on) return;
+      if (now - new Date(openAlert.opened_at).getTime() < DOWN_BEFORE_NOTIFY_MS) return;
       const system = await systemWithLocation(svc, systemId);
-      if (isSilenced(system)) return;
-      const openedFor = now - new Date(openAlert.opened_at).getTime();
-      if (!openAlert.notified_at) {
-        if (openedFor >= DOWN_BEFORE_NOTIFY_MS) {
-          await svc.query('UPDATE system_alerts SET notified_at = now(), last_notified_at = now() WHERE id = $1', [openAlert.id]);
-          await notifyAlert(svc, system, openAlert, 'opened').catch((err) => console.error('[monitoring] notifyAlert(opened) error', err));
-        }
-      } else if (now - new Date(openAlert.last_notified_at || openAlert.notified_at).getTime() >= REALERT_INTERVAL_MS) {
-        await svc.query('UPDATE system_alerts SET last_notified_at = now(), reminder_count = reminder_count + 1 WHERE id = $1', [openAlert.id]);
-        await notifyAlert(svc, system, { ...openAlert, reminder_count: (openAlert.reminder_count || 0) + 1 }, 'reminder').catch((err) => console.error('[monitoring] notifyAlert(reminder) error', err));
-      }
+      if (isSilenced(system) || system.category === 'av') return; // av: the bar's iPad handles it
+      await notifyGroupOpened(svc, system).catch((err) => console.error('[monitoring] notify(opened) error', err));
     } else if (!isBad && openAlert) {
       await svc.query('UPDATE system_alerts SET closed_at = now() WHERE id = $1', [openAlert.id]);
       if (!openAlert.notified_at) return; // nobody was told it was down, so nothing to close out
       const system = await systemWithLocation(svc, systemId);
       if (isSilenced(system)) return;
-      await notifyAlert(svc, system, openAlert, 'closed').catch((err) => console.error('[monitoring] notifyAlert(closed) error', err));
+      await notifyAlert(svc, system, openAlert, 'closed').catch((err) => console.error('[monitoring] notify(closed) error', err));
     }
   });
 }
 
-// ---------------------------------------------------------------------
-// Silencing (manager/owner; enforced in the route). duration is one of
-// '1h' | '8h' | '1d' | 'forever' | 'off'. A group silence stamps every
-// active system in that location + category — that IS the "system"
-// (all TVs at Ticket 1, all network gear at Ticket 2). Anything that
-// was already open keeps its alert row; it just stops talking.
-// ---------------------------------------------------------------------
-const SILENCE_DURATIONS = { '1h': '1 hour', '8h': '8 hours', '1d': '1 day', forever: null };
+// Everything at this bar, in this category, that is open, past the hold,
+// unsilenced and not yet announced — announced together, once.
+async function notifyGroupOpened(svc, system) {
+  const { rows: alerts } = await svc.query(
+    `SELECT sa.*, ms.name AS system_name FROM system_alerts sa
+     JOIN monitored_systems ms ON ms.id = sa.system_id
+     WHERE ms.location_id = $1 AND ms.category = $2 AND ms.active = true
+       AND sa.closed_at IS NULL AND sa.notified_at IS NULL AND sa.expected_on = true
+       AND sa.opened_at <= now() - ($3 || ' milliseconds')::interval
+       AND (ms.silenced_until IS NULL OR ms.silenced_until <= now())
+     ORDER BY sa.opened_at`,
+    [system.location_id, system.category, DOWN_BEFORE_NOTIFY_MS]
+  );
+  if (!alerts.length) return;
+  await svc.query('UPDATE system_alerts SET notified_at = now(), last_notified_at = now() WHERE id = ANY($1::uuid[])', [alerts.map((a) => a.id)]);
+  await notifyAlert(svc, system, alerts.length === 1 ? alerts[0] : alerts, 'opened');
+}
 
-function silenceUntilSql(duration) {
-  if (duration === 'off') return 'NULL';
-  if (duration === 'forever') return "'infinity'::timestamptz";
-  const interval = SILENCE_DURATIONS[duration];
-  if (!interval) return null;
-  return `now() + interval '${interval}'`;
+// ---------------------------------------------------------------------
+// Silencing (manager/owner from the app; the bar's iPad via Clear).
+// duration: '1h' | '8h' | '1d' | 'today' | '3d' | '7d' | 'forever' | 'off'.
+// 'today' = until 6am tomorrow, bar time (the summary hour). A group
+// silence stamps every active system in that location + category.
+// ---------------------------------------------------------------------
+function silenceUntil(duration) {
+  const now = Date.now();
+  switch (duration) {
+    case 'off': return null;
+    case '1h': return new Date(now + 3600e3);
+    case '8h': return new Date(now + 8 * 3600e3);
+    case '1d': return new Date(now + 24 * 3600e3);
+    case '3d': return new Date(now + 3 * 24 * 3600e3);
+    case '7d': return new Date(now + 7 * 24 * 3600e3);
+    case 'today': return nextSixAm();
+    case 'forever': return 'infinity';
+    default: return undefined;
+  }
+}
+
+// The next 06:00 in the bar's timezone, as a real instant: step forward
+// in 15-minute ticks until the bar clock reads 06:00.
+function nextSixAm(from = new Date()) {
+  const step = 15 * 60 * 1000;
+  let t = new Date(Math.ceil((from.getTime() + 1) / step) * step);
+  for (let i = 0; i < 24 * 4 + 4; i++) {
+    const q = barParts(t);
+    if (q.hour === 6 && q.minute === 0) return t;
+    t = new Date(t.getTime() + step);
+  }
+  return new Date(from.getTime() + 24 * 3600e3);
 }
 
 async function setSilence({ systemId, duration, by }) {
-  const untilSql = silenceUntilSql(duration);
-  if (!untilSql) return { ok: false, error: 'Pick 1 hour, 8 hours, 1 day, until turned back on, or off.' };
+  const until = silenceUntil(duration);
+  if (until === undefined) return { ok: false, error: 'Pick 1 hour, 8 hours, 1 day, the rest of today, 3 days, 7 days, until turned back on, or off.' };
   return withServiceClient(async (svc) => {
     const { rows } = await svc.query(
-      `UPDATE monitored_systems SET silenced_until = ${untilSql}, silenced_at = CASE WHEN ${untilSql} IS NULL THEN NULL ELSE now() END, silenced_by = CASE WHEN ${untilSql} IS NULL THEN NULL ELSE $2::uuid END
+      `UPDATE monitored_systems SET silenced_until = $2, silenced_at = CASE WHEN $2::timestamptz IS NULL THEN NULL ELSE now() END, silenced_by = CASE WHEN $2::timestamptz IS NULL THEN NULL ELSE $3::uuid END
        WHERE id = $1 RETURNING *`,
-      [systemId, by]
+      [systemId, until, by || null]
     );
     if (!rows[0]) return { ok: false, error: 'Not found.' };
     return { ok: true, system: rows[0] };
@@ -346,16 +409,123 @@ async function setSilence({ systemId, duration, by }) {
 }
 
 async function setGroupSilence({ locationId, category, duration, by }) {
-  const untilSql = silenceUntilSql(duration);
-  if (!untilSql) return { ok: false, error: 'Pick 1 hour, 8 hours, 1 day, until turned back on, or off.' };
+  const until = silenceUntil(duration);
+  if (until === undefined) return { ok: false, error: 'Pick 1 hour, 8 hours, 1 day, the rest of today, 3 days, 7 days, until turned back on, or off.' };
   if (!locationId || !category) return { ok: false, error: 'Location and category are required.' };
   return withServiceClient(async (svc) => {
     const { rowCount } = await svc.query(
-      `UPDATE monitored_systems SET silenced_until = ${untilSql}, silenced_at = CASE WHEN ${untilSql} IS NULL THEN NULL ELSE now() END, silenced_by = CASE WHEN ${untilSql} IS NULL THEN NULL ELSE $3::uuid END
+      `UPDATE monitored_systems SET silenced_until = $3, silenced_at = CASE WHEN $3::timestamptz IS NULL THEN NULL ELSE now() END, silenced_by = CASE WHEN $3::timestamptz IS NULL THEN NULL ELSE $4::uuid END
        WHERE location_id = $1 AND category = $2 AND active = true`,
-      [locationId, category, by]
+      [locationId, category, until, by || null]
     );
     return { ok: true, count: rowCount };
+  });
+}
+
+// ---------------------------------------------------------------------
+// The bar's iPad (TV Staff page on the on-site box) — patch_034.
+// getAttention: TVs at this bar that have been unreachable for 3+ minutes
+// during TV hours, not silenced: what the box shows the bartender.
+// agentClear: the Clear button (a silence, by duration).
+// agentServiceCall: the Service call button — opens a Service Call for
+// the TV and sends the TV alert to everyone set to get TV alerts.
+// All three are called by the box with its site token (route handlers
+// in server/index.js check the system belongs to that site's location).
+// ---------------------------------------------------------------------
+async function getAttention(svc, locationId) {
+  const { rows } = await svc.query(
+    `SELECT sa.id AS alert_id, sa.opened_at, sa.service_call_id, ms.id AS system_id, ms.external_ref, ms.name, ms.kind
+     FROM system_alerts sa JOIN monitored_systems ms ON ms.id = sa.system_id
+     WHERE ms.location_id = $1 AND ms.category = 'av' AND ms.kind = 'vc_tv' AND ms.active = true
+       AND sa.closed_at IS NULL AND sa.expected_on = true
+       AND sa.opened_at <= now() - ($2 || ' milliseconds')::interval
+       AND (ms.silenced_until IS NULL OR ms.silenced_until <= now())
+     ORDER BY sa.opened_at`,
+    [locationId, DOWN_BEFORE_NOTIFY_MS]
+  );
+  return rows.map((r) => ({
+    alertId: r.alert_id, systemId: r.system_id, tvId: r.external_ref, name: r.name,
+    since: r.opened_at, serviceCallId: r.service_call_id,
+  }));
+}
+
+async function systemAtLocation(svc, systemId, locationId) {
+  const s = await systemWithLocation(svc, systemId);
+  return s && String(s.location_id) === String(locationId) ? s : null;
+}
+
+async function agentClear({ locationId, systemId, duration }) {
+  return withServiceClient(async (svc) => {
+    const system = await systemAtLocation(svc, systemId, locationId);
+    if (!system) return { ok: false, error: 'Not found.' };
+    const r = await setSilence({ systemId, duration, by: null });
+    if (!r.ok) return r;
+    return { ok: true, silencedUntil: r.system.silenced_until, attention: await getAttention(svc, locationId) };
+  });
+}
+
+// Which Service Call destinations a bar-raised TV call goes to: the
+// owner-editable list (owner_notes 'av_service_call_destinations',
+// comma-separated ids), else every active destination named
+// "Maintenance" or starting "Owner".
+async function avServiceCallDestinations(svc) {
+  const { rows: note } = await svc.query("SELECT body FROM owner_notes WHERE note_key = 'av_service_call_destinations'");
+  const ids = note[0] && note[0].body ? note[0].body.split(',').map((x) => x.trim()).filter(Boolean) : [];
+  if (ids.length) {
+    const { rows } = await svc.query('SELECT id FROM service_call_destinations WHERE active = true AND id = ANY($1::uuid[])', [ids]);
+    if (rows.length) return rows.map((r) => r.id);
+  }
+  const { rows } = await svc.query(
+    `SELECT id FROM service_call_destinations WHERE active = true AND (name ILIKE 'maintenance%' OR name ILIKE 'owner%') ORDER BY name`
+  );
+  return rows.map((r) => r.id);
+}
+
+async function agentServiceCall({ locationId, systemId }) {
+  return withServiceClient(async (svc) => {
+    const system = await systemAtLocation(svc, systemId, locationId);
+    if (!system) return { ok: false, error: 'Not found.' };
+    const { rows: alerts } = await svc.query('SELECT * FROM system_alerts WHERE system_id = $1 AND closed_at IS NULL', [systemId]);
+    const alert = alerts[0];
+    if (!alert) return { ok: false, error: 'That TV is back — nothing to report.' };
+    if (alert.service_call_id) return { ok: true, serviceCallId: alert.service_call_id, already: true, attention: await getAttention(svc, locationId) };
+
+    // Filed under the owner (a service call needs a person; the bar's
+    // iPad isn't one), routed to the TV destinations, equipment "TV".
+    const { rows: owners } = await svc.query(`SELECT id FROM people WHERE role = 'owner' AND status = 'active' ORDER BY created_at LIMIT 1`);
+    if (!owners[0]) return { ok: false, error: 'No owner account to file the call under.' };
+    const { rows: eq } = await svc.query(`SELECT id FROM equipment_types WHERE active = true AND name ILIKE 'tv%' ORDER BY name LIMIT 1`);
+    const destinationIds = await avServiceCallDestinations(svc);
+    const since = alert.opened_at;
+    const description = `${system.name} isn't responding — reported from the ${system.location_name} TV Staff page. Down since ${since instanceof Date ? since.toLocaleString('en-US', { timeZone: BUSINESS_TZ }) : since}. Turn On from the iPad didn't bring it back.`;
+    const { rows: created } = await svc.query(
+      `INSERT INTO service_calls (location_id, equipment_type_id, equipment_other, description, created_by)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [locationId, eq[0] ? eq[0].id : null, eq[0] ? null : 'TV', description, owners[0].id]
+    );
+    const callId = created[0].id;
+    if (destinationIds.length) {
+      const values = destinationIds.map((_, i) => `($1, $${i + 2})`).join(',');
+      await svc.query(`INSERT INTO service_call_recipients (call_id, destination_id) VALUES ${values}`, [callId, ...destinationIds]);
+    }
+    await svc.query('UPDATE system_alerts SET service_call_id = $1, notified_at = now(), last_notified_at = now() WHERE id = $2', [callId, alert.id]);
+    const call = await servicecalls.getCall(svc, callId);
+    if (call) await servicecalls.notifyNewCall(svc, call).catch((err) => console.error('[monitoring] service call notify error', err));
+    await notifyAlert(svc, system, { ...alert, service_call_id: callId }, 'service_call').catch((err) => console.error('[monitoring] notify(service_call) error', err));
+    return { ok: true, serviceCallId: callId, attention: await getAttention(svc, locationId) };
+  });
+}
+
+// ---------------------------------------------------------------------
+// TV hours per location (manager/owner).
+// ---------------------------------------------------------------------
+async function setAvHours({ locationId, start, end }) {
+  const ok = (v) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || ''));
+  if (!ok(start) || !ok(end)) return { ok: false, error: 'Times need to look like 10:00 and 02:00.' };
+  return withServiceClient(async (svc) => {
+    const { rows } = await svc.query('UPDATE locations SET av_hours_start = $2, av_hours_end = $3 WHERE id = $1 RETURNING id, name, av_hours_start, av_hours_end', [locationId, start, end]);
+    if (!rows[0]) return { ok: false, error: 'Not found.' };
+    return { ok: true, location: rows[0] };
   });
 }
 
@@ -367,21 +537,27 @@ async function systemWithLocation(svc, systemId) {
   return rows[0];
 }
 
-// Notified: the owner (every location, unconditionally) + anyone with
-// Monitoring access enabled at that specific location (dashboard viewers)
-// + anyone assigned via monitoring_alert_routes for this system's
-// location/category (routed recipients — e.g. "the kitchen manager gets
-// refrigeration alerts at Ticket 1" — regardless of whether that person
-// has Monitoring dashboard access at all; routing is about who's
-// responsible for the equipment, not who can browse the dashboard).
+// Who could be told about this system at all: the owner (every
+// location), anyone with Monitoring access at one of that system's bar
+// (people can work at several bars — patch_033), and anyone routed to it
+// via monitoring_alert_routes. Each comes back with their channel and
+// per-category prefs; modeFor() then says whether they want this
+// category right away, in the daily summary, or not at all.
 //
 // Bug fixed 2026-09-01: this used to INNER JOIN employee_apps for every
 // recipient including the owner, but 'monitoring' was never in
 // employees.js's APP_KEYS, so no one — not even the owner — ever had an
 // enabled row there. Every alert's recipient list was silently empty.
+const DEFAULT_MODE = { av: 'daily' }; // everything else: 'immediate'
+const MODES = ['off', 'immediate', 'daily'];
+function modeFor(prefs, category) {
+  const p = prefs && prefs[category];
+  return MODES.includes(p) ? p : (DEFAULT_MODE[category] || 'immediate');
+}
+
 async function recipientsFor(svc, system) {
   const { rows } = await svc.query(
-    `SELECT p.*, mns.notify_channel FROM people p
+    `SELECT p.*, mns.notify_channel, mns.prefs FROM people p
      LEFT JOIN monitoring_notify_settings mns ON mns.person_id = p.id
      WHERE p.status = 'active' AND (
        p.role = 'owner'
@@ -402,35 +578,148 @@ async function recipientsFor(svc, system) {
   return rows;
 }
 
+// Alert emails sent so far this bar-day (the 6am summary is logged under
+// its own related_table and doesn't count).
+async function alertEmailsSentToday(svc) {
+  const { rows } = await svc.query(
+    `SELECT count(*)::int AS n FROM notifications_log
+     WHERE related_table = 'system_alerts' AND channel = 'email' AND status IN ('sent','simulated')
+       AND sent_at >= (date_trunc('day', now() AT TIME ZONE $1) AT TIME ZONE $1)`,
+    [BUSINESS_TZ]
+  );
+  return rows[0].n;
+}
+
 function minutesSince(iso) {
   return Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
 }
 
-// kind: 'opened' (first notice, after the 3-minute hold), 'reminder'
-// (every 15 minutes while still down), 'closed' (back to normal).
+// kind: 'opened' (after the 3-minute hold; `alert` may be an array when
+// several things at the bar dropped together), 'closed' (back to normal),
+// 'service_call' (the bar's iPad escalated a TV). Right-away people get
+// opened/closed; a service call goes to everyone who gets TV alerts at
+// all, right away or daily — that's the point of the button.
 async function notifyAlert(svc, system, alert, kind) {
-  const recipients = await recipientsFor(svc, system);
-  const downFor = `${minutesSince(alert.opened_at)} min`;
-  const subject = kind === 'opened'
-    ? `⚠ ${system.name} is ${alert.status} — ${system.location_name}`
-    : kind === 'reminder'
-    ? `⚠ Still ${alert.status}: ${system.name} — ${system.location_name} (${downFor})`
-    : `✓ ${system.name} recovered — ${system.location_name}`;
-  const text = kind === 'opened'
-    ? `${alert.message}\n\nDown since: ${alert.opened_at}\n\nYou'll get a reminder every 15 minutes while it stays down, and a note when it recovers. To quiet it, open the app and press Silence on it.`
-    : kind === 'reminder'
-    ? `${alert.message}\n\nStill ${alert.status}, ${downFor} so far (since ${alert.opened_at}). Reminder ${alert.reminder_count || 1}.\n\nTo quiet it, open the app and press Silence on it.`
-    : `${system.name} at ${system.location_name} is back to normal.\n\nWas ${alert.status} from ${alert.opened_at} until now.`;
+  const alerts = Array.isArray(alert) ? alert : [alert];
+  const first = alerts[0];
+  const category = system.category;
+  const catLabel = { network: 'network device', av: 'TV', hvac: 'HVAC unit', refrigeration: 'cooler', freezer: 'freezer', ice_machine: 'ice machine', power: 'power' }[category] || 'system';
+  const recipients = (await recipientsFor(svc, system)).filter((p) => {
+    const mode = modeFor(p.prefs, category);
+    return kind === 'service_call' ? mode !== 'off' : mode === 'immediate';
+  });
+  if (!recipients.length) return;
 
+  const names = alerts.map((a) => a.system_name || system.name);
+  let subject; let text;
+  if (kind === 'opened') {
+    subject = alerts.length === 1
+      ? `⚠ ${names[0]} is ${first.status} — ${system.location_name}`
+      : `⚠ ${alerts.length} ${catLabel}s ${first.status} — ${system.location_name}`;
+    text = (alerts.length === 1 ? `${first.message}\n\n` : `${alerts.length} ${catLabel}s at ${system.location_name} went ${first.status} together:\n${names.map((n) => `  • ${n}`).join('\n')}\n\n`)
+      + `Down since: ${first.opened_at}\n\nYou'll get one note when it recovers. Anything still down is in the 6am summary. To quiet it, open the app and press Silence on it.`;
+  } else if (kind === 'service_call') {
+    subject = `⚠ TV needs service: ${system.name} — ${system.location_name}`;
+    text = `The bar reported ${system.name} at ${system.location_name} from the TV Staff page. It has been unreachable since ${first.opened_at} and Turn On didn't bring it back.\n\nA service call has been opened (Service Calls app). Open the app to view.`;
+  } else {
+    subject = `✓ ${system.name} recovered — ${system.location_name}`;
+    text = `${system.name} at ${system.location_name} is back to normal.\n\nWas ${first.status} from ${first.opened_at} until now.`;
+  }
+
+  let sentToday = await alertEmailsSentToday(svc);
   for (const person of recipients) {
     const channel = person.notify_channel || 'email'; // default until they set a preference
     if ((channel === 'email' || channel === 'both') && person.email) {
-      await notify.sendEmail(svc, 'system_alerts', alert.id, person.email, subject, text);
+      if (sentToday >= DAILY_ALERT_EMAIL_BUDGET) {
+        console.warn(`[monitoring] daily alert email budget (${DAILY_ALERT_EMAIL_BUDGET}) reached — not emailing ${person.email}: ${subject}`);
+        await svc.query(
+          `INSERT INTO notifications_log (related_table, related_id, channel, recipient, status, detail) VALUES ('system_alerts', $1, 'email', $2, 'budget', $3)`,
+          [first.id, person.email, subject]
+        );
+      } else {
+        await notify.sendEmail(svc, 'system_alerts', first.id, person.email, subject, text);
+        sentToday++;
+      }
     }
     if ((channel === 'sms' || channel === 'both') && person.phone) {
-      await notify.sendSms(svc, 'system_alerts', alert.id, person.phone, `${subject}\n${alert.message || ''}`.slice(0, 300));
+      await notify.sendSms(svc, 'system_alerts', first.id, person.phone, `${subject}\n${first.message || ''}`.slice(0, 300));
     }
   }
+}
+
+// ---------------------------------------------------------------------
+// The 6am daily summary (patch_034). One email per person, covering the
+// bars they work at (owner: all), for the categories they take as a
+// daily summary: everything still down (silenced ones marked), and what
+// went down and recovered in the last 24 hours. Nothing to say -> no
+// email. Runs once per bar-day, guarded by monitoring_summary_runs.
+// ---------------------------------------------------------------------
+async function runDailySummaryIfDue(now = new Date()) {
+  const p = barParts(now);
+  if (p.hour !== 6) return { ran: false };
+  return withServiceClient(async (svc) => {
+    const { rowCount } = await svc.query('INSERT INTO monitoring_summary_runs (run_date) VALUES ($1) ON CONFLICT DO NOTHING', [p.ymd]);
+    if (!rowCount) return { ran: false, reason: 'already ran today' };
+    const sent = await sendDailySummaries(svc);
+    await svc.query('UPDATE monitoring_summary_runs SET sent_count = $2 WHERE run_date = $1', [p.ymd, sent]);
+    return { ran: true, sent };
+  });
+}
+
+async function sendDailySummaries(svc) {
+  const { rows: people } = await svc.query(
+    `SELECT p.*, mns.notify_channel, mns.prefs,
+            ARRAY(SELECT el.location_id FROM employee_locations el WHERE el.person_id = p.id) AS location_ids,
+            ARRAY(SELECT r.location_id FROM monitoring_alert_routes r WHERE r.person_id = p.id) AS route_location_ids,
+            EXISTS (SELECT 1 FROM monitoring_alert_routes r WHERE r.person_id = p.id AND r.location_id IS NULL) AS routed_everywhere,
+            EXISTS (SELECT 1 FROM employee_apps ea WHERE ea.person_id = p.id AND ea.app_key = 'monitoring' AND ea.enabled = true) AS has_app
+     FROM people p LEFT JOIN monitoring_notify_settings mns ON mns.person_id = p.id
+     WHERE p.status = 'active' AND p.email IS NOT NULL
+       AND (p.role = 'owner'
+            OR EXISTS (SELECT 1 FROM employee_apps ea WHERE ea.person_id = p.id AND ea.app_key = 'monitoring' AND ea.enabled = true)
+            OR EXISTS (SELECT 1 FROM monitoring_alert_routes r WHERE r.person_id = p.id))`
+  );
+  const { rows: openAlerts } = await svc.query(
+    `SELECT sa.*, ms.name AS system_name, ms.category, ms.location_id, l.name AS location_name,
+            (ms.silenced_until IS NOT NULL AND ms.silenced_until > now()) AS silenced
+     FROM system_alerts sa JOIN monitored_systems ms ON ms.id = sa.system_id JOIN locations l ON l.id = ms.location_id
+     WHERE sa.closed_at IS NULL AND sa.expected_on = true AND ms.active = true ORDER BY l.name, ms.category, sa.opened_at`
+  );
+  const { rows: recovered } = await svc.query(
+    `SELECT sa.*, ms.name AS system_name, ms.category, ms.location_id, l.name AS location_name
+     FROM system_alerts sa JOIN monitored_systems ms ON ms.id = sa.system_id JOIN locations l ON l.id = ms.location_id
+     WHERE sa.closed_at >= now() - interval '24 hours' AND sa.expected_on = true
+       AND sa.closed_at - sa.opened_at >= ($1 || ' milliseconds')::interval
+     ORDER BY l.name, sa.closed_at DESC`,
+    [DOWN_BEFORE_NOTIFY_MS]
+  );
+  const catName = (c) => ({ network: 'Network', av: 'TVs & AV', hvac: 'HVAC', refrigeration: 'Refrigeration', freezer: 'Freezer', ice_machine: 'Ice machine', power: 'Power', other: 'Other' }[c] || c);
+  const fmt = (d) => new Date(d).toLocaleString('en-US', { timeZone: BUSINESS_TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  let sent = 0;
+  for (const person of people) {
+    const everywhere = person.role === 'owner' || person.routed_everywhere;
+    const myLocs = new Set([...(person.location_ids || []), ...(person.route_location_ids || [])].filter(Boolean).map(String));
+    const wants = (a) => modeFor(person.prefs, a.category) === 'daily' && (everywhere || myLocs.has(String(a.location_id)));
+    const down = openAlerts.filter(wants);
+    const back = recovered.filter(wants);
+    if (!down.length && !back.length) continue;
+    const lines = [];
+    if (down.length) {
+      lines.push(`STILL DOWN (${down.length})`);
+      for (const a of down) lines.push(`  • ${a.location_name} — ${catName(a.category)}: ${a.system_name}, since ${fmt(a.opened_at)}${a.silenced ? ' (silenced)' : ''}${a.service_call_id ? ' (service call open)' : ''}`);
+      lines.push('');
+    }
+    if (back.length) {
+      lines.push(`WENT DOWN AND CAME BACK, LAST 24 HOURS (${back.length})`);
+      for (const a of back) lines.push(`  • ${a.location_name} — ${catName(a.category)}: ${a.system_name}, ${fmt(a.opened_at)} to ${fmt(a.closed_at)}`);
+      lines.push('');
+    }
+    lines.push('Open Systems Monitoring in the app for details. To change what lands in this summary, see Alert Notifications.');
+    const subject = down.length ? `Morning summary: ${down.length} thing${down.length === 1 ? '' : 's'} still down` : 'Morning summary: all clear now';
+    const r = await notify.sendEmail(svc, 'monitoring_summary', person.id, person.email, subject, lines.join('\n'));
+    if (r && r.ok) sent++;
+  }
+  return sent;
 }
 
 // ---------------------------------------------------------------------
@@ -438,24 +727,46 @@ async function notifyAlert(svc, system, alert, kind) {
 // reminder_settings pattern (no RLS on that table either; scoped by
 // req.person.id in the route handler).
 // ---------------------------------------------------------------------
+const PREF_CATEGORIES = ['network', 'av', 'refrigeration', 'freezer', 'ice_machine', 'hvac', 'power', 'other'];
+
 async function getNotifySettings(personId) {
   return withServiceClient(async (svc) => {
     const { rows } = await svc.query('SELECT * FROM monitoring_notify_settings WHERE person_id = $1', [personId]);
-    return rows[0] || { person_id: personId, notify_channel: 'email' };
+    const row = rows[0] || { person_id: personId, notify_channel: 'email', prefs: {} };
+    // Resolved view: every category with its effective mode, so the page
+    // never has to know the defaults.
+    const effective = {};
+    for (const c of PREF_CATEGORIES) effective[c] = modeFor(row.prefs, c);
+    return { ...row, prefs: row.prefs || {}, effective, defaults: { ...Object.fromEntries(PREF_CATEGORIES.map((c) => [c, DEFAULT_MODE[c] || 'immediate'])) } };
   });
 }
 
-async function setNotifyChannel(personId, channel) {
-  if (!['email', 'sms', 'both'].includes(channel)) return { ok: false, error: 'Invalid channel.' };
+// channel and/or prefs — either may be omitted. prefs: { category: mode }.
+async function setNotifySettings(personId, { channel, prefs } = {}) {
+  if (channel !== undefined && !['email', 'sms', 'both'].includes(channel)) return { ok: false, error: 'Invalid channel.' };
+  const cleaned = {};
+  if (prefs !== undefined) {
+    if (!prefs || typeof prefs !== 'object') return { ok: false, error: 'Invalid settings.' };
+    for (const [c, m] of Object.entries(prefs)) {
+      if (!PREF_CATEGORIES.includes(c)) continue;
+      if (!MODES.includes(m)) return { ok: false, error: `Pick Off, Right away, or Daily summary for ${c}.` };
+      cleaned[c] = m;
+    }
+  }
   return withServiceClient(async (svc) => {
     await svc.query(
-      `INSERT INTO monitoring_notify_settings (person_id, notify_channel, updated_at) VALUES ($1,$2,now())
-       ON CONFLICT (person_id) DO UPDATE SET notify_channel = $2, updated_at = now()`,
-      [personId, channel]
+      `INSERT INTO monitoring_notify_settings (person_id, notify_channel, prefs, updated_at)
+       VALUES ($1, COALESCE($2, 'email'), COALESCE($3::jsonb, '{}'::jsonb), now())
+       ON CONFLICT (person_id) DO UPDATE SET
+         notify_channel = COALESCE($2, monitoring_notify_settings.notify_channel),
+         prefs = COALESCE($3::jsonb, monitoring_notify_settings.prefs),
+         updated_at = now()`,
+      [personId, channel === undefined ? null : channel, prefs === undefined ? null : JSON.stringify(cleaned)]
     );
     return { ok: true };
   });
 }
+async function setNotifyChannel(personId, channel) { return setNotifySettings(personId, { channel }); }
 
 // ---------------------------------------------------------------------
 // Alert routing admin — who gets notified for a location/category,
@@ -612,11 +923,15 @@ async function reportAvHealth({ locationId, items }) {
     await recordStatus({ systemId, status, detail });
     count++;
   }
-  return { ok: true, count };
+  // What the bar's iPad should be showing right now (patch_034).
+  const attention = await withServiceClient((svc) => getAttention(svc, locationId));
+  return { ok: true, count, attention };
 }
 
 module.exports = {
-  setSilence, setGroupSilence, isSilenced, DOWN_BEFORE_NOTIFY_MS, REALERT_INTERVAL_MS,
+  setSilence, setGroupSilence, isSilenced, DOWN_BEFORE_NOTIFY_MS, DAILY_ALERT_EMAIL_BUDGET,
+  getAttention, agentClear, agentServiceCall, setAvHours, withinAvHours, barParts,
+  runDailySummaryIfDue, sendDailySummaries, setNotifySettings, modeFor, PREF_CATEGORIES,
   requireMonitoringAccess, listSystems, addSystem, updateSystem, archiveSystem, moveSystem,
   listStatusHistory, listAlerts, recordStatus,
   getNotifySettings, setNotifyChannel,

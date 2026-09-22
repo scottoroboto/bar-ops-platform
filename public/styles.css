@@ -309,6 +309,10 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .sys-silence { padding: 0 12px 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11px; }
 .silence-menu { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .group-silence { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 18px 12px; align-items: center; }
+.prefs-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.prefs-table td { padding: 6px 0; border-bottom: 1px solid var(--card-border); font-size: 14px; }
+.prefs-table td:last-child { width: 46%; }
+.prefs-table select { margin: 0; }
 .group-silence-item { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .sys-equip { font-size: 11px; color: var(--muted); margin: 4px 0 10px; }
 

@@ -215,7 +215,7 @@ function siteScoreCardHtml(name, systems) {
 // network gear). Silenced things stay tracked and stay red on the
 // dashboard — they just send nothing. Durations are fixed choices so
 // nobody has to type a time on a phone.
-const SILENCE_CHOICES = [['1h', '1 hour'], ['8h', '8 hours'], ['1d', '1 day'], ['forever', 'Until turned back on']];
+const SILENCE_CHOICES = [['1h', '1 hour'], ['today', 'Rest of today'], ['1d', '1 day'], ['3d', '3 days'], ['7d', '7 days'], ['forever', 'Until turned back on']];
 
 function silencedUntilText(s) {
   if (!s.silenced) return '';
@@ -234,6 +234,15 @@ function silenceMenuHtml(menuId, onPick) {
 function toggleSilenceMenu(menuId) {
   const el = document.getElementById(menuId);
   el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+// TVs are handled at the bar first (patch_034): say where a down TV
+// stands instead of implying an email went out.
+function avStateNoteHtml(s) {
+  if (s.category !== 'av' || !s.open_alert_id) return '';
+  if (s.open_service_call_id) return `<div class="sys-checked">service call open · <a href="/servicecalls.html">view</a></div>`;
+  if (s.open_alert_expected_on === false) return `<div class="sys-checked">outside TV hours — not flagged</div>`;
+  return `<div class="sys-checked">flagged on the bar's iPad — waiting on them</div>`;
 }
 
 function tileSilenceHtml(s) {
@@ -312,6 +321,7 @@ function systemTileHtml(s) {
       </div>
       <div class="status-row"><span class="dot" style="background:${m.dot}"></span><span class="label" style="color:${m.dot}">${m.label}</span>${s.silenced ? ' <span class="badge stale" title="' + silencedUntilText(s) + '">silenced</span>' : ''}</div>
       <div class="sys-checked">checked ${relTime(s.last_checked_at)} · history ▾</div>
+      ${avStateNoteHtml(s)}
     </div>
     ${tileSilenceHtml(s)}
     <div id="hist-${s.id}" class="sys-hist" style="display:none;"></div>
@@ -403,10 +413,14 @@ function alertRowHtml(a) {
 // tile can be reconciled at a glance.
 function alertNoticeText(a) {
   const open = !a.closed_at;
+  if (a.service_call_id) return `service call opened from the bar's iPad · notified ${fmtDateTime(a.notified_at)}`;
   if (a.silenced && open) return 'silenced — no notifications while it stays quiet';
+  if (a.category === 'av') {
+    if (a.expected_on === false) return 'outside TV hours — a dark TV is normal then; not flagged';
+    return open ? "flagged on the bar's iPad after 3 minutes — they can Turn On, Clear, or open a Service call" : 'recovered — was flagged on the bar\'s iPad only';
+  }
   if (!a.notified_at) return open ? 'no notice sent yet — waits until it has been down 3 minutes' : 'recovered within 3 minutes — nobody was notified';
-  const reminders = Number(a.reminder_count || 0);
-  return `notified ${fmtDateTime(a.notified_at)}${reminders ? ` · ${reminders} reminder${reminders === 1 ? '' : 's'}` : ''}${open ? ' · reminder every 15 min while down' : ''}`;
+  return `notified ${fmtDateTime(a.notified_at)}${open ? ' · in the 6am summary until it recovers' : ''}`;
 }
 
 // ---------------- Add / Manage (manager/owner) ----------------
@@ -437,11 +451,43 @@ function renderAdd() {
       <button class="primary" onclick="submitAddSystem()">Add system</button>
     </div>
     <div class="card">
+      <h2>TV hours</h2>
+      <p class="muted">When TVs are expected to be on at each bar. A TV that stops answering inside these hours is flagged on that bar's iPad; outside them a dark TV is normal and nothing happens. An end time earlier than the start means it runs past midnight.</p>
+      <div id="avHoursList"></div>
+    </div>
+    <div class="card">
       <h2>Registered systems</h2>
       <div id="manageList"><p class="muted">Loading…</p></div>
     </div>`;
   fillLocationSelect(document.getElementById('asLocation'), myLocationIds(ME)[0]);
+  renderAvHours();
   loadManageList();
+}
+
+function renderAvHours() {
+  const mine = ME.role === 'owner' ? LOCATIONS : LOCATIONS.filter(l => myLocationIds(ME).includes(String(l.id)));
+  document.getElementById('avHoursList').innerHTML = mine.length ? mine.map(l => `<div class="list-row">
+    <div class="name">${escapeHtml(l.name)}</div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <input type="time" id="avs-${l.id}" value="${String(l.av_hours_start || '10:00').slice(0, 5)}" style="width:auto; margin:0;">
+      <span class="muted">to</span>
+      <input type="time" id="ave-${l.id}" value="${String(l.av_hours_end || '02:00').slice(0, 5)}" style="width:auto; margin:0;">
+      <button class="small ghost" onclick="saveAvHours('${l.id}')">Save</button>
+    </div>
+  </div>`).join('') : '<p class="muted">No locations.</p>';
+}
+async function saveAvHours(locationId) {
+  const start = document.getElementById(`avs-${locationId}`).value;
+  const end = document.getElementById(`ave-${locationId}`).value;
+  try {
+    const result = await withStepUp(() => api(`/api/monitoring/locations/${locationId}/av-hours`, { method: 'POST', body: { start, end } }));
+    if (!result.ok) { showMsg(result.error, 'error'); return; }
+    const l = LOCATIONS.find(x => x.id === locationId);
+    if (l) { l.av_hours_start = start; l.av_hours_end = end; }
+    showMsg('TV hours saved.', 'success');
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
 }
 
 async function loadManageList() {
@@ -618,22 +664,41 @@ async function renderNotifications() {
       <div id="routingList"><p class="muted">Loading…</p></div>
     </div>` : ''}
     <div class="card">
-      <h2>How alerts are timed</h2>
-      <p class="muted" style="margin-bottom:6px;">Nothing is sent until something has been down for <b>3 minutes straight</b> — a blip never notifies. While it stays down you get one notice, then a reminder every <b>15 minutes</b>, and one note when it's back.</p>
-      <p class="muted">To quiet something on purpose, open Status, expand the location, and press <b>Silence…</b> on a piece of equipment, or <b>Silence all …</b> for a whole system there. Silenced things stay red on the board; they just stop notifying.</p>
+      <h2>How alerts work</h2>
+      <p class="muted" style="margin-bottom:6px;"><b>TVs</b> are handled at the bar first: a TV that stops answering during TV hours shows up on that bar's iPad after 3 minutes, with Turn On, Clear, and Service call. Nobody is emailed about a TV unless the bar presses Service call, or in the 6am summary.</p>
+      <p class="muted" style="margin-bottom:6px;"><b>Everything else</b> (network, coolers, ice machines…) sends one notice once it has been down 3 minutes straight, and one when it's back. No reminders. If several things at one bar drop together, that's one email.</p>
+      <p class="muted"><b>The 6am summary</b> is one email a day listing what's still down and what came and went overnight. Nothing to report, no email. Alert emails are capped at ${DAILY_BUDGET} a day so they can never crowd out sign-in codes.</p>
     </div>
     <div class="card">
-      <h2>How should we reach you?</h2>
-      <p class="muted">Your own alert notifications.</p>
-      <label for="notifyChannel">Channel</label>
+      <h2>My alert settings</h2>
+      <p class="muted">For each kind of equipment: nothing, a notice right away, or just the 6am summary.</p>
+      <div id="prefsTable"></div>
+      <label for="notifyChannel">Send my notices by</label>
       <select id="notifyChannel">
         <option value="email">Email</option>
         <option value="sms">Text (SMS)</option>
         <option value="both">Both</option>
       </select>
       <p class="muted" id="smsNote" style="display:none;">Heads up — SMS isn't fully wired up yet on our end, so text alerts won't actually arrive until that's turned on. Email will still work.</p>
-      <button class="primary" onclick="submitNotifyChannel()">Save</button>
-    </div>`;
+      <button class="primary" onclick="submitNotifySettings()">Save</button>
+    </div>
+    ${IS_MANAGER ? `
+    <div class="card">
+      <h2>Someone else's alert settings</h2>
+      <p class="muted">Set what each employee gets. Only people who can see Monitoring, or are routed alerts above, receive anything at all.</p>
+      <label for="prefsPerson">Employee</label>
+      <select id="prefsPerson" onchange="loadPersonPrefs()"><option value="">Choose…</option></select>
+      <div id="personPrefsBox" style="display:none;">
+        <div id="personPrefsTable"></div>
+        <label for="personChannel">Send their notices by</label>
+        <select id="personChannel">
+          <option value="email">Email</option>
+          <option value="sms">Text (SMS)</option>
+          <option value="both">Both</option>
+        </select>
+        <button class="primary" onclick="submitPersonPrefs()">Save for this person</button>
+      </div>
+    </div>` : ''}`;
   if (IS_MANAGER) {
     try {
       ROUTING_PEOPLE = (await api('/api/employees')).filter(p => p.status === 'active');
@@ -700,27 +765,80 @@ async function removeRoute(id) {
 }
 
 // ---------------- Notification channel helpers (used by renderNotifications) ----------------
+const DAILY_BUDGET = 30; // mirrors server/monitoring.js DAILY_ALERT_EMAIL_BUDGET
+const MODE_LABEL = { off: 'Nothing', immediate: 'Right away', daily: '6am summary only' };
+const PREF_ORDER = ['network', 'av', 'refrigeration', 'freezer', 'ice_machine', 'hvac', 'power', 'other'];
+
 function updateSmsNote() {
   const v = document.getElementById('notifyChannel').value;
   document.getElementById('smsNote').style.display = (v === 'sms' || v === 'both') ? '' : 'none';
 }
 
+// One row per category with a three-way pick; the server hands back the
+// effective mode per category so defaults show as what they really are.
+function prefsTableHtml(prefix, settings) {
+  return `<table class="prefs-table"><tbody>${PREF_ORDER.map(c => `<tr>
+    <td>${escapeHtml(CATEGORY_LABEL[c] || c)}${settings.defaults && !settings.prefs[c] ? ' <span class="muted" style="font-size:11px;">(default)</span>' : ''}</td>
+    <td><select id="${prefix}-${c}">${['immediate', 'daily', 'off'].map(m => `<option value="${m}" ${settings.effective[c] === m ? 'selected' : ''}>${MODE_LABEL[m]}</option>`).join('')}</select></td>
+  </tr>`).join('')}</tbody></table>`;
+}
+function readPrefs(prefix) {
+  const prefs = {};
+  PREF_ORDER.forEach(c => { const el = document.getElementById(`${prefix}-${c}`); if (el) prefs[c] = el.value; });
+  return prefs;
+}
+
 async function loadNotifySettings() {
   try {
     const settings = await api('/api/monitoring/notify-settings');
+    document.getElementById('prefsTable').innerHTML = prefsTableHtml('pref', settings);
     document.getElementById('notifyChannel').value = settings.notify_channel || 'email';
+    document.getElementById('notifyChannel').onchange = updateSmsNote;
     updateSmsNote();
+    if (IS_MANAGER) {
+      const people = ROUTING_PEOPLE.length ? ROUTING_PEOPLE : await api('/api/employees');
+      ROUTING_PEOPLE = people;
+      document.getElementById('prefsPerson').innerHTML = '<option value="">Choose…</option>' +
+        people.filter(p => p.status === 'active').map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    }
   } catch (e) {
     showMsg(e.message, 'error');
   }
 }
 
-async function submitNotifyChannel() {
+async function submitNotifySettings() {
   const channel = document.getElementById('notifyChannel').value;
   try {
-    const result = await api('/api/monitoring/notify-settings', { method: 'POST', body: { channel } });
+    const result = await api('/api/monitoring/notify-settings', { method: 'POST', body: { channel, prefs: readPrefs('pref') } });
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     showMsg('Saved.', 'success');
+    loadNotifySettings();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+async function submitNotifyChannel() { return submitNotifySettings(); }
+
+async function loadPersonPrefs() {
+  const id = document.getElementById('prefsPerson').value;
+  const box = document.getElementById('personPrefsBox');
+  if (!id) { box.style.display = 'none'; return; }
+  try {
+    const settings = await api(`/api/monitoring/notify-settings/${id}`);
+    document.getElementById('personPrefsTable').innerHTML = prefsTableHtml('pp', settings);
+    document.getElementById('personChannel').value = settings.notify_channel || 'email';
+    box.style.display = '';
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+async function submitPersonPrefs() {
+  const id = document.getElementById('prefsPerson').value;
+  if (!id) return;
+  try {
+    const result = await withStepUp(() => api(`/api/monitoring/notify-settings/${id}`, { method: 'POST', body: { channel: document.getElementById('personChannel').value, prefs: readPrefs('pp') } }));
+    if (!result.ok) { showMsg(result.error, 'error'); return; }
+    showMsg('Saved for that person.', 'success');
   } catch (e) {
     showMsg(e.message, 'error');
   }

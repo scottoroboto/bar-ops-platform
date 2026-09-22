@@ -333,6 +333,7 @@ function toCsv(rows) {
 }
 
 module.exports = {
+  notifyNewCall,
   listCalls, getCall, createCall, pendingCall, closeCall, requireServiceCallsAccess, toCsv,
   addNote, listDestinationsWithMembers, setDestinationMembers,
 };

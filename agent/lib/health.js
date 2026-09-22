@@ -71,11 +71,24 @@ function buildItems() {
   return items;
 }
 
+// The cloud answers every health push with the "attention" list -- TVs at
+// this bar that have been unreachable 3+ minutes inside TV hours and
+// aren't cleared (cloud patch_034). Cached so the staff page can read it
+// from the box without a cloud round-trip per refresh.
+function rememberAttention(list) {
+  cache.set('attention', Array.isArray(list) ? list : []);
+  cache.set('attentionAt', new Date().toISOString());
+}
+function getAttention() {
+  return cache.get('attention') || [];
+}
+
 async function reportOnce() {
   const items = buildItems();
   if (!items.length) return; // nothing pollable yet -- no TVs/sources with a control path configured
   try {
-    await sync.pushHealth(items);
+    const data = await sync.pushHealth(items);
+    if (data && Array.isArray(data.attention)) rememberAttention(data.attention);
   } catch (err) {
     console.error('[health] push failed (will retry next cycle):', err.message);
   }
@@ -96,4 +109,4 @@ function stop() {
   timer = null;
 }
 
-module.exports = { start, stop, reportOnce, buildItems };
+module.exports = { start, stop, reportOnce, buildItems, getAttention, rememberAttention };

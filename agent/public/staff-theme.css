@@ -229,6 +229,17 @@ body.staff {
 .staff .failure-banner .text { color: #FFD9D2; font-size: 13.5px; }
 .staff .failure-banner .actions { display: flex; gap: 8px; }
 
+/* "Check this TV" pop-up (cloud patch_034) -- sits above the two columns so it's
+   the first thing on the page while a TV is flagged; gone as soon as it isn't. */
+.staff .attention-card { margin: 12px 0 0; border: 2px solid var(--off-fg, #E5566D); background: var(--off-bg, #3a1a20); }
+.staff .attention-title { font-weight: 700; font-size: 16px; color: #FFD9D2; margin-bottom: 8px; }
+.staff .attention-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,0.12); }
+.staff .attention-tv { font-size: 14px; }
+.staff .attention-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.staff .attention-actions button, .staff .attention-menu button { min-height: 40px; }
+.staff .attention-menu { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-top: 6px; }
+.staff .attention-flash { margin-top: 12px; padding: 10px 14px; border-radius: 10px; background: rgba(255,255,255,0.12); font-size: 13.5px; }
+
 /* Phone-narrow layout (docs/venue-control-gui-reconciliation.md §3/§5: "no phone-narrow
    layout anywhere in the current UI"). These pages were built iPad-first (§0: "landscape-
    primary"); a phone held upright needs less padding and single-column grids rather than

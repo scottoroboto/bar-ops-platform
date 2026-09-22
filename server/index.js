@@ -31,6 +31,17 @@ function pickLocation(person, requested) {
 function atMyLocation(person, locationId) {
   return person.role === 'owner' || locationIdsOf(person).includes(String(locationId));
 }
+// Owner: anyone. Manager: someone at one of their bars.
+async function canManagePerson(viewer, personId) {
+  if (viewer.role === 'owner') return true;
+  const mine = locationIdsOf(viewer);
+  if (!mine.length) return false;
+  const { rows } = await withServiceClient((c) => c.query(
+    `SELECT 1 FROM people p WHERE p.id = $1 AND (p.location_id = ANY($2::uuid[]) OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.person_id = p.id AND el.location_id = ANY($2::uuid[])))`,
+    [personId, mine]
+  ));
+  return rows.length > 0;
+}
 
 const app = express();
 app.use(cors());
@@ -895,6 +906,21 @@ app.post('/api/venue/agent/health', requireAgentAuth(), async (req, res) => {
 const items = Array.isArray(req.body.items) ? req.body.items : [];
 try {
 const result = await monitoring.reportAvHealth({ locationId: req.vcSite.location_id, items });
+
+// The bar's iPad (patch_034): what to show, and the three buttons.
+app.get('/api/venue/agent/attention', requireAgentAuth(), async (req, res) => {
+res.json({ ok: true, attention: await withServiceClient((svc) => monitoring.getAttention(svc, req.vcSite.location_id)) });
+});
+app.post('/api/venue/agent/alerts/:systemId/clear', requireAgentAuth(), async (req, res) => {
+const result = await monitoring.agentClear({ locationId: req.vcSite.location_id, systemId: req.params.systemId, duration: req.body.duration });
+if (!result.ok) return res.status(400).json(result);
+res.json(result);
+});
+app.post('/api/venue/agent/alerts/:systemId/service-call', requireAgentAuth(), async (req, res) => {
+const result = await monitoring.agentServiceCall({ locationId: req.vcSite.location_id, systemId: req.params.systemId });
+if (!result.ok) return res.status(400).json(result);
+res.json(result);
+});
 res.json(result);
 } catch (err) {
 console.error('[venue-control] health push failed', err);
@@ -2590,8 +2616,25 @@ app.get('/api/monitoring/notify-settings', auth.requireSession('light'), async (
   res.json(await monitoring.getNotifySettings(req.person.id));
 });
 app.post('/api/monitoring/notify-settings', auth.requireSession('light'), async (req, res) => {
-  const result = await monitoring.setNotifyChannel(req.person.id, req.body.channel);
-  res.json(result);
+  res.json(await monitoring.setNotifySettings(req.person.id, { channel: req.body.channel, prefs: req.body.prefs }));
+});
+// Managers/owner can set anyone's (patch_034: "a granular notification
+// option for every employee"). Managers only for people at their bars.
+app.get('/api/monitoring/notify-settings/:personId', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  if (!(await canManagePerson(req.person, req.params.personId))) return res.status(404).json({ error: 'Not found.' });
+  res.json(await monitoring.getNotifySettings(req.params.personId));
+});
+app.post('/api/monitoring/notify-settings/:personId', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  if (!(await canManagePerson(req.person, req.params.personId))) return res.status(404).json({ error: 'Not found.' });
+  res.json(await monitoring.setNotifySettings(req.params.personId, { channel: req.body.channel, prefs: req.body.prefs }));
+});
+// TV hours per location — when a dark TV is worth flagging at all.
+app.post('/api/monitoring/locations/:id/av-hours', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  if (!atMyLocation(req.person, req.params.id)) return res.status(403).json({ error: 'Not one of your locations.' });
+  res.json(await monitoring.setAvHours({ locationId: req.params.id, start: req.body.start, end: req.body.end }));
 });
 
 // Alert routing admin — "notify this person about this category at this
@@ -3717,4 +3760,12 @@ if (n > 0) console.log(`Auto clocked out ${n} stale shift(s).`);
 // even with an empty registry.
 setInterval(() => {
 monitoring.pollUnifiSystems().catch((err) => console.error('[monitoring] poll cycle error', err));
+}, 60 * 1000);
+
+// The 6am (bar time) daily summary — patch_034. Checked every minute;
+// monitoring_summary_runs makes it once per day however often this fires
+// or however many times the server restarts.
+setInterval(() => {
+monitoring.runDailySummaryIfDue().then((r) => { if (r.ran) console.log(`[monitoring] daily summary sent to ${r.sent} people`); })
+.catch((err) => console.error('[monitoring] daily summary error', err));
 }, 60 * 1000);

@@ -82,6 +82,56 @@ app.use('/api/favorites', requireStaffPin);
 app.use('/api/tvs', requireStaffPin);
 app.use('/api/zones', requireStaffPin);
 app.use('/api/layouts', requireStaffPin);
+app.use('/api/attention', requireStaffPin);
+
+// ---------------- Attention: TVs the bar should look at (cloud patch_034) ----------------
+// The cloud flags a TV that has been unreachable 3+ minutes inside TV
+// hours; the staff TVs page shows it with three buttons. Turn On is the
+// same power-on as the TV Remote, followed by an immediate health push so
+// the cloud clears the flag as soon as the set answers. Clear and Service
+// call are relayed to the cloud with the site token; the cloud replies
+// with the refreshed list, which we cache and hand straight back.
+app.get('/api/attention', (req, res) => {
+  res.json({ attention: health.getAttention(), at: cache.get('attentionAt') || null });
+});
+app.post('/api/attention/:systemId/turn-on', async (req, res) => {
+  const item = health.getAttention().find((a) => String(a.systemId) === String(req.params.systemId));
+  if (!item) return res.status(404).json({ error: 'That TV is no longer flagged.' });
+  let tv;
+  try { tv = findTv(item.tvId); } catch (err) { return res.status(400).json({ error: err.message }); }
+  const result = await samsungWs.setPower(tv, 'on');
+  maybeReportToken(tv, result);
+  const live = await tvPoller.pollNow(tv.id).catch(() => null);
+  activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { state: 'on', via: 'attention' }, result: result.ok ? 'ok' : 'failed' });
+  await health.reportOnce().catch(() => {});
+  res.json({ ok: result.ok, state: result.state, method: result.method, live, attention: health.getAttention() });
+});
+function attentionTvId(systemId) {
+  const item = health.getAttention().find((a) => String(a.systemId) === String(systemId));
+  return item ? item.tvId : null;
+}
+app.post('/api/attention/:systemId/clear', async (req, res) => {
+  const tvId = attentionTvId(req.params.systemId);
+  try {
+    const data = await sync.clearAlert(req.params.systemId, req.body.duration);
+    if (Array.isArray(data.attention)) health.rememberAttention(data.attention);
+    activity.record('tv.alert_clear', { actor: req.vcActor, targetType: 'tv', targetId: tvId, detail: { duration: req.body.duration }, result: 'ok' });
+    res.json({ ok: true, silencedUntil: data.silencedUntil, attention: health.getAttention() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post('/api/attention/:systemId/service-call', async (req, res) => {
+  const tvId = attentionTvId(req.params.systemId);
+  try {
+    const data = await sync.serviceCall(req.params.systemId);
+    if (Array.isArray(data.attention)) health.rememberAttention(data.attention);
+    activity.record('tv.service_call', { actor: req.vcActor, targetType: 'tv', targetId: tvId, detail: { serviceCallId: data.serviceCallId }, result: 'ok' });
+    res.json({ ok: true, serviceCallId: data.serviceCallId, already: !!data.already, attention: health.getAttention() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // ---------------- Discovery & Diagnostics (Phase 1, docs/venue-control.md §9) ----------------
 // Owner/admin only per §9's own opening line -- gated by the same admin PIN

@@ -10,6 +10,9 @@ let ZONES = [];
 let SOURCES = [];
 let refreshTimer = null;
 let clockTimer = null;
+let ATTENTION = [];           // TVs the cloud wants us to look at (cloud patch_034)
+let ATTENTION_BUSY = {};      // systemId -> 'on' | 'clear' | 'call' while a button is working
+let ATTENTION_MENU = null;    // systemId whose Clear duration menu is open
 
 function submitPin() {
   STAFF_PIN = document.getElementById('pinInput').value;
@@ -21,6 +24,7 @@ function submitPin() {
     try { SOURCES = await api('/api/sources'); } catch (e) { SOURCES = []; }
     renderPage();
     fillSourceTitles();
+    refreshAttention();
     updateTopbarClock();
     if (clockTimer) clearInterval(clockTimer);
     clockTimer = setInterval(updateTopbarClock, 15000);
@@ -68,6 +72,114 @@ async function refreshAll() {
     // Transient failure -- leave the last-known state showing rather than
     // yanking the page out from under someone mid-tap.
   }
+  refreshAttention();
+}
+
+// ---------------------------------------------------------------------
+// "Check this TV" pop-up (cloud patch_034). The cloud flags a TV that has
+// been unreachable for 3+ minutes during TV hours; nobody gets an email
+// for it -- the bartender decides here. Turn On: try to wake it (the
+// flag clears itself once the set answers). Clear: quiet it for a while
+// (a broken TV waiting on a part can be cleared for days). Service call:
+// opens a Service Call for it and sends the TV alert to the people who
+// take them.
+// ---------------------------------------------------------------------
+async function refreshAttention() {
+  try {
+    const data = await api('/api/attention');
+    ATTENTION = Array.isArray(data.attention) ? data.attention : [];
+  } catch (e) {
+    return; // keep what we had
+  }
+  renderAttention();
+}
+
+const CLEAR_CHOICES = [['1h', '1 hour'], ['today', 'Rest of today'], ['3d', '3 days'], ['7d', '7 days'], ['forever', 'Until fixed']];
+
+function sinceText(iso) {
+  const mins = Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  return h < 24 ? `${h} hr${h === 1 ? '' : 's'}` : `${Math.floor(h / 24)} day${h >= 48 ? 's' : ''}`;
+}
+
+// Rendered into #attentionCard only, so a flash message in #attentionFlash
+// survives the re-render that follows every button press.
+function renderAttention() {
+  const box = document.getElementById('attentionCard');
+  if (!box) return;
+  if (!ATTENTION.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="card attention-card">
+    <div class="attention-title">${ATTENTION.length === 1 ? 'A TV isn\'t responding' : `${ATTENTION.length} TVs aren\'t responding`} — please check</div>
+    ${ATTENTION.map((a) => {
+      const busy = ATTENTION_BUSY[a.systemId];
+      const menuOpen = ATTENTION_MENU === a.systemId;
+      return `<div class="attention-row">
+        <div class="attention-tv"><b>${escapeHtml(a.name)}</b><span class="muted"> · not answering for ${sinceText(a.since)}${a.serviceCallId ? ' · service call open' : ''}</span></div>
+        <div class="attention-actions">
+          ${busy ? `<span class="muted">${busy === 'on' ? 'Turning on… (up to 30s)' : busy === 'clear' ? 'Clearing…' : 'Opening service call…'}</span>` : `
+          <button class="small" onclick="attentionTurnOn('${a.systemId}')">Turn On</button>
+          <button class="small" onclick="attentionClearMenu('${a.systemId}')">Clear…</button>
+          ${a.serviceCallId ? '' : `<button class="small danger" onclick="attentionServiceCall('${a.systemId}')">Service call</button>`}`}
+        </div>
+        ${menuOpen && !busy ? `<div class="attention-menu"><span class="muted">Quiet this TV for:</span> ${CLEAR_CHOICES.map(([d, l]) => `<button class="small" onclick="attentionClear('${a.systemId}','${d}')">${l}</button>`).join('')}</div>` : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function attentionClearMenu(systemId) {
+  ATTENTION_MENU = ATTENTION_MENU === systemId ? null : systemId;
+  renderAttention();
+}
+
+async function attentionTurnOn(systemId) {
+  ATTENTION_BUSY[systemId] = 'on'; renderAttention();
+  try {
+    const r = await api(`/api/attention/${systemId}/turn-on`, { method: 'POST', body: '{}' });
+    ATTENTION = r.attention || ATTENTION;
+    if (!r.ok) flashAttention(`Still not answering (${r.state || 'unreachable'}). Check the power and the cable, or open a service call.`);
+    await refreshAll();
+  } catch (e) {
+    flashAttention(e.message);
+  } finally {
+    delete ATTENTION_BUSY[systemId]; renderAttention();
+  }
+}
+
+async function attentionClear(systemId, duration) {
+  ATTENTION_BUSY[systemId] = 'clear'; ATTENTION_MENU = null; renderAttention();
+  try {
+    const r = await api(`/api/attention/${systemId}/clear`, { method: 'POST', body: JSON.stringify({ duration }) });
+    ATTENTION = r.attention || [];
+  } catch (e) {
+    flashAttention(e.message);
+  } finally {
+    delete ATTENTION_BUSY[systemId]; renderAttention();
+  }
+}
+
+async function attentionServiceCall(systemId) {
+  ATTENTION_BUSY[systemId] = 'call'; renderAttention();
+  try {
+    const r = await api(`/api/attention/${systemId}/service-call`, { method: 'POST', body: '{}' });
+    ATTENTION = r.attention || ATTENTION;
+    flashAttention(r.already ? 'A service call is already open for that TV.' : 'Service call opened — the right people have been notified.');
+  } catch (e) {
+    flashAttention(e.message);
+  } finally {
+    delete ATTENTION_BUSY[systemId]; renderAttention();
+  }
+}
+
+function flashAttention(text) {
+  const box = document.getElementById('attentionFlash');
+  if (!box) return;
+  const note = document.createElement('div');
+  note.className = 'attention-flash';
+  note.textContent = text;
+  box.replaceChildren(note);
+  setTimeout(() => { if (note.parentNode) note.remove(); }, 8000);
 }
 
 // ---------------------------------------------------------------------

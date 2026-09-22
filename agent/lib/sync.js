@@ -170,6 +170,33 @@ async function pushHealth(items) {
   return data;
 }
 
+// The bar's iPad flow (cloud patch_034): what the cloud wants the staff
+// page to show, and the Clear / Service call buttons. Turn On is local
+// (samsung-ws) and needs no cloud call -- the next health push closes the
+// alert on its own once the TV answers.
+async function pullAttention() {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/attention`, { headers: authHeaders() });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `attention pull failed: ${res.status}`);
+  return data.attention || [];
+}
+async function clearAlert(systemId, duration) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/alerts/${encodeURIComponent(systemId)}/clear`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ duration }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `clear failed: ${res.status}`);
+  return data;
+}
+async function serviceCall(systemId) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/alerts/${encodeURIComponent(systemId)}/service-call`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `service call failed: ${res.status}`);
+  return data;
+}
+
 // Batch push for lib/activity.js's queue -- see that file for what gets
 // queued and how often this fires.
 async function pushActivity(entries) {
@@ -292,6 +319,7 @@ function stop() {
 }
 
 module.exports = {
+  pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
   reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems,
   takeBackupNow, listBackups, restoreBackup, pushActivity, pushHealth,
