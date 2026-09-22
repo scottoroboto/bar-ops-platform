@@ -1028,10 +1028,32 @@ async function unifiProbe() {
       }
     }
   } catch (err) { out.errors.push(`devices: ${err.message}`); out.ok = false; }
+  // ISP metrics: Ubiquiti has moved this endpoint around (ea vs v1,
+  // duration vs begin/end). Try the known spellings in order and keep
+  // the first that returns samples; log each attempt's shape so a miss
+  // can be diagnosed from the logs alone.
+  out.ispAttempts = [];
+  let resp = null;
+  const end = new Date(); const begin = new Date(end.getTime() - 60 * 60 * 1000);
+  const attempts = [
+    `https://api.ui.com/ea/isp-metrics/5m?beginTimestamp=${encodeURIComponent(begin.toISOString())}&endTimestamp=${encodeURIComponent(end.toISOString())}`,
+    'https://api.ui.com/ea/isp-metrics/5m?duration=24h',
+    'https://api.ui.com/ea/isp-metrics/5m',
+    'https://api.ui.com/ea/isp-metrics/1h?duration=7d',
+    'https://api.ui.com/v1/isp-metrics/5m?duration=24h',
+  ];
+  for (const url of attempts) {
+    try {
+      const r = await unifiRequest(url);
+      const n = Array.isArray(r.data) ? r.data.length : (Array.isArray(r) ? r.length : 0);
+      out.ispAttempts.push({ url: url.replace(/\?.*/, '?…'), items: n, preview: JSON.stringify(r).slice(0, 300) });
+      if (n) { resp = r; break; }
+    } catch (err) {
+      out.ispAttempts.push({ url: url.replace(/\?.*/, '?…'), error: err.message.slice(0, 200) });
+    }
+  }
   try {
-    const end = new Date(); const begin = new Date(end.getTime() - 30 * 60 * 1000);
-    const resp = await unifiRequest(`https://api.ui.com/ea/isp-metrics/5m?beginTimestamp=${encodeURIComponent(begin.toISOString())}&endTimestamp=${encodeURIComponent(end.toISOString())}`);
-    const items = resp.data || [];
+    const items = resp ? (resp.data || resp) : [];
     for (const it of Array.isArray(items) ? items : []) {
       const hostId = it.hostId || it.host_id || null;
       const periods = it.periods || [];
@@ -1043,7 +1065,7 @@ async function unifiProbe() {
         rawLatest: last ? JSON.stringify(last).slice(0, 600) : null,
       });
     }
-    if (!out.isp.length) out.errors.push('isp-metrics: the API answered but returned no samples for the last 30 minutes (ISP metrics may take a while to appear after setup, or need the console\'s speed test enabled).');
+    if (!out.isp.length) out.errors.push('isp-metrics: no samples came back from any spelling of the endpoint (see attempts). ISP metrics need the console\'s periodic speed test enabled: UniFi Network → Settings → Internet → the WAN → Speed Test.');
   } catch (err) { out.errors.push(`isp-metrics: ${err.message}`); }
   return out;
 }
@@ -1056,6 +1078,7 @@ async function logUnifiProbe() {
   console.log(`[monitoring] UniFi check: ${p.hosts.length} console(s), ${p.devices.length} device(s), ${p.isp.length} ISP series${p.errors.length ? ' — ' + p.errors.join(' | ') : ''}`);
   for (const h of p.hosts) console.log(`[monitoring]   console ${h.name || '?'} id=${h.id} state=${h.state || '?'} ip=${h.ip || '?'}`);
   for (const d of p.devices) console.log(`[monitoring]   device ${d.name || '?'} model=${d.model || '?'} mac=${d.mac || '?'} id=${d.id || '?'} status=${d.status || '?'} -> ${d.raw} (${d.kind})`);
+  for (const a of p.ispAttempts || []) console.log(`[monitoring]   isp try ${a.url}: ${a.error ? 'error ' + a.error : a.items + ' item(s) ' + a.preview}`);
   for (const i of p.isp) console.log(`[monitoring]   isp host=${i.hostId} wans=${i.wanKeys.join(',') || 'none'} latest=${JSON.stringify(i.latest)}`);
 }
 
