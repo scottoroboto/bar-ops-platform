@@ -982,6 +982,13 @@ async function removeAlertRoute(routeId) {
 // and schedule before any key exists. Matches poll results back to
 // monitored_systems rows by external_ref (the UniFi device id).
 // ---------------------------------------------------------------------
+// UniFi reports a device id/MAC as bare upper-case hex ("74F92C5A5B1C");
+// people type it as "74:f9:2c:5a:5b:1c". Match on the digits alone.
+// (T1's two U7 Pros sat at "unknown" for this reason, 2026-09-22.)
+function deviceKey(v) {
+  return String(v || '').toLowerCase().replace(/[:\-\s.]/g, '');
+}
+
 async function pollUnifiSystems() {
   if (!unifiConfigured()) return;
 
@@ -1004,7 +1011,7 @@ async function pollUnifiSystems() {
       for (const g of groups) {
         const list = Array.isArray(g.devices) ? g.devices : (Array.isArray(g) ? g : [g]);
         for (const d of list) {
-          for (const key of [d.id, d.mac, d.deviceId]) if (key) devicesById.set(String(key).toLowerCase(), d);
+          for (const key of [d.id, d.mac, d.deviceId]) if (key) devicesById.set(deviceKey(key), d);
         }
       }
     } catch (err) {
@@ -1014,7 +1021,7 @@ async function pollUnifiSystems() {
     }
     if (devicesById.size) {
       for (const system of deviceSystems) {
-        const device = devicesById.get(String(system.external_ref).toLowerCase());
+        const device = devicesById.get(deviceKey(system.external_ref));
         const status = findDeviceStatus(device);
         await recordStatus({ systemId: system.id, status, detail: device || null }).catch((err) =>
           console.error(`[monitoring] recordStatus failed for ${system.name}`, err)
