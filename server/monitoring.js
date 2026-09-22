@@ -91,7 +91,7 @@ function wanConfig(system) {
   const c = (system && system.config) || {};
   return {
     hostId: c.hostId || c.host_id || null,
-    wan: String(c.wan || 'wan1').toLowerCase(),
+    wan: String(c.wan || 'wan').toLowerCase(), // 'wan' = whichever line UniFi reports as active
     parMbps: Number(c.par_mbps) > 0 ? Number(c.par_mbps) : null,
     warnPct: Number(c.warn_pct) > 0 ? Number(c.warn_pct) : DEFAULT_WARN_PCT,
   };
@@ -100,6 +100,9 @@ function wanConfig(system) {
 function speedStatus({ downloadMbps, parMbps, warnPct = DEFAULT_WARN_PCT, up = true }) {
   if (up === false) return { status: 'offline', pct: null };
   if (downloadMbps == null || !Number.isFinite(Number(downloadMbps))) return { status: 'unknown', pct: null };
+  // UniFi reports 0/0 when the console has never run a speed test — that's
+  // "no reading", not a dead-slow line (seen on the T1 UDM, 2026-09-22).
+  if (Number(downloadMbps) === 0) return { status: 'unknown', pct: null };
   if (!parMbps) return { status: 'online', pct: null }; // no par set yet: up is up
   const pct = Math.round((Number(downloadMbps) / parMbps) * 100);
   return { status: pct >= warnPct ? 'online' : 'warning', pct };

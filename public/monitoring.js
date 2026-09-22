@@ -242,7 +242,7 @@ function speedLineHtml(s) {
   const d = s.last_detail || {};
   const par = (s.config || {}).par_mbps || d.par_mbps;
   const warn = (s.config || {}).warn_pct || d.warn_pct || 70;
-  if (d.download_mbps == null) return `<div class="sys-speed muted">no speed reading yet${par ? ` · par ${par} Mbps, warn below ${warn}%` : ''}</div>`;
+  if (d.download_mbps == null || Number(d.download_mbps) === 0) return `<div class="sys-speed muted">no speed test yet — run one on the UDM${par ? ` · par ${par} Mbps, warn below ${warn}%` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''}</div>`;
   const pct = d.pct_of_par != null ? d.pct_of_par : (par ? Math.round(d.download_mbps / par * 100) : null);
   const m = statusMeta(s.last_status || 'unknown');
   return `<div class="sys-speed"><b style="color:${m.dot}">↓ ${d.download_mbps} Mbps</b>${d.upload_mbps != null ? ` · ↑ ${d.upload_mbps}` : ''}${pct != null ? ` · <b style="color:${m.dot}">${pct}%</b> of ${par} par (warn below ${warn}%)` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''}</div>`;
@@ -458,7 +458,7 @@ function renderAdd() {
       <input id="asExternalRef" placeholder="Leave blank until you have it">
       <div id="asWanFields" style="display:none;">
         <label for="asWan">Which line on the UDM</label>
-        <select id="asWan"><option value="wan1">WAN 1 (fiber)</option><option value="wan2">WAN 2 (cable)</option></select>
+        <select id="asWan"><option value="wan">The active line (what UniFi reports today)</option><option value="wan1">WAN 1 only (fiber)</option><option value="wan2">WAN 2 only (cable)</option></select>
         <label for="asPar">Expected speed, Mbps <span class="muted">("par" — 1000 for fiber, 300 for cable)</span></label>
         <input id="asPar" type="number" min="1" placeholder="1000">
         <label for="asWarnPct">Warn when below <span class="muted">(% of par)</span></label>
@@ -632,7 +632,7 @@ function editSystemRow(id) {
     <input id="es-serial-${id}" value="${escapeHtml(s.serial_number || '')}">
     ${s.kind === 'unifi_wan' ? `
     <label>Which line on the UDM</label>
-    <select id="es-wan-${id}"><option value="wan1" ${(s.config || {}).wan !== 'wan2' ? 'selected' : ''}>WAN 1 (fiber)</option><option value="wan2" ${(s.config || {}).wan === 'wan2' ? 'selected' : ''}>WAN 2 (cable)</option></select>
+    <select id="es-wan-${id}">${[['wan', 'The active line (what UniFi reports today)'], ['wan1', 'WAN 1 only (fiber)'], ['wan2', 'WAN 2 only (cable)']].map(([v, l]) => `<option value="${v}" ${((s.config || {}).wan || 'wan') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
     <label>Expected speed, Mbps (par)</label>
     <input id="es-par-${id}" type="number" min="1" value="${(s.config || {}).par_mbps || ''}">
     <label>Warn when below (% of par)</label>
