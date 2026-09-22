@@ -1027,8 +1027,11 @@ async function pollUnifiSystems() {
   if (wanSystems.length) {
     let metrics = null;
     try {
+      // UniFi publishes these 5-minute samples to the cloud roughly 45
+      // minutes late (seen 2026-09-22: newest sample 2:30 at 3:15), so look
+      // back six hours and take the newest.
       const end = new Date();
-      const begin = new Date(end.getTime() - 30 * 60 * 1000);
+      const begin = new Date(end.getTime() - 6 * 60 * 60 * 1000);
       metrics = await unifiRequest(`https://api.ui.com/ea/isp-metrics/5m?beginTimestamp=${encodeURIComponent(begin.toISOString())}&endTimestamp=${encodeURIComponent(end.toISOString())}`);
     } catch (err) {
       console.error('[monitoring] UniFi ISP metrics fetch failed', err.message);
@@ -1080,6 +1083,8 @@ async function unifiProbe() {
     for (const h of list) {
       const rs = h.reportedState || {};
       out.hosts.push({
+        rawKeys: Object.keys(rs), rawWans: rs.wans ? JSON.stringify(rs.wans).slice(0, 700) : null,
+        rawPreview: JSON.stringify(h).slice(0, 900),
         id: h.id || h.hostId, type: h.type || null, ip: h.ipAddress || rs.ip || null,
         name: rs.hostname || rs.name || (h.userData && h.userData.name) || null,
         state: rs.state || h.state || null,
@@ -1103,7 +1108,7 @@ async function unifiProbe() {
   // can be diagnosed from the logs alone.
   out.ispAttempts = [];
   let resp = null;
-  const end = new Date(); const begin = new Date(end.getTime() - 60 * 60 * 1000);
+  const end = new Date(); const begin = new Date(end.getTime() - 6 * 60 * 60 * 1000);
   const attempts = [
     `https://api.ui.com/ea/isp-metrics/5m?beginTimestamp=${encodeURIComponent(begin.toISOString())}&endTimestamp=${encodeURIComponent(end.toISOString())}`,
     'https://api.ui.com/ea/isp-metrics/5m?duration=24h',
@@ -1145,7 +1150,11 @@ async function logUnifiProbe() {
   if (!unifiConfigured()) { console.log('[monitoring] UniFi: no API key set — network polling off'); return; }
   const p = await unifiProbe();
   console.log(`[monitoring] UniFi check: ${p.hosts.length} console(s), ${p.devices.length} device(s), ${p.isp.length} ISP series${p.errors.length ? ' — ' + p.errors.join(' | ') : ''}`);
-  for (const h of p.hosts) console.log(`[monitoring]   console ${h.name || '?'} id=${h.id} state=${h.state || '?'} ip=${h.ip || '?'}`);
+  for (const h of p.hosts) {
+    console.log(`[monitoring]   console ${h.name || '?'} id=${h.id} state=${h.state || '?'} ip=${h.ip || '?'} keys=${(h.rawKeys || []).join(',')}`);
+    if (h.rawWans) console.log(`[monitoring]   console ${h.name || '?'} wans=${h.rawWans}`);
+    console.log(`[monitoring]   console ${h.name || '?'} raw=${h.rawPreview}`);
+  }
   for (const d of p.devices) console.log(`[monitoring]   device ${d.name || '?'} on ${d.hostName || d.hostId || '?'} model=${d.model || '?'} mac=${d.mac || '?'} status=${d.status || '?'} -> ${d.raw} (${d.kind})`);
   for (const a of p.ispAttempts || []) console.log(`[monitoring]   isp try ${a.url}: ${a.error ? 'error ' + a.error : a.items + ' item(s) ' + a.preview}`);
   for (const i of p.isp) console.log(`[monitoring]   isp host=${i.hostId} wans=${i.wanKeys.join(',') || 'none'} latest=${JSON.stringify(i.latest)}`);
