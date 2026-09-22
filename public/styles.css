@@ -173,36 +173,40 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
 /* Network board on Apps Home (Scotto's mockup): a colored bar tile with
    the line speed, then one chip per network device. Sized to sit above the
    app tiles on a phone without scrolling. */
-.netboard { display: flex; flex-direction: column; gap: 8px; margin: 10px auto 18px; width: min(100%, 860px); }
-.net-row { display: flex; gap: 8px; align-items: stretch; background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 6px; }
-.net-tile { display: flex; align-items: center; gap: 8px; min-width: 118px; padding: 6px 8px; border-radius: 9px; color: #fff; text-decoration: none; flex-shrink: 0; }
-.net-tile .code { font-size: 26px; font-weight: 900; font-style: italic; letter-spacing: -0.02em; text-shadow: 0 1px 0 rgba(0,0,0,0.35); }
-.net-tile .speeds { display: flex; flex-direction: column; gap: 1px; line-height: 1.1; }
+.netboard { display: flex; flex-direction: column; gap: 6px; margin: 10px auto 18px; width: min(100%, 860px); }
+/* Scotto's board (mockup 2026-09-22): a colored T1/T2/T3 tile with DOWN /
+   UP Mbps, then the bar's gear as small two-line chips in topology
+   columns. Sized to fit a phone with no sideways scroll — small on
+   purpose; pinch to zoom. */
+.net-row { display: flex; gap: 8px; align-items: stretch; background: #3a3d44; border: 1px solid #4a4e57; border-radius: 10px; padding: 5px; }
+.net-tile { display: flex; align-items: center; gap: 8px; width: 132px; padding: 4px 8px; border-radius: 7px; color: #fff; text-decoration: none; flex-shrink: 0; }
+.net-tile .code { font-family: "Barlow Condensed", "Arial Narrow", -apple-system, sans-serif; font-size: 40px; font-weight: 800; font-style: italic; line-height: 1; letter-spacing: -0.02em; text-shadow: 0 1px 0 rgba(0,0,0,0.35); }
+.net-tile .speeds { display: flex; flex-direction: column; gap: 2px; line-height: 1; font-family: "Barlow Condensed", "Arial Narrow", -apple-system, sans-serif; }
 .net-tile .spd { display: flex; flex-direction: column; }
-.net-tile .spd .k { font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; opacity: 0.85; }
-.net-tile .spd .v { font-size: 16px; font-weight: 800; }
-.net-tile .spd-note { font-size: 9.5px; font-weight: 600; opacity: 0.9; max-width: 92px; }
-.net-tile.online { background: #22a559; }
-.net-tile.warning { background: #d98a1e; }
-.net-tile.offline { background: #d8323f; }
-.net-tile.unknown { background: #4b5261; }
-/* Two rows, filled column by column, exactly like the mockup: the WAN
-   chips stack, then UDM, then the switches, then the WAPs. Scrolls
-   sideways on a phone if a bar has more gear than fits. */
-.net-chips { display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, auto); grid-auto-columns: max-content; gap: 4px 5px; align-content: center; flex: 1; min-width: 0; overflow-x: auto; padding: 2px 0; }
-.net-chip { display: inline-flex; align-items: center; justify-content: center; text-align: center; min-width: 40px; max-width: 64px; padding: 3px 4px; border-radius: 6px; border: 2px solid; font-size: 8.5px; font-weight: 800; line-height: 1.1; letter-spacing: 0.02em; background: #0c0e13; white-space: normal; }
-.net-chip.online { border-color: var(--success); color: #8fe5b7; }
-.net-chip.warning { border-color: var(--warn); color: #f0c265; }
-.net-chip.offline { border-color: var(--danger); color: #ff8a9a; }
-.net-chip.unknown { border-color: #4b5261; color: var(--muted); }
+.net-tile .spd .k { font-size: 9px; font-weight: 700; letter-spacing: 0.03em; opacity: 0.9; }
+.net-tile .spd .v { font-size: 19px; font-weight: 800; }
+.net-tile.online { background: #4caf3a; }
+.net-tile.warning { background: #e8931c; }
+.net-tile.offline { background: #e3242b; }
+.net-tile.unknown { background: #5b606b; }
+.net-chips { display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 44px)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 3px 4px; align-items: stretch; flex: 1; min-width: 0; }
+.net-chip { display: flex; align-items: center; justify-content: center; text-align: center; min-width: 0; padding: 2px 1px; border-radius: 6px; border: 2px solid; font-family: "Barlow Condensed", "Arial Narrow", -apple-system, sans-serif; font-style: italic; font-size: 11px; font-weight: 700; line-height: 1; letter-spacing: 0.01em; background: #23262c; color: #f4f4f4; overflow: hidden; }
+.net-chip.top { grid-row: 1; }
+.net-chip.bot { grid-row: 2; }
+.net-chip.mid { grid-row: 1 / span 2; align-self: center; height: 60%; }
+.net-chip.online { border-color: #4caf3a; }
+.net-chip.warning { border-color: #e8931c; }
+.net-chip.offline { border-color: #e3242b; }
+.net-chip.unknown { border-color: #6a6f7a; color: #b6bac3; }
 @media (max-width: 640px) {
-  .netboard { width: 100%; }
-  .net-row { padding: 5px; gap: 6px; }
-  .net-tile { min-width: 100px; gap: 5px; padding: 5px 6px; }
-  .net-tile .code { font-size: 22px; }
-  .net-tile .spd .v { font-size: 14px; }
-  .net-chips { gap: 3px; }
-  .net-chip { font-size: 7.5px; min-width: 34px; max-width: 56px; padding: 2px 3px; border-width: 1.5px; }
+  .netboard { width: 100%; gap: 5px; }
+  .net-row { padding: 4px; gap: 5px; }
+  .net-tile { width: 108px; gap: 5px; padding: 3px 5px; }
+  .net-tile .code { font-size: 32px; }
+  .net-tile .spd .k { font-size: 7.5px; }
+  .net-tile .spd .v { font-size: 15px; }
+  .net-chips { gap: 2px 2px; grid-template-columns: repeat(var(--cols, 1), minmax(0, 30px)); }
+  .net-chip { font-size: 8.5px; padding: 1px 0; border-width: 1.5px; border-radius: 4px; }
 }
 
 .critsys-widget { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 4px 14px; margin: 12px auto 20px; width: 64%; }

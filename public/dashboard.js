@@ -57,23 +57,52 @@ function tileHtml({ href, icon, label, note, count, disabled, external }) {
 // its own color. Colors: green good, orange trouble but working, red
 // bad, grey nothing reported.
 function chipLabel(name) {
-  // "SW48 PoE" -> two short lines like the mockup; long names wrap on
-  // their own, this just gives the common ones a tidy split.
-  return escapeHtml(String(name || '').toUpperCase());
+  // Scotto's letters, as typed ("UDM Pro", "SW48 PoE"), on two lines.
+  return String(name || '').split(' ').map(escapeHtml).join('<br>');
+}
+// Scotto's topology layout (mockup 2026-09-22), as columns of up to two
+// chips, left to right:
+//   [ –, CABLE WAN ] [ FIBER WAN, CELL WAN ] [ UDM Pro ] [ USW AGG ]
+//   [ first switch, MRKI SW ] [ next switch ] … [ WAP 1, WAP 2 ] …
+// A one-chip column sits centered (UDM, AGG) unless it is an extra
+// switch, which stays on the top row like the mockup's SW48 POE2/3.
+function netColumns(devices) {
+  const of = (...kinds) => devices.filter(d => kinds.includes(d.kind));
+  const cols = [];
+  const cable = of('cable_wan')[0], fiber = of('unifi_wan', 'fiber_wan')[0], cell = of('cell_wan')[0];
+  if (cable) cols.push({ top: null, bottom: cable });
+  if (fiber || cell) cols.push({ top: fiber || null, bottom: cell || null });
+  for (const gw of of('unifi_gateway')) cols.push({ span: gw });
+  for (const agg of of('unifi_agg')) cols.push({ span: agg });
+  const switches = of('unifi_switch'), merakis = of('meraki_switch');
+  switches.forEach((sw, i) => cols.push(i === 0 ? { top: sw, bottom: merakis[0] || null } : { top: sw, bottom: null }));
+  if (!switches.length && merakis[0]) cols.push({ top: null, bottom: merakis[0] });
+  for (const m of merakis.slice(1)) cols.push({ top: null, bottom: m });
+  const aps = of('unifi_ap');
+  for (let i = 0; i < aps.length; i += 2) cols.push({ top: aps[i], bottom: aps[i + 1] || null });
+  return cols;
+}
+function chipHtml(d, r, place, col) {
+  if (!d) return '';
+  const why = d.status === 'online' ? 'good' : d.status === 'warning' ? 'trouble but working' : d.status === 'offline' ? 'down'
+    : (r.cascade && d.kind !== 'unifi_gateway') ? 'unknown — the UDM is down' : 'nothing reported';
+  return `<span class="net-chip ${d.status} ${place}" style="grid-column:${col}" title="${escapeHtml(d.name)}: ${why}${d.silenced ? ' (silenced)' : ''}">${chipLabel(d.name)}</span>`;
 }
 function netRowHtml(r) {
-  const spd = r.speed
-    ? `<div class="spd"><span class="k">DOWN Mbps</span><span class="v">${Number(r.speed.down).toFixed(1)}</span></div>
-       <div class="spd"><span class="k">UP Mbps</span><span class="v">${r.speed.up != null ? Number(r.speed.up).toFixed(1) : '—'}</span></div>
-       ${r.speed.stale ? '<div class="spd-note">last test over a day ago</div>' : ''}`
-    : `<div class="spd-note">${r.devices.length ? 'no speed test yet' : 'nothing registered'}</div>`;
-  const chips = r.devices.map(d => `<span class="net-chip ${d.status}" title="${escapeHtml(d.name)}: ${d.status === 'online' ? 'good' : d.status === 'warning' ? 'trouble but working' : d.status === 'offline' ? 'down' : (r.cascade && d.kind !== 'unifi_gateway') ? 'unknown — the UDM is down' : 'nothing reported'}${d.silenced ? ' (silenced)' : ''}">${chipLabel(d.name)}</span>`).join('');
+  const num = (v) => (v == null ? 'NA' : Number(v).toFixed(1));
+  const spd = `<div class="spd"><span class="k">DOWN Mbps</span><span class="v">${r.speed ? num(r.speed.down) : 'NA'}</span></div>
+       <div class="spd"><span class="k">UP Mbps</span><span class="v">${r.speed ? num(r.speed.up) : 'NA'}</span></div>`;
+  const cols = netColumns(r.devices);
+  const chips = cols.map((c, i) => c.span
+    ? chipHtml(c.span, r, 'mid', i + 1)
+    : chipHtml(c.top, r, 'top', i + 1) + chipHtml(c.bottom, r, 'bot', i + 1)).join('');
+  const tip = r.speed && r.speed.stale ? ' (last speed test over a day ago)' : '';
   return `<div class="net-row">
-    <a class="net-tile ${r.status}" href="/monitoring.html" title="${escapeHtml(r.locationName)} — open Systems Monitoring">
+    <a class="net-tile ${r.status}" href="/monitoring.html" title="${escapeHtml(r.locationName)}${tip} — open Systems Monitoring">
       <span class="code">${escapeHtml(shortLoc(r.locationName))}</span>
       <span class="speeds">${spd}</span>
     </a>
-    <div class="net-chips">${chips || '<span class="muted" style="font-size:12px;">Register this bar\'s gear under Systems Monitoring → Add / Manage.</span>'}</div>
+    <div class="net-chips" style="--cols:${cols.length || 1}">${chips || '<span class="muted" style="font-size:11px;">Register this bar\'s gear under Systems Monitoring → Add / Manage.</span>'}</div>
   </div>`;
 }
 

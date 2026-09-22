@@ -268,7 +268,11 @@ async function getCriticalSystemsStatus(client, locationIds) {
 // Speed comes from the bar's unifi_wan line (the active line UniFi
 // reports); older than 26 hours = stale (the UDM's speed test runs daily).
 // ---------------------------------------------------------------------
-const CORE_KINDS = new Set(['unifi_gateway', 'unifi_switch', 'unifi_wan']);
+const CORE_KINDS = new Set(['unifi_gateway', 'unifi_switch', 'unifi_agg', 'unifi_wan']);
+// The chips Scotto's board design has a place for (topology order, see
+// public/dashboard.js netColumns). Anything else registered under
+// 'network' still lives in Systems Monitoring, it just isn't a chip.
+const BOARD_KINDS = new Set(['cable_wan', 'fiber_wan', 'unifi_wan', 'cell_wan', 'unifi_gateway', 'unifi_agg', 'unifi_switch', 'meraki_switch', 'unifi_ap']);
 
 function barStatusFrom(devices) {
   const reporting = devices.filter((d) => d.status !== 'unknown');
@@ -294,7 +298,7 @@ async function getNetworkBoard(client, locationIds) {
   );
   const STALE_MS = 26 * 3600 * 1000;
   return locs.map((l) => {
-    const mine = rows.filter((r) => String(r.location_id) === String(l.id));
+    const mine = rows.filter((r) => String(r.location_id) === String(l.id) && BOARD_KINDS.has(r.kind));
     const gatewayDown = mine.some((r) => r.kind === 'unifi_gateway' && r.last_status === 'offline');
     const devices = mine.map((r) => {
       let status = ['online', 'warning', 'offline'].includes(r.last_status) ? r.last_status : 'unknown';
