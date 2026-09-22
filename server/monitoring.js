@@ -1146,7 +1146,7 @@ async function logUnifiProbe() {
   const p = await unifiProbe();
   console.log(`[monitoring] UniFi check: ${p.hosts.length} console(s), ${p.devices.length} device(s), ${p.isp.length} ISP series${p.errors.length ? ' — ' + p.errors.join(' | ') : ''}`);
   for (const h of p.hosts) console.log(`[monitoring]   console ${h.name || '?'} id=${h.id} state=${h.state || '?'} ip=${h.ip || '?'}`);
-  for (const d of p.devices) console.log(`[monitoring]   device ${d.name || '?'} model=${d.model || '?'} mac=${d.mac || '?'} id=${d.id || '?'} status=${d.status || '?'} -> ${d.raw} (${d.kind})`);
+  for (const d of p.devices) console.log(`[monitoring]   device ${d.name || '?'} on ${d.hostName || d.hostId || '?'} model=${d.model || '?'} mac=${d.mac || '?'} status=${d.status || '?'} -> ${d.raw} (${d.kind})`);
   for (const a of p.ispAttempts || []) console.log(`[monitoring]   isp try ${a.url}: ${a.error ? 'error ' + a.error : a.items + ' item(s) ' + a.preview}`);
   for (const i of p.isp) console.log(`[monitoring]   isp host=${i.hostId} wans=${i.wanKeys.join(',') || 'none'} latest=${JSON.stringify(i.latest)}`);
 }

@@ -195,7 +195,15 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
 .net-chip.warning { border-color: var(--warn); color: #f0c265; }
 .net-chip.offline { border-color: var(--danger); color: #ff8a9a; }
 .net-chip.unknown { border-color: #4b5261; color: var(--muted); }
-@media (max-width: 640px) { .netboard { width: 100%; } .net-tile { min-width: 108px; gap: 6px; } .net-tile .code { font-size: 24px; } }
+@media (max-width: 640px) {
+  .netboard { width: 100%; }
+  .net-row { padding: 5px; gap: 6px; }
+  .net-tile { min-width: 100px; gap: 5px; padding: 5px 6px; }
+  .net-tile .code { font-size: 22px; }
+  .net-tile .spd .v { font-size: 14px; }
+  .net-chips { gap: 3px; }
+  .net-chip { font-size: 7.5px; min-width: 34px; max-width: 56px; padding: 2px 3px; border-width: 1.5px; }
+}
 
 .critsys-widget { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 4px 14px; margin: 12px auto 20px; width: 64%; }
 .critsys-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--card-border); gap: 10px; }
