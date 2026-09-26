@@ -242,6 +242,13 @@ async function runCommand(cmd) {
       const run = await discovery.runScan({ ranges, deep: !!payload.deep });
       result = { localRunId: run.id, cloudRunId: run.cloud_run_id, deviceCount: run.devices.length, synced: run.synced };
       if (!run.synced) throw new Error(`Scan completed locally but failed to sync to the cloud: ${run.sync_error || 'unknown error'}. It will show up once resynced.`);
+    } else if (cmd.type === 'speedtest') {
+      // "Test now" from Systems Monitoring. Same run-and-report as the
+      // scheduled test; the cloud files the numbers on the bar's line.
+      const speedtest = require('./speedtest'); // required here, not at the top: speedtest -> config/unifi-local/cache only, no cycle
+      const r = await speedtest.runOnce({ run: true });
+      if (!r) throw new Error('This box has no gateway login set (UNIFI_URL/UNIFI_USER/UNIFI_PASS in agent/.env).');
+      result = { downloadMbps: r.downloadMbps, uploadMbps: r.uploadMbps, latencyMs: r.latencyMs, measuredAt: r.lastRun ? r.lastRun.toISOString() : new Date().toISOString() };
     } else {
       throw new Error(`Unknown command type "${cmd.type}" -- this agent build doesn't know how to run it.`);
     }

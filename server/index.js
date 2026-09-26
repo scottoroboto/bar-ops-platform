@@ -2716,6 +2716,54 @@ app.post('/api/monitoring/systems/:id/silence', auth.requireSession('full'), asy
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   res.json(await monitoring.setSilence({ systemId: req.params.id, duration: req.body.duration, by: req.person.id }));
 });
+// "Test now" on a line's tile (Scotto, 2026-09-26): queues a speedtest
+// command for the bar's box, which runs the gateway's test and reports
+// the result the same way its scheduled tests do. Same audience as the
+// Monitoring page itself. A test floods the line for ~20s, so the page
+// confirms first.
+async function canSeeMonitoring(req) {
+  if (req.person.role === 'manager' || req.person.role === 'owner') return true;
+  return req.withAuthedClient((client) => monitoring.requireMonitoringAccess(client, req.person.id));
+}
+app.post('/api/monitoring/systems/:id/speedtest', auth.requireSession('light'), async (req, res) => {
+  if (!(await canSeeMonitoring(req))) return res.status(403).json({ error: 'Systems Monitoring isn’t turned on for your account.' });
+  const out = await withServiceClient(async (client) => {
+    const { rows: sys } = await client.query(`SELECT id, location_id, name, kind FROM monitored_systems WHERE id = $1 AND active = true`, [req.params.id]);
+    if (!sys[0]) return { status: 404, body: { error: 'Line not found.' } };
+    if (sys[0].kind !== 'unifi_wan') return { status: 400, body: { error: 'Only an internet line can be speed-tested.' } };
+    if (req.person.role !== 'owner' && !locationIdsOf(req.person).includes(sys[0].location_id)) return { status: 403, body: { error: 'Not your bar.' } };
+    const { rows: sites } = await client.query(`SELECT id, enabled, agent_token_hash IS NOT NULL AS has_token FROM vc_sites WHERE location_id = $1`, [sys[0].location_id]);
+    const site = sites[0];
+    if (!site || !site.enabled || !site.has_token) return { status: 400, body: { error: 'This bar has no box to run the test — the speed test runs on the Venue Control box at the bar.' } };
+    // A test the box never finished (it rebooted mid-run, or the page
+    // polled a command claimed by a box that has since died) shouldn't
+    // block the button forever: anything in flight for over ten minutes
+    // is written off as abandoned and a fresh one is queued.
+    await client.query(
+      `UPDATE vc_agent_commands SET status = 'error', error = 'Abandoned — the box never reported back.', finished_at = now()
+        WHERE site_id = $1 AND type = 'speedtest' AND status IN ('pending','running') AND created_at < now() - interval '10 minutes'`, [site.id]
+    );
+    const { rows: existing } = await client.query(
+      `SELECT * FROM vc_agent_commands WHERE site_id = $1 AND type = 'speedtest' AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1`, [site.id]
+    );
+    if (existing[0]) return { status: 200, body: { ok: true, commandId: existing[0].id, status: existing[0].status, already: true } };
+    const { rows } = await client.query(
+      `INSERT INTO vc_agent_commands (site_id, type, payload, created_by) VALUES ($1, 'speedtest', $2, $3) RETURNING *`,
+      [site.id, JSON.stringify({ systemId: sys[0].id }), req.person.name || req.person.username || null]
+    );
+    return { status: 200, body: { ok: true, commandId: rows[0].id, status: rows[0].status } };
+  });
+  res.status(out.status).json(out.body);
+});
+app.get('/api/monitoring/speedtest/:commandId', auth.requireSession('light'), async (req, res) => {
+  if (!(await canSeeMonitoring(req))) return res.status(403).json({ error: 'Systems Monitoring isn’t turned on for your account.' });
+  const { rows } = await withServiceClient((client) => client.query(
+    `SELECT id, status, result, error, created_at, picked_up_at, finished_at FROM vc_agent_commands WHERE id = $1 AND type = 'speedtest'`, [req.params.commandId]
+  ));
+  if (!rows[0]) return res.status(404).json({ error: 'Not found.' });
+  res.json({ ok: true, command: rows[0] });
+});
+
 app.post('/api/monitoring/silence-group', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   res.json(await monitoring.setGroupSilence({ locationId: req.body.locationId, category: req.body.category, duration: req.body.duration, by: req.person.id }));

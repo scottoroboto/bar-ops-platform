@@ -242,10 +242,52 @@ function speedLineHtml(s) {
   const d = s.last_detail || {};
   const par = (s.config || {}).par_mbps || d.par_mbps;
   const warn = (s.config || {}).warn_pct || d.warn_pct || 70;
-  if (d.download_mbps == null || Number(d.download_mbps) === 0) return `<div class="sys-speed muted">no speed test yet${par ? ` · par ${par} Mbps, warn below ${warn}%` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''}</div>`;
+  const testBtn = `<button class="small ghost sys-testnow" id="testnow-${s.id}" onclick="event.stopPropagation(); runSpeedTest('${s.id}')" title="Runs the gateway's speed test from the bar's box — floods the line for about 20 seconds">Test now</button>`;
+  if (d.download_mbps == null || Number(d.download_mbps) === 0) return `<div class="sys-speed muted">no speed test yet${par ? ` · par ${par} Mbps, warn below ${warn}%` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''} ${testBtn}</div>`;
   const pct = d.pct_of_par != null ? d.pct_of_par : (par ? Math.round(d.download_mbps / par * 100) : null);
   const m = statusMeta(s.last_status || 'unknown');
-  return `<div class="sys-speed"><b style="color:${m.dot}">↓ ${d.download_mbps} Mbps</b>${d.upload_mbps != null ? ` · ↑ ${d.upload_mbps}` : ''}${pct != null ? ` · <b style="color:${m.dot}">${pct}%</b> of ${par} par (warn below ${warn}%)` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''}</div>`;
+  const when = d.measured_at ? ` · tested ${relTime(d.measured_at)}` : '';
+  return `<div class="sys-speed"><b style="color:${m.dot}">↓ ${d.download_mbps} Mbps</b>${d.upload_mbps != null ? ` · ↑ ${d.upload_mbps}` : ''}${pct != null ? ` · <b style="color:${m.dot}">${pct}%</b> of ${par} par (warn below ${warn}%)` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''}${when} ${testBtn}</div>`;
+}
+
+// "Test now" (Scotto, 2026-09-26): the bar's box runs the gateway's speed
+// test and reports it; this waits on the command and refreshes the tile.
+let SPEEDTEST_TIMER = null;
+async function runSpeedTest(systemId) {
+  if (!confirm('Run a speed test now? It floods the internet line for about 20 seconds, so every stream in the bar may stutter once.')) return;
+  const btn = document.getElementById(`testnow-${systemId}`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+  let commandId;
+  try {
+    const r = await api(`/api/monitoring/systems/${systemId}/speedtest`, { method: 'POST' });
+    commandId = r.commandId;
+  } catch (e) {
+    showMsg(e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Test now'; }
+    return;
+  }
+  const started = Date.now();
+  const poll = async () => {
+    const secs = Math.round((Date.now() - started) / 1000);
+    let cmd;
+    try { cmd = (await api(`/api/monitoring/speedtest/${commandId}`)).command; }
+    catch (e) { showMsg(e.message, 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Test now'; } return; }
+    if (cmd.status === 'pending') { if (btn) btn.textContent = `Waiting for the box… ${secs}s`; }
+    else if (cmd.status === 'running') { if (btn) btn.textContent = `Testing… ${secs}s`; }
+    else if (cmd.status === 'done') {
+      const r = cmd.result || {};
+      showMsg(`Speed test done: ${r.downloadMbps} Mbps down, ${r.uploadMbps} Mbps up, ${r.latencyMs} ms.`, 'success');
+      await loadStatus();
+      return;
+    } else {
+      showMsg(cmd.error || 'The speed test failed.', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Test now'; }
+      return;
+    }
+    if (secs > 240) { showMsg('The box hasn’t answered in four minutes. Check it is online under TV Admin → Sites.', 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Test now'; } return; }
+    SPEEDTEST_TIMER = setTimeout(poll, 3000);
+  };
+  poll();
 }
 
 // TVs are handled at the bar first (patch_034): say where a down TV
