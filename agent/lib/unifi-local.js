@@ -68,10 +68,39 @@ async function authed(method, path, body) {
 
 const site = () => config.UNIFI_SITE || 'default';
 
-// The WAN row of /stat/health carries the gateway's last speed test:
-// xput_down / xput_up in Mbps, speedtest_ping in ms, speedtest_lastrun
-// as epoch seconds, speedtest_status 'Idle' or 'Running'.
+// Where the gateway keeps its last speed test depends on the Network
+// version. Newer releases (10.x on Scotto's T1 UDM, 2026-09-26) put it on
+// the gateway's own device record as "speedtest-status" {xput_download,
+// xput_upload, latency, rundate}; older ones put it on the WAN row of
+// /stat/health as xput_down/xput_up/speedtest_ping/speedtest_lastrun.
+// Try the device record first, then the health row.
+function isGateway(d) {
+  return d && (d.type === 'udm' || d.type === 'ugw' || d.type === 'uxg' || /udm|ucg|uxg|dream|gateway/i.test(`${d.model || ''} ${d.shortname || ''}`));
+}
+
+async function gatewayDevice() {
+  const res = await authed('GET', `/proxy/network/api/s/${site()}/stat/device`);
+  if (res.status !== 200) throw new Error(`UniFi device read failed (${res.status}).`);
+  return ((res.json && res.json.data) || []).find(isGateway) || null;
+}
+
 async function lastResult() {
+  const gw = await gatewayDevice();
+  const st = gw && gw['speedtest-status'];
+  if (st && (st.rundate || st.xput_download != null)) {
+    const running = st.status_summary != null ? Number(st.status_summary) === 1 : false;
+    return {
+      status: running ? 'Running' : 'Idle',
+      lastRun: st.rundate ? new Date(st.rundate * 1000) : null,
+      downloadMbps: typeof st.xput_download === 'number' ? st.xput_download : null,
+      uploadMbps: typeof st.xput_upload === 'number' ? st.xput_upload : null,
+      latencyMs: typeof st.latency === 'number' ? st.latency : null,
+      wanIp: (gw.wan1 && gw.wan1.ip) || null,
+      ispName: (gw.wan1 && gw.wan1.isp_name) || null,
+      mac: gw.mac || null,
+      via: 'device',
+    };
+  }
   const res = await authed('GET', `/proxy/network/api/s/${site()}/stat/health`);
   if (res.status !== 200) throw new Error(`UniFi health read failed (${res.status}).`);
   const rows = (res.json && res.json.data) || [];
@@ -85,14 +114,24 @@ async function lastResult() {
     latencyMs: typeof wan.speedtest_ping === 'number' ? wan.speedtest_ping : null,
     wanIp: wan.wan_ip || null,
     ispName: wan.isp_name || null,
+    mac: gw ? gw.mac : null,
+    via: 'health',
   };
+}
+
+// For finding where a new Network version hides things: raw JSON of any path.
+async function raw(path) {
+  const res = await authed('GET', path);
+  return { status: res.status, json: res.json, text: res.json ? undefined : res.text.slice(0, 2000) };
 }
 
 // Starts a test and waits for a newer result (tests take 20-60 seconds).
 async function runSpeedTest({ waitMs = 120 * 1000 } = {}) {
   const before = await lastResult();
   const beforeRun = before && before.lastRun ? before.lastRun.getTime() : 0;
-  const res = await authed('POST', `/proxy/network/api/s/${site()}/cmd/devmgr`, { cmd: 'speedtest' });
+  // Newer versions want the gateway's MAC on the command; older ones ignore it.
+  const body = { cmd: 'speedtest', ...(before && before.mac ? { mac: before.mac } : {}) };
+  const res = await authed('POST', `/proxy/network/api/s/${site()}/cmd/devmgr`, body);
   if (res.status !== 200) throw new Error(`UniFi speed test refused (${res.status}): ${(res.json && res.json.meta && res.json.meta.msg) || res.text.slice(0, 120)}`);
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
@@ -104,4 +143,4 @@ async function runSpeedTest({ waitMs = 120 * 1000 } = {}) {
   throw new Error('UniFi speed test did not finish in time.');
 }
 
-module.exports = { configured, lastResult, runSpeedTest, login };
+module.exports = { configured, lastResult, runSpeedTest, login, raw, gatewayDevice };
