@@ -986,6 +986,85 @@ async function removeAlertRoute(routeId) {
 // and schedule before any key exists. Matches poll results back to
 // monitored_systems rows by external_ref (the UniFi device id).
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// Speed tests run by the bar's own box (agent/lib/speedtest.js, Scotto
+// 2026-09-26: the cloud's ISP metrics never carried a speed test for T1).
+// The box posts each result here; it lands on the bar's unifi_wan line as
+// config.agent_speed and as a status row, and the cloud poll below keeps
+// using it while it is under AGENT_SPEED_FRESH_MS old.
+// ---------------------------------------------------------------------
+const AGENT_SPEED_FRESH_MS = 26 * 3600 * 1000;
+
+function freshAgentSpeed(system) {
+  const a = system && system.config && system.config.agent_speed;
+  if (!a || a.download_mbps == null) return null;
+  const at = new Date(a.measured_at || a.reported_at || 0).getTime();
+  if (!at || Date.now() - at > AGENT_SPEED_FRESH_MS) return null;
+  return a;
+}
+
+function wanDetail(system, sample) {
+  const cfg = wanConfig(system);
+  const { status, pct } = sample
+    ? speedStatus({ downloadMbps: sample.downloadMbps, parMbps: cfg.parMbps, warnPct: cfg.warnPct, up: sample.up !== false })
+    : { status: 'unknown', pct: null };
+  return {
+    status,
+    detail: {
+      download_mbps: sample ? sample.downloadMbps : null,
+      upload_mbps: sample ? sample.uploadMbps : null,
+      latency_ms: sample ? sample.latencyMs : null,
+      packet_loss: sample ? (sample.packetLoss == null ? null : sample.packetLoss) : null,
+      par_mbps: cfg.parMbps, warn_pct: cfg.warnPct, pct_of_par: pct,
+      measured_at: sample ? sample.metricTime : null,
+      source: sample ? (sample.source || 'cloud') : null,
+    },
+  };
+}
+
+async function reportAgentSpeed({ locationId, downloadMbps, uploadMbps, latencyMs, measuredAt, ispName, wanIp, ran }) {
+  if (!locationId) return { ok: false, error: 'Missing location.' };
+  const down = Number(downloadMbps), up = Number(uploadMbps);
+  if (!Number.isFinite(down) || down < 0) return { ok: false, error: 'downloadMbps is required.' };
+  // Two steps on purpose: recordStatus opens its own connection, so the
+  // line row (possibly just created) has to be committed before it runs.
+  const found = await withServiceClient(async (svc) => {
+    let { rows } = await svc.query(
+      `SELECT * FROM monitored_systems WHERE location_id = $1 AND kind = 'unifi_wan' AND active = true ORDER BY sort_order, name LIMIT 1`,
+      [locationId]
+    );
+    if (!rows[0]) {
+      // A bar with a box but no line registered yet: make the line, so the
+      // board and the par check have somewhere to put the numbers.
+      ({ rows } = await svc.query(
+        `INSERT INTO monitored_systems (location_id, category, kind, name, config, sort_order)
+         VALUES ($1, 'network', 'unifi_wan', 'FIBER WAN', '{"wan":"wan"}'::jsonb, 1) RETURNING *`,
+        [locationId]
+      ));
+    }
+    const system = rows[0];
+    const at = measuredAt && !Number.isNaN(new Date(measuredAt).getTime()) ? new Date(measuredAt).toISOString() : new Date().toISOString();
+    const agent = {
+      download_mbps: Math.round(down * 10) / 10,
+      upload_mbps: Number.isFinite(up) ? Math.round(up * 10) / 10 : null,
+      latency_ms: Number.isFinite(Number(latencyMs)) ? Number(latencyMs) : null,
+      measured_at: at, reported_at: new Date().toISOString(),
+      isp_name: ispName || null, wan_ip: wanIp || null, ran: !!ran,
+    };
+    await svc.query(
+      `UPDATE monitored_systems SET config = COALESCE(config, '{}'::jsonb) || jsonb_build_object('agent_speed', $2::jsonb) WHERE id = $1`,
+      [system.id, JSON.stringify(agent)]
+    );
+    system.config = { ...(system.config || {}), agent_speed: agent };
+    return { system, agent, at };
+  });
+  const { system, agent, at } = found;
+  const sample = { downloadMbps: agent.download_mbps, uploadMbps: agent.upload_mbps, latencyMs: agent.latency_ms, packetLoss: null, metricTime: at, up: true, source: 'agent' };
+  const { status, detail } = wanDetail(system, sample);
+  await recordStatus({ systemId: system.id, status, detail });
+  return { ok: true, systemId: system.id, status, pctOfPar: detail.pct_of_par, parMbps: detail.par_mbps };
+}
+
 // UniFi reports a device id/MAC as bare upper-case hex ("74F92C5A5B1C");
 // people type it as "74:f9:2c:5a:5b:1c". Match on the digits alone.
 // (T1's two U7 Pros sat at "unknown" for this reason, 2026-09-22.)
@@ -1046,22 +1125,24 @@ async function pollUnifiSystems() {
       metrics = await unifiRequest(`https://api.ui.com/ea/isp-metrics/5m?beginTimestamp=${encodeURIComponent(begin.toISOString())}&endTimestamp=${encodeURIComponent(end.toISOString())}`);
     } catch (err) {
       console.error('[monitoring] UniFi ISP metrics fetch failed', err.message);
-      return;
+      metrics = null; // box-fed lines still get their status below
     }
     for (const system of wanSystems) {
       const cfg = wanConfig(system);
-      const sample = latestWanSample(metrics, cfg.hostId, cfg.wan);
-      const { status, pct } = sample
-        ? speedStatus({ downloadMbps: sample.downloadMbps, parMbps: cfg.parMbps, warnPct: cfg.warnPct, up: sample.up })
-        : { status: 'unknown', pct: null };
-      const detail = {
-        download_mbps: sample ? sample.downloadMbps : null,
-        upload_mbps: sample ? sample.uploadMbps : null,
-        latency_ms: sample ? sample.latencyMs : null,
-        packet_loss: sample ? sample.packetLoss : null,
-        par_mbps: cfg.parMbps, warn_pct: cfg.warnPct, pct_of_par: pct,
-        measured_at: sample ? sample.metricTime : null,
-      };
+      // The bar's box ran a test recently: that beats the cloud's hourly
+      // figure, which on T1 never carried a test at all. A line the cloud
+      // can't see (no hostId) only ever has the box's numbers.
+      const agent = freshAgentSpeed(system);
+      let sample;
+      if (agent) {
+        sample = { downloadMbps: agent.download_mbps, uploadMbps: agent.upload_mbps, latencyMs: agent.latency_ms, packetLoss: null, metricTime: agent.measured_at, up: true, source: 'agent' };
+      } else if (cfg.hostId) {
+        const cloud = latestWanSample(metrics, cfg.hostId, cfg.wan);
+        sample = cloud ? { ...cloud, source: 'cloud' } : null;
+      } else {
+        sample = null;
+      }
+      const { status, detail } = wanDetail(system, sample);
       await recordStatus({ systemId: system.id, status, detail }).catch((err) =>
         console.error(`[monitoring] recordStatus failed for ${system.name}`, err)
       );
@@ -1249,6 +1330,6 @@ module.exports = {
   getNotifySettings, setNotifyChannel,
   listAlertRoutes, addAlertRoute, removeAlertRoute,
   pollUnifiSystems, unifiConfigured,
-  reportAvHealth,
+  reportAvHealth, reportAgentSpeed, freshAgentSpeed,
   getCriticalSystemsStatus,
 };

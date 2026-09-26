@@ -242,7 +242,7 @@ function speedLineHtml(s) {
   const d = s.last_detail || {};
   const par = (s.config || {}).par_mbps || d.par_mbps;
   const warn = (s.config || {}).warn_pct || d.warn_pct || 70;
-  if (d.download_mbps == null || Number(d.download_mbps) === 0) return `<div class="sys-speed muted">no speed test yet — run one on the UDM${par ? ` · par ${par} Mbps, warn below ${warn}%` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''}</div>`;
+  if (d.download_mbps == null || Number(d.download_mbps) === 0) return `<div class="sys-speed muted">no speed test yet${par ? ` · par ${par} Mbps, warn below ${warn}%` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''}</div>`;
   const pct = d.pct_of_par != null ? d.pct_of_par : (par ? Math.round(d.download_mbps / par * 100) : null);
   const m = statusMeta(s.last_status || 'unknown');
   return `<div class="sys-speed"><b style="color:${m.dot}">↓ ${d.download_mbps} Mbps</b>${d.upload_mbps != null ? ` · ↑ ${d.upload_mbps}` : ''}${pct != null ? ` · <b style="color:${m.dot}">${pct}%</b> of ${par} par (warn below ${warn}%)` : ''}${d.latency_ms != null ? ` · ${d.latency_ms} ms` : ''}</div>`;

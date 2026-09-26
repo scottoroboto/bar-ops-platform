@@ -7,6 +7,13 @@ const AGENT_TOKEN = process.env.AGENT_TOKEN || '';
 const ADMIN_PIN = process.env.ADMIN_PIN || '';
 const STAFF_PIN = process.env.STAFF_PIN || '';
 const SMARTTHINGS_TOKEN = process.env.SMARTTHINGS_TOKEN || '';
+// The bar's Dream Machine, for speed tests (lib/unifi-local.js). A local-
+// only admin; blank = no speed tests from this box.
+const UNIFI_URL = (process.env.UNIFI_URL || '').replace(/\/$/, '');
+const UNIFI_USER = process.env.UNIFI_USER || '';
+const UNIFI_PASS = process.env.UNIFI_PASS || '';
+const UNIFI_SITE = process.env.UNIFI_SITE || 'default';
+const SPEEDTEST_EVERY_HOURS = Number(process.env.SPEEDTEST_EVERY_HOURS) || 6;
 const PORT = Number(process.env.PORT) || 8088;
 
 if (!AGENT_TOKEN) {
@@ -20,4 +27,4 @@ if (!AGENT_TOKEN) {
   );
 }
 
-module.exports = { CLOUD_URL, AGENT_TOKEN, ADMIN_PIN, STAFF_PIN, SMARTTHINGS_TOKEN, PORT };
+module.exports = { CLOUD_URL, AGENT_TOKEN, ADMIN_PIN, STAFF_PIN, SMARTTHINGS_TOKEN, PORT, UNIFI_URL, UNIFI_USER, UNIFI_PASS, UNIFI_SITE, SPEEDTEST_EVERY_HOURS };

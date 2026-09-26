@@ -11,6 +11,7 @@ const discovery = require('./lib/discovery');
 const poller = require('./lib/poller');
 const tvPoller = require('./lib/tv-poller');
 const health = require('./lib/health');
+const speedtest = require('./lib/speedtest');
 const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
 const activity = require('./lib/activity');
@@ -766,6 +767,7 @@ app.listen(config.PORT, () => {
   poller.start();
   tvPoller.start();
   health.start();
+  speedtest.start();
   scheduler.start();
   activity.start();
 });

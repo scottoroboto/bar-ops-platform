@@ -934,6 +934,18 @@ res.json(config);
 // lanIp is optional (older agents don't send it); when present it refreshes
 // the address the staff-links route hands out, so a box that changes
 // networks is findable again within one heartbeat instead of one restart.
+// The box's own gateway speed test (agent/lib/speedtest.js) — see
+// monitoring.reportAgentSpeed for where it lands.
+app.post('/api/venue/agent/speedtest', requireAgentAuth(), async (req, res) => {
+const b = req.body || {};
+const result = await monitoring.reportAgentSpeed({
+locationId: req.vcSite.location_id, downloadMbps: b.downloadMbps, uploadMbps: b.uploadMbps, latencyMs: b.latencyMs,
+measuredAt: b.measuredAt, ispName: b.ispName, wanIp: b.wanIp, ran: b.ran,
+});
+if (!result.ok) return res.status(400).json(result);
+res.json(result);
+});
+
 app.post('/api/venue/agent/heartbeat', requireAgentAuth(), async (req, res) => {
 const { status, agentVersion, configEtag, lanIp } = req.body || {};
 await withServiceClient((client) => client.query(
