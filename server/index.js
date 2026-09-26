@@ -1122,9 +1122,47 @@ next();
 };
 }
 
+// Which networks a scan covers (Scotto, 2026-09-26: two scans typed as
+// "10.1.40.1" checked one address each, and a blank one failed because the
+// site had no saved range). A bare address means its whole /24; blank means
+// the site's saved ranges, or else the box's own /24 plus the /24 of every
+// TV and source already registered here. Returned so the page can say
+// exactly what is being scanned.
+const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/;
+function slash24(ip) {
+const m = IPV4_RE.exec(String(ip || '').replace(/\/\d+$/, '').trim());
+return m ? `${m[1]}.${m[2]}.${m[3]}.0/24` : null;
+}
+async function scanRangesFor(client, siteId, typed) {
+if (Array.isArray(typed) && typed.length) {
+const out = [];
+for (const raw of typed) {
+const t = String(raw || '').trim();
+const m = IPV4_RE.exec(t);
+if (!m || [m[1], m[2], m[3], m[4]].some((n) => Number(n) > 255)) return { error: `"${t}" isn't a network. Use something like 10.1.40.0/24.` };
+out.push(m[5] ? t : slash24(t));
+}
+return { ranges: [...new Set(out)] };
+}
+const { rows: siteRows } = await client.query('SELECT scan_ranges FROM vc_sites WHERE id = $1', [siteId]);
+if (siteRows[0] && siteRows[0].scan_ranges && siteRows[0].scan_ranges.length) return { ranges: siteRows[0].scan_ranges };
+const { rows } = await client.query(
+`SELECT lan_ip AS ip FROM (SELECT lan_ip FROM vc_agents WHERE site_id = $1 ORDER BY last_seen_at DESC NULLS LAST LIMIT 1) a
+ UNION ALL SELECT host(ip) FROM vc_tvs WHERE site_id = $1 AND ip IS NOT NULL
+ UNION ALL SELECT host(ip) FROM vc_sources WHERE site_id = $1 AND ip IS NOT NULL`,
+[siteId]
+);
+const ranges = [...new Set(rows.map((r) => slash24(r.ip)).filter(Boolean))];
+if (!ranges.length) return { error: "The box hasn't reported its address yet. Type the network to scan, e.g. 10.1.40.0/24." };
+return { ranges };
+}
+
 app.post('/api/venue-control/sites/:locationId/discovery/scan', auth.requireSession('full'), requireOwnerSite(), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { ranges, deep } = req.body || {};
+const { deep } = req.body || {};
+const picked = await withServiceClient((client) => scanRangesFor(client, req.vcSiteId, req.body && req.body.ranges));
+if (picked.error) return res.status(400).json({ error: picked.error });
+const ranges = picked.ranges;
 const command = await withServiceClient(async (client) => {
 // Don't queue a second scan on top of one that hasn't been picked up or
 // finished yet -- hand back the existing in-flight command instead, so a
@@ -1139,11 +1177,12 @@ if (existing[0]) return existing[0];
 const { rows } = await client.query(
 `INSERT INTO vc_agent_commands (site_id, type, payload, created_by)
    VALUES ($1, 'discovery_scan', $2, $3) RETURNING *`,
-[req.vcSiteId, JSON.stringify({ ranges: Array.isArray(ranges) && ranges.length ? ranges : null, deep: !!deep }), req.person.name || req.person.username || null]
+[req.vcSiteId, JSON.stringify({ ranges, deep: !!deep }), req.person.name || req.person.username || null]
 );
 return rows[0];
 });
-res.json({ ok: true, commandId: command.id, status: command.status });
+const used = (command.payload && command.payload.ranges) || ranges;
+res.json({ ok: true, commandId: command.id, status: command.status, ranges: used });
 });
 
 app.get('/api/venue-control/sites/:locationId/discovery/commands/:commandId', auth.requireSession('light'), requireOwnerSite(), async (req, res) => {

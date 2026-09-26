@@ -1555,6 +1555,7 @@ async function startDiscoveryScan() {
   statusEl.innerHTML = '<p class="msg info">Queuing the scan…</p>';
   try {
     const res = await api(`/api/venue-control/sites/${locationId}/discovery/scan`, { method: 'POST', body: { ranges } });
+    DISCOVERY_RANGES_TEXT = (res.ranges || []).join(', ');
     DISCOVERY_COMMAND_ID = res.commandId;
     DISCOVERY_POLL_STARTED_AT = Date.now();
     pollDiscoveryCommand(locationId);
@@ -1564,6 +1565,7 @@ async function startDiscoveryScan() {
   }
 }
 
+let DISCOVERY_RANGES_TEXT = '';
 async function pollDiscoveryCommand(locationId) {
   if (DISCOVERY_POLL_TIMER) { clearTimeout(DISCOVERY_POLL_TIMER); DISCOVERY_POLL_TIMER = null; }
   const statusEl = document.getElementById('discoveryStatus');
@@ -1575,10 +1577,10 @@ async function pollDiscoveryCommand(locationId) {
     if (cmd.status === 'pending') {
       statusEl.innerHTML = `<p class="msg info">Queued — waiting for the on-site box to check in (usually within 30 seconds)… ${elapsed}s</p>`;
     } else if (cmd.status === 'running') {
-      statusEl.innerHTML = `<p class="msg info">Scanning the network now — this can take a minute or two on a full subnet… ${elapsed}s</p>`;
+      statusEl.innerHTML = `<p class="msg info">Scanning ${DISCOVERY_RANGES_TEXT ? escapeHtml(DISCOVERY_RANGES_TEXT) : 'the network'} now — this can take a minute or two on a full subnet… ${elapsed}s</p>`;
     } else if (cmd.status === 'done') {
       const r = cmd.result || {};
-      statusEl.innerHTML = `<p class="msg success">Done — ${r.deviceCount != null ? r.deviceCount : '?'} device${r.deviceCount === 1 ? '' : 's'} found (${elapsed}s).</p>`;
+      statusEl.innerHTML = `<p class="msg success">Done — ${r.deviceCount != null ? r.deviceCount : '?'} device${r.deviceCount === 1 ? '' : 's'} found${DISCOVERY_RANGES_TEXT ? ` on ${escapeHtml(DISCOVERY_RANGES_TEXT)}` : ''} (${elapsed}s).</p>`;
       btn.disabled = false;
       await loadDiscoveryAdmin(locationId);
       return;

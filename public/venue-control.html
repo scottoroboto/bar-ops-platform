@@ -72,8 +72,8 @@
     <h2>Discovery &amp; Adopt</h2>
     <p class="muted">Scans this location's network for DirecTV receivers, Rokus and Samsung TVs, and lets you add a found device straight into Sources or TVs — no typing in IP addresses by hand. Read-only: nothing is tuned, changed or powered by a scan.</p>
     <p class="muted">This runs on the on-site box, not from here — the box checks in about every 30 seconds, so a scan can take a little while to start, and longer to finish on a full network.</p>
-    <label for="discoveryRanges">Network range to scan (optional — leave blank to use this site's configured range)</label>
-    <input id="discoveryRanges" placeholder="e.g. 192.168.1.0/24">
+    <label for="discoveryRanges">Network to scan (optional — leave blank to scan the box's own network and every network a TV or receiver here is already on)</label>
+    <input id="discoveryRanges" placeholder="blank = automatic · or e.g. 10.1.40.0/24, 10.0.0.0/24">
     <button class="secondary" id="discoveryScanBtn" onclick="startDiscoveryScan()">Scan network</button>
     <div id="discoveryStatus"></div>
     <div id="discoverySummary" style="margin-top:14px;"></div>
