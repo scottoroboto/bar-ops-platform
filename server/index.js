@@ -1126,7 +1126,7 @@ next();
 // "10.1.40.1" checked one address each, and a blank one failed because the
 // site had no saved range). A bare address means its whole /24; blank means
 // the site's saved ranges, or else the box's own /24 plus the /24 of every
-// TV and source already registered here. Returned so the page can say
+// active (not archived) TV and source registered here. Returned so the page can say
 // exactly what is being scanned.
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/;
 function slash24(ip) {
@@ -1148,8 +1148,8 @@ const { rows: siteRows } = await client.query('SELECT scan_ranges FROM vc_sites 
 if (siteRows[0] && siteRows[0].scan_ranges && siteRows[0].scan_ranges.length) return { ranges: siteRows[0].scan_ranges };
 const { rows } = await client.query(
 `SELECT lan_ip AS ip FROM (SELECT lan_ip FROM vc_agents WHERE site_id = $1 ORDER BY last_seen_at DESC NULLS LAST LIMIT 1) a
- UNION ALL SELECT host(ip) FROM vc_tvs WHERE site_id = $1 AND ip IS NOT NULL
- UNION ALL SELECT host(ip) FROM vc_sources WHERE site_id = $1 AND ip IS NOT NULL`,
+ UNION ALL SELECT host(ip) FROM vc_tvs WHERE site_id = $1 AND ip IS NOT NULL AND enabled
+ UNION ALL SELECT host(ip) FROM vc_sources WHERE site_id = $1 AND ip IS NOT NULL AND enabled`,
 [siteId]
 );
 const ranges = [...new Set(rows.map((r) => slash24(r.ip)).filter(Boolean))];
