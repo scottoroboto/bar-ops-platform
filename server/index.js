@@ -1684,6 +1684,34 @@ res.status(400).json({ error: err.message });
 }
 });
 
+// Identify (patch_038): queue a nudge for one TV so the person in the
+// room can see which set it is. Status comes back through the site's
+// discovery/commands/:id route like a scan does.
+app.post('/api/venue-control/tvs/:id/identify', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const out = await withServiceClient(async (client) => {
+const { rows: tvs } = await client.query('SELECT id, site_id, name, ip, enabled FROM vc_tvs WHERE id = $1', [req.params.id]);
+const tv = tvs[0];
+if (!tv) return { status: 404, body: { error: 'TV not found.' } };
+if (!tv.ip) return { status: 400, body: { error: `"${tv.name}" has no IP address yet.` } };
+await client.query(
+`UPDATE vc_agent_commands SET status = 'error', error = 'Abandoned — the box never reported back.', finished_at = now()
+  WHERE site_id = $1 AND type = 'tv_identify' AND status IN ('pending','running') AND created_at < now() - interval '3 minutes'`, [tv.site_id]
+);
+const { rows: existing } = await client.query(
+`SELECT * FROM vc_agent_commands WHERE site_id = $1 AND type = 'tv_identify' AND status IN ('pending','running') AND (payload->>'tvId')::bigint = $2 ORDER BY created_at DESC LIMIT 1`,
+[tv.site_id, tv.id]
+);
+if (existing[0]) return { status: 200, body: { ok: true, commandId: existing[0].id, status: existing[0].status, already: true } };
+const { rows } = await client.query(
+`INSERT INTO vc_agent_commands (site_id, type, payload, created_by) VALUES ($1, 'tv_identify', $2, $3) RETURNING *`,
+[tv.site_id, JSON.stringify({ tvId: tv.id, name: tv.name }), req.person.name || req.person.username || null]
+);
+return { status: 200, body: { ok: true, commandId: rows[0].id, status: rows[0].status } };
+});
+res.status(out.status).json(out.body);
+});
+
 app.post('/api/venue-control/tvs/:id/archive', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 const { rows } = await withServiceClient(async (client) => {

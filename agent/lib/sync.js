@@ -242,6 +242,37 @@ async function runCommand(cmd) {
       const run = await discovery.runScan({ ranges, deep: !!payload.deep });
       result = { localRunId: run.id, cloudRunId: run.cloud_run_id, deviceCount: run.devices.length, synced: run.synced };
       if (!run.synced) throw new Error(`Scan completed locally but failed to sync to the cloud: ${run.sync_error || 'unknown error'}. It will show up once resynced.`);
+    } else if (cmd.type === 'tv_identify') {
+      // Identify (cloud patch_038): volume up, pause, volume down, twice —
+      // the TV's on-screen volume bar shows and the level ends where it
+      // started. Same drivers the staff remote uses. A never-paired Samsung
+      // pops its "Allow this device?" prompt instead, which is fine: the
+      // captured token is pushed up like any other first command.
+      const payload = cmd.payload || {};
+      const config = cache.get('config') || {};
+      const tv = (config.tvs || []).find((t) => Number(t.id) === Number(payload.tvId));
+      if (!tv) throw new Error(`No TV with id ${payload.tvId} in this box's config yet — it syncs within 30 seconds of being adopted.`);
+      if (!tv.ip) throw new Error(`"${tv.name}" has no IP address configured.`);
+      const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+      if (tv.control_method === 'roku') {
+        const roku = require('./drivers/roku');
+        for (let i = 0; i < 2; i++) { await roku.keypress(tv.ip, 'VolumeUp'); await pause(1200); await roku.keypress(tv.ip, 'VolumeDown'); await pause(800); }
+        result = { ok: true, method: 'roku' };
+      } else if (tv.control_method === 'samsung_ws_token' || tv.control_method === 'samsung_ws_plain') {
+        const samsungWs = require('./drivers/samsung-ws');
+        let last = null;
+        for (let i = 0; i < 2; i++) {
+          last = await samsungWs.setVolume(tv, 'up');
+          if (last && last.token && last.token !== tv.ws_token) { tv.ws_token = last.token; cache.set('config', config); reportTvToken(tv.id, last.token).catch(() => {}); }
+          if (!last || !last.ok) throw new Error(`"${tv.name}" didn't answer: ${(last && last.error) || 'unreachable'}. Is it on and paired?`);
+          await pause(1200);
+          await samsungWs.setVolume(tv, 'down');
+          await pause(800);
+        }
+        result = { ok: true, method: last && last.method };
+      } else {
+        throw new Error(`"${tv.name}" has no control method the box can nudge (${tv.control_method || 'none'}).`);
+      }
     } else if (cmd.type === 'speedtest') {
       // "Test now" from Systems Monitoring. Same run-and-report as the
       // scheduled test; the cloud files the numbers on the bar's line.

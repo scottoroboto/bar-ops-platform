@@ -887,12 +887,52 @@ function renderTvsList() {
         </div>
         <div class="stack-actions" style="margin-top:0;">
           <button class="small ghost" onclick="startEditTv('${t.id}')">Edit</button>
+          ${t.ip && t.enabled ? `<button class="small ghost" id="identify-${t.id}" onclick="identifyTv('${t.id}')" title="The box nudges this TV's volume up and down so you can see which set it is">Identify</button>` : ''}
           ${t.enabled
             ? `<button class="small ghost" onclick="archiveTv('${t.id}')">Archive</button>`
             : `<button class="small secondary" style="margin-top:0;" onclick="restoreTv('${t.id}')">Restore</button>`}
         </div>
       </div>`;
   }).join('');
+}
+
+// Identify (patch_038): which physical set is this row? The box nudges the
+// TV's volume so its on-screen bar shows; this waits on the command.
+async function identifyTv(id) {
+  const btn = document.getElementById(`identify-${id}`);
+  const locationId = document.getElementById('sourcesLocationSelect').value;
+  const tv = TVS_ADMIN.find((t) => String(t.id) === String(id));
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  let commandId;
+  try {
+    const r = await api(`/api/venue-control/tvs/${id}/identify`, { method: 'POST' });
+    commandId = r.commandId;
+  } catch (e) {
+    showTvMsg(e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Identify'; }
+    return;
+  }
+  const started = Date.now();
+  const poll = async () => {
+    const secs = Math.round((Date.now() - started) / 1000);
+    let cmd;
+    try { cmd = (await api(`/api/venue-control/sites/${locationId}/discovery/commands/${commandId}`)).command; }
+    catch (e) { showTvMsg(e.message, 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Identify'; } return; }
+    if (cmd.status === 'pending') { if (btn) btn.textContent = `Waiting for the box… ${secs}s`; }
+    else if (cmd.status === 'running') { if (btn) btn.textContent = `Watch the room… ${secs}s`; }
+    else if (cmd.status === 'done') {
+      showTvMsg(`${tv ? tv.name : 'That TV'} just flashed its volume bar. Rename it with Edit if you spotted it.`, 'success');
+      if (btn) { btn.disabled = false; btn.textContent = 'Identify'; }
+      return;
+    } else {
+      showTvMsg(cmd.error || 'Identify failed.', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Identify'; }
+      return;
+    }
+    if (secs > 120) { showTvMsg('The box hasn’t answered in two minutes. Check it is online under Sites.', 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Identify'; } return; }
+    setTimeout(poll, 2000);
+  };
+  poll();
 }
 
 function startEditTv(id) { editingTvId = id; renderTvsList(); }
