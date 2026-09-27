@@ -354,6 +354,14 @@ async function scan({ ranges, deep = false } = {}) {
 
   const arpTable = readArpTable();
   const candidateIps = new Set([...announced, ...openByIp.keys()]);
+  // A TV that answered ARP during the sweep but had nothing listening (an
+  // LG with LG Connect Apps off, a Samsung sitting in standby) would vanish
+  // from the results entirely. If its MAC is a vendor we know, list it
+  // anyway -- OUI-only, low confidence -- so it can still be adopted and
+  // the owner sees it is there.
+  for (const [ip, mac] of arpTable) {
+    if (rangeIps.has(ip) && !candidateIps.has(ip) && lookupVendor(mac)) candidateIps.add(ip);
+  }
 
   const devices = [];
   for (const ip of candidateIps) {
