@@ -11,7 +11,7 @@ const net = require('net');
 const fs = require('fs');
 const { lookupVendor } = require('../oui');
 
-const SWEEP_PORTS = [8080, 8001, 8002, 8060, 9197, 55000, 7676, 80, 443, 22];
+const SWEEP_PORTS = [8080, 8001, 8002, 8060, 9197, 55000, 7676, 3000, 3001, 80, 443, 22]; // 3000/3001: LG webOS SSAP
 const SWEEP_CONCURRENCY = 64;
 const SWEEP_TIMEOUT_MS = 400;
 const ANNOUNCE_WINDOW_MS = 3000;
@@ -216,6 +216,14 @@ async function probeRoku(ip) {
 // Legacy Samsung sets: reachable on :55000 but never answer :8001 --
 // identity is thin (there's no JSON endpoint to read on this generation),
 // so this is a port-signature-only, medium-confidence classification.
+// LG webOS: the SSAP socket on 3000/3001. There's no identity endpoint
+// to read without pairing, so this is port + OUI (high when both agree).
+function lgSignature(openPorts, ouiVendor) {
+  if (!openPorts.includes(3000) && !openPorts.includes(3001)) return null;
+  const lgVendor = /LG Electronics|LG Innotek/i.test(ouiVendor || '');
+  return { classifiedAs: 'lg_tv', confidence: lgVendor ? 'high' : 'medium', identity: { ssapPort: openPorts.includes(3001) ? 3001 : 3000 } };
+}
+
 function legacySamsungSignature(openPorts) {
   if (openPorts.includes(55000) && !openPorts.includes(8001)) {
     return { classifiedAs: 'samsung_tv_legacy', confidence: 'medium', identity: {} };
@@ -276,6 +284,8 @@ function buildControlMethods(device) {
     methods.push({ method: 'smartthings', status: 'unmatched' }); // Phase 6 territory -- not probed yet
   } else if (device.classified_as === 'samsung_tv_legacy') {
     methods.push({ method: 'samsung_legacy', port: 55000, status: 'available' });
+  } else if (device.classified_as === 'lg_tv') {
+    methods.push({ method: 'lg_webos', port: (device.identity && device.identity.ssapPort) || 3001, status: 'available', needs_pairing: true });
   } else if (device.classified_as === 'directv_receiver') {
     methods.push({ method: 'shef_http', port: 8080, status: 'available' });
   } else if (device.classified_as === 'roku') {
@@ -295,6 +305,8 @@ function classifyDevice({ ip, mac, openPorts, interrogateResult }) {
     classifiedAs = interrogateResult.classifiedAs;
     confidence = interrogateResult.confidence;
     identity = interrogateResult.identity || {};
+  } else if (lgSignature(openPorts, ouiVendor)) {
+    ({ classifiedAs, confidence, identity } = lgSignature(openPorts, ouiVendor));
   } else if (ouiVendor === 'Samsung Electronics' && (openPorts.includes(8001) || openPorts.includes(8002))) {
     classifiedAs = 'samsung_tv';
     confidence = 'medium'; // port signature + OUI agree, but the identity endpoint didn't actually answer
@@ -307,6 +319,7 @@ function classifyDevice({ ip, mac, openPorts, interrogateResult }) {
     // nothing still shows up as a Samsung, per the spec's own example.
     if (ouiVendor === 'Samsung Electronics') classifiedAs = 'samsung_tv';
     else if (ouiVendor === 'Roku') classifiedAs = 'roku';
+    else if (/LG Electronics|LG Innotek/i.test(ouiVendor)) classifiedAs = 'lg_tv';
     confidence = 'low';
   }
 

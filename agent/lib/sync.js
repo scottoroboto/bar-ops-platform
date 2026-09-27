@@ -258,8 +258,8 @@ async function runCommand(cmd) {
         const roku = require('./drivers/roku');
         for (let i = 0; i < 2; i++) { await roku.keypress(tv.ip, 'VolumeUp'); await pause(1200); await roku.keypress(tv.ip, 'VolumeDown'); await pause(800); }
         result = { ok: true, method: 'roku' };
-      } else if (tv.control_method === 'samsung_ws_token' || tv.control_method === 'samsung_ws_plain') {
-        const samsungWs = require('./drivers/samsung-ws');
+      } else if (tv.control_method === 'samsung_ws_token' || tv.control_method === 'samsung_ws_plain' || tv.control_method === 'lg_webos') {
+        const samsungWs = require('./drivers').driverFor(tv); // Samsung or LG — same volume up/down shape
         let last = null;
         for (let i = 0; i < 2; i++) {
           last = await samsungWs.setVolume(tv, 'up');

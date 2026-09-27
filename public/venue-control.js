@@ -715,7 +715,7 @@ function zoneName(zoneId) {
   return z ? z.name : 'Unassigned';
 }
 
-const CONTROL_METHODS = ['unknown', 'samsung_ws_token', 'samsung_ws_plain', 'samsung_legacy', 'smartthings', 'wol_only', 'none'];
+const CONTROL_METHODS = ['unknown', 'samsung_ws_token', 'samsung_ws_plain', 'samsung_legacy', 'lg_webos', 'smartthings', 'wol_only', 'none'];
 
 // ---- TVs: zone/status filter chips + search + multi-select bulk bar (A6).
 // Device Health's own data is reused here rather than adding a new
@@ -741,7 +741,7 @@ function tvNeedsAttention(t) {
 }
 function tvNeverPaired(t) {
   const h = tvHealthFor(t.id);
-  return t.control_method === 'samsung_ws_token' && h && h.last_status === 'warning';
+  return (t.control_method === 'samsung_ws_token' || t.control_method === 'lg_webos') && h && h.last_status === 'warning';
 }
 
 function renderTvZoneChips() {
@@ -1639,10 +1639,10 @@ async function pollDiscoveryCommand(locationId) {
 
 const DISCOVERY_KIND_LABEL = {
   directv_receiver: 'DirecTV receivers', samsung_tv: 'Samsung TVs',
-  samsung_tv_legacy: 'Samsung TVs (legacy)', roku: 'Rokus', unknown: 'Other',
+  samsung_tv_legacy: 'Samsung TVs (legacy)', lg_tv: 'LG TVs', roku: 'Rokus', unknown: 'Other',
 };
 const DISCOVERY_ADOPT_AS = {
-  directv_receiver: 'source', roku: 'source', samsung_tv: 'tv', samsung_tv_legacy: 'tv',
+  directv_receiver: 'source', roku: 'source', samsung_tv: 'tv', samsung_tv_legacy: 'tv', lg_tv: 'tv',
 };
 
 function discoveryDeviceLabel(d) {

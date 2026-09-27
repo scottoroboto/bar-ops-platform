@@ -7,11 +7,11 @@
 // them would just be a guaranteed-timeout HTTP call every cycle for no
 // benefit -- they still show up in /api/tvs, just with live: null.
 const cache = require('./cache');
-const samsungWs = require('./drivers/samsung-ws');
+const { driverFor } = require('./drivers');
 
 const POLL_INTERVAL_MS = 20 * 1000;
 const STAGGER_STEP_MS = 300;
-const POLLABLE_METHODS = new Set(['samsung_ws_token', 'samsung_ws_plain', 'samsung_legacy', 'smartthings']);
+const POLLABLE_METHODS = new Set(['samsung_ws_token', 'samsung_ws_plain', 'samsung_legacy', 'smartthings', 'lg_webos']);
 
 const state = new Map(); // tv id (number) -> { id, power, updatedAt, ok, error, slot, slotUpdatedAt }
 
@@ -36,7 +36,7 @@ async function pollOne(tv) {
   const slot = prev ? prev.slot : fallbackSlot;
   const slotUpdatedAt = prev ? prev.slotUpdatedAt : null;
   try {
-    const power = await samsungWs.getPowerState(tv);
+    const power = await driverFor(tv).getPowerState(tv);
     state.set(id, { id, power, updatedAt: new Date().toISOString(), ok: true, error: null, slot, slotUpdatedAt });
   } catch (err) {
     state.set(id, {

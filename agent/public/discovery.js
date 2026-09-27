@@ -157,6 +157,7 @@ function renderAdoptFields() {
       <div class="field"><label>Control method</label>
         <select id="af_controlMethod">
           <option value="samsung_ws_token">samsung_ws_token</option>
+          <option value="lg_webos">lg_webos (LG)</option>
           <option value="samsung_ws_plain">samsung_ws_plain</option>
           <option value="samsung_legacy">samsung_legacy</option>
           <option value="wol_only">wol_only</option>

@@ -18,6 +18,7 @@ const activity = require('./lib/activity');
 const directv = require('./lib/drivers/directv');
 const roku = require('./lib/drivers/roku');
 const samsungWs = require('./lib/drivers/samsung-ws');
+const { driverFor, KEY_METHODS } = require('./lib/drivers'); // Samsung or LG per TV (cloud patch_039)
 
 const app = express();
 app.use(express.json());
@@ -132,7 +133,7 @@ app.post('/api/attention/:systemId/turn-on', async (req, res) => {
   if (!item) return res.status(404).json({ error: 'That TV is no longer flagged.' });
   let tv;
   try { tv = findTv(item.tvId); } catch (err) { return res.status(400).json({ error: err.message }); }
-  const result = await samsungWs.setPower(tv, 'on');
+  const result = await driverFor(tv).setPower(tv, 'on');
   maybeReportToken(tv, result);
   const live = await tvPoller.pollNow(tv.id).catch(() => null);
   activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { state: 'on', via: 'attention' }, result: result.ok ? 'ok' : 'failed' });
@@ -489,7 +490,7 @@ app.post('/api/tvs/bulk/power', async (req, res) => {
   }
   const results = await mapWithConcurrency(targets, 4, async (tv) => {
     try {
-      const result = await samsungWs.setPower(tv, state);
+      const result = await driverFor(tv).setPower(tv, state);
       maybeReportToken(tv, result);
       const live = await tvPoller.pollNow(tv.id).catch(() => null);
       activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, state }, result: result.ok ? 'ok' : 'failed' });
@@ -506,7 +507,7 @@ app.post('/api/tvs/:id/power', async (req, res) => {
     const tv = findTv(req.params.id);
     const { state } = req.body || {};
     if (state !== 'on' && state !== 'off') return res.status(400).json({ error: 'Missing/invalid "state" -- expected "on" or "off".' });
-    const result = await samsungWs.setPower(tv, state);
+    const result = await driverFor(tv).setPower(tv, state);
     maybeReportToken(tv, result);
     const live = await tvPoller.pollNow(tv.id);
     activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, state }, result: result.ok ? 'ok' : 'failed' });
@@ -532,7 +533,7 @@ app.post('/api/tvs/bulk/volume', async (req, res) => {
   const targets = (config.tvs || []).filter((t) => t.enabled !== false && t.ip && ids.has(Number(t.id)));
   const results = await mapWithConcurrency(targets, 4, async (tv) => {
     try {
-      const result = await samsungWs.setVolume(tv, op);
+      const result = await driverFor(tv).setVolume(tv, op);
       maybeReportToken(tv, result);
       activity.record('tv.volume', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, op }, result: result.ok !== false ? 'ok' : 'failed' });
       return { id: tv.id, name: tv.name, ok: result.ok !== false, result };
@@ -548,7 +549,7 @@ app.post('/api/tvs/:id/volume', async (req, res) => {
     const tv = findTv(req.params.id);
     const { op } = req.body || {};
     if (!['up', 'down', 'mute', 'unmute'].includes(op)) return res.status(400).json({ error: 'Missing/invalid "op" -- expected "up", "down", "mute", or "unmute".' });
-    const result = await samsungWs.setVolume(tv, op);
+    const result = await driverFor(tv).setVolume(tv, op);
     maybeReportToken(tv, result);
     res.json({ ok: true, result });
   } catch (err) {
@@ -579,10 +580,10 @@ app.post('/api/tvs/bulk/key', async (req, res) => {
   const config = cache.get('config') || {};
   const ids = new Set(tv_ids.map(Number));
   const targets = (config.tvs || []).filter((t) => t.enabled !== false && t.ip && ids.has(Number(t.id))
-    && (t.control_method === 'samsung_ws_token' || t.control_method === 'samsung_ws_plain'));
+    && KEY_METHODS.has(t.control_method));
   const results = await mapWithConcurrency(targets, 4, async (tv) => {
     try {
-      const result = await samsungWs.sendKeySequence(tv, keySeq);
+      const result = await driverFor(tv).sendKeySequence(tv, keySeq);
       maybeReportToken(tv, result);
       activity.record('tv.key', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, keys: keySeq }, result: 'ok' });
       return { id: tv.id, name: tv.name, ok: true };
@@ -618,7 +619,7 @@ function requireChannelCapable(tv) {
 async function selectTvSlot(tv, slot) {
   const source = findSourceForSlot(slot);
   requireChannelCapable(tv);
-  const result = await samsungWs.selectChannel(tv, source.qam_channel);
+  const result = await driverFor(tv).selectChannel(tv, source.qam_channel);
   maybeReportToken(tv, result);
   tvPoller.reportSlot(tv.id, slot);
   sync.reportTvSlot(tv.id, slot).catch((err) => console.error('[server] failed to push last_known_slot:', err.message));
