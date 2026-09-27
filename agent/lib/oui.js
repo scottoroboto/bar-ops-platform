@@ -48,11 +48,43 @@ const OUI_TABLE = {
   'E45F01': 'Raspberry Pi Foundation',
   '28CDC1': 'Raspberry Pi Foundation',
 
-  // LG Electronics
+  // LG Electronics -- webOS TVs boot with SSAP (3000/3001) closed until the
+  // set is fully awake, so the OUI-only fallback is what catches a sleepy
+  // LG. E43ED7 came off TV 12 at Ticket 1 (an LJ550M) scanning as
+  // "unidentified, WoL only".
   'A81986': 'LG Electronics',
   '10683F': 'LG Electronics',
   '3CBDD8': 'LG Electronics',
   '008B4B': 'LG Electronics',
+  'E43ED7': 'LG Electronics',
+  '001C62': 'LG Electronics',
+  '001E75': 'LG Electronics',
+  '0021FB': 'LG Electronics',
+  '0025E5': 'LG Electronics',
+  '0026E2': 'LG Electronics',
+  '10F96F': 'LG Electronics',
+  '2021A5': 'LG Electronics',
+  '34FCEF': 'LG Electronics',
+  '3CCD5D': 'LG Electronics',
+  '40B0FA': 'LG Electronics',
+  '58A2B5': 'LG Electronics',
+  '64899A': 'LG Electronics',
+  '6CD68A': 'LG Electronics',
+  '70058D': 'LG Electronics',
+  '88C9D0': 'LG Electronics',
+  '8CE081': 'LG Electronics',
+  'A039F7': 'LG Electronics',
+  'A8236F': 'LG Electronics',
+  'AC0D1B': 'LG Electronics',
+  'B81DAA': 'LG Electronics',
+  'BCF5AC': 'LG Electronics',
+  'C49A02': 'LG Electronics',
+  'CC2D8C': 'LG Electronics',
+  'CCFA00': 'LG Electronics',
+  'D013FD': 'LG Electronics',
+  'DC0B34': 'LG Electronics',
+  'E892A4': 'LG Electronics',
+  'F80CF3': 'LG Electronics',
 
   // Vizio Inc
   '7078B2': 'Vizio Inc',
