@@ -1212,9 +1212,33 @@ const { rows: runRows } = await withServiceClient((client) => client.query(
 [req.vcSiteId]
 ));
 if (!runRows[0]) return res.json({ ok: true, run: null, devices: [] });
+// adopted_type/adopted_id are stamped on the discovery ROW at adopt time,
+// so every fresh scan came back with all of them blank and a bar full of
+// already-adopted receivers looked like new ones. Match each row against
+// the site's real inventory instead (MAC first, IP as the fallback) and
+// carry the adopted name across, so the page can hide what's already in.
 const { rows: devices } = await withServiceClient((client) => client.query(
-'SELECT * FROM vc_discovery_devices WHERE run_id = $1 ORDER BY classified_as, ip',
-[runRows[0].id]
+`SELECT dd.*,
+        COALESCE(dd.adopted_type, m.adopted_type) AS adopted_type,
+        COALESCE(dd.adopted_id,   m.adopted_id)   AS adopted_id,
+        m.adopted_name, m.adopted_enabled
+   FROM vc_discovery_devices dd
+   LEFT JOIN LATERAL (
+     SELECT 'tv'::text AS adopted_type, t.id AS adopted_id, t.name AS adopted_name, t.enabled AS adopted_enabled
+       FROM vc_tvs t
+      WHERE t.site_id = $2
+        AND ((dd.mac IS NOT NULL AND t.mac = dd.mac) OR (dd.mac IS NULL AND t.ip = dd.ip))
+      UNION ALL
+     SELECT 'source', s.id, s.label, s.enabled
+       FROM vc_sources s
+      WHERE s.site_id = $2
+        AND ((dd.mac IS NOT NULL AND s.mac = dd.mac) OR (dd.mac IS NULL AND s.ip = dd.ip))
+      ORDER BY adopted_enabled DESC
+      LIMIT 1
+   ) m ON TRUE
+  WHERE dd.run_id = $1
+  ORDER BY dd.classified_as, dd.ip`,
+[runRows[0].id, req.vcSiteId]
 ));
 res.json({ ok: true, run: runRows[0], devices });
 });
@@ -1413,6 +1437,41 @@ return rows;
 });
 if (!rows[0]) return res.status(404).json({ error: 'Source not found.' });
 res.json({ ok: true, source: rows[0] });
+});
+
+// Real delete (owner, archived rows only -- Archive first is the undo
+// window). No FKs point at vc_sources; what references it by number is
+// cleaned here: layout steps aimed at it, the AV monitoring row keyed on
+// its slot, and the discovery row that adopted it. Activity history keeps
+// its name. TVs whose default slot was this source keep the number; the
+// agent already answers "No source at slot N" for a slot nothing fills.
+app.delete('/api/venue-control/sources/:id', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try {
+const source = await withServiceClient(async (client) => {
+const { rows } = await client.query('SELECT * FROM vc_sources WHERE id = $1', [req.params.id]);
+const src = rows[0];
+if (!src) throw Object.assign(new Error('Source not found.'), { status: 404 });
+if (src.enabled) throw Object.assign(new Error('Archive the source first, then delete it.'), { status: 409 });
+await client.query(
+`DELETE FROM vc_layout_items li USING vc_layouts l
+  WHERE li.layout_id = l.id AND l.site_id = $1 AND li.target_type = 'source' AND li.target_id = $2`,
+[src.site_id, src.id]
+);
+await client.query(
+`DELETE FROM monitored_systems ms USING vc_sites vs
+  WHERE ms.location_id = vs.location_id AND vs.id = $1 AND ms.category = 'av' AND ms.kind = 'vc_source' AND ms.external_ref = $2`,
+[src.site_id, String(src.slot)]
+);
+await client.query(`UPDATE vc_discovery_devices SET adopted_type = NULL, adopted_id = NULL WHERE adopted_type = 'source' AND adopted_id = $1`, [src.id]);
+await client.query('DELETE FROM vc_sources WHERE id = $1', [src.id]);
+await recordActivity(client, src.site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'source.delete', targetType: 'source', targetId: src.id, detail: { slot: src.slot, label: src.label } });
+return src;
+});
+res.json({ ok: true, source });
+} catch (err) {
+res.status(err.status || 500).json({ error: err.message });
+}
 });
 
 app.post('/api/venue-control/sources/:id/restore', auth.requireSession('full'), async (req, res) => {
@@ -1724,6 +1783,37 @@ return rows;
 });
 if (!rows[0]) return res.status(404).json({ error: 'TV not found.' });
 res.json({ ok: true, tv: rows[0] });
+});
+
+// Same shape as the source delete above. A TV's pairing token goes with
+// the row, so adding the same set back later means pairing it again.
+app.delete('/api/venue-control/tvs/:id', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try {
+const tv = await withServiceClient(async (client) => {
+const { rows } = await client.query('SELECT * FROM vc_tvs WHERE id = $1', [req.params.id]);
+const t = rows[0];
+if (!t) throw Object.assign(new Error('TV not found.'), { status: 404 });
+if (t.enabled) throw Object.assign(new Error('Archive the TV first, then delete it.'), { status: 409 });
+await client.query(
+`DELETE FROM vc_layout_items li USING vc_layouts l
+  WHERE li.layout_id = l.id AND l.site_id = $1 AND li.target_type = 'tv' AND li.target_id = $2`,
+[t.site_id, t.id]
+);
+await client.query(
+`DELETE FROM monitored_systems ms USING vc_sites vs
+  WHERE ms.location_id = vs.location_id AND vs.id = $1 AND ms.category = 'av' AND ms.kind = 'vc_tv' AND ms.external_ref = $2`,
+[t.site_id, String(t.id)]
+);
+await client.query(`UPDATE vc_discovery_devices SET adopted_type = NULL, adopted_id = NULL WHERE adopted_type = 'tv' AND adopted_id = $1`, [t.id]);
+await client.query('DELETE FROM vc_tvs WHERE id = $1', [t.id]);
+await recordActivity(client, t.site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'tv.delete', targetType: 'tv', targetId: t.id, detail: { name: t.name } });
+return t;
+});
+res.json({ ok: true, tv });
+} catch (err) {
+res.status(err.status || 500).json({ error: err.message });
+}
 });
 
 app.post('/api/venue-control/tvs/:id/restore', auth.requireSession('full'), async (req, res) => {

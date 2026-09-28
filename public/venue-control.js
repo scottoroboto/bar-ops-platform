@@ -351,7 +351,8 @@ function renderSourcesList() {
           <button class="small ghost" onclick="startEditSource('${s.id}')">Edit</button>
           ${s.enabled
             ? `<button class="small ghost" onclick="archiveSource('${s.id}')">Archive</button>`
-            : `<button class="small secondary" style="margin-top:0;" onclick="restoreSource('${s.id}')">Restore</button>`}
+            : `<button class="small secondary" style="margin-top:0;" onclick="restoreSource('${s.id}')">Restore</button>
+               <button class="small ghost" onclick="deleteSource('${s.id}', '${escapeHtml(s.label).replace(/'/g, "\\'")}')">Delete</button>`}
         </div>
       </div>`;
   }).join('');
@@ -394,6 +395,17 @@ async function archiveSource(id) {
   try {
     await withStepUp(() => api(`/api/venue-control/sources/${id}/archive`, { method: 'POST' }));
     showSourceMsg('Source archived.', 'success');
+    await loadSourcesAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showSourceMsg(e.message, 'error');
+  }
+}
+
+async function deleteSource(id, label) {
+  if (!confirm(`Delete ${label} for good? Layout steps that use it are removed and its history stays in the activity log. This can't be undone.`)) return;
+  try {
+    await withStepUp(() => api(`/api/venue-control/sources/${id}`, { method: 'DELETE' }));
+    showSourceMsg('Source deleted.', 'success');
     await loadSourcesAdmin(document.getElementById('sourcesLocationSelect').value);
   } catch (e) {
     showSourceMsg(e.message, 'error');
@@ -890,7 +902,8 @@ function renderTvsList() {
           ${t.ip && t.enabled ? `<button class="small ghost" id="identify-${t.id}" onclick="identifyTv('${t.id}')" title="The box nudges this TV's volume up and down so you can see which set it is">Identify</button>` : ''}
           ${t.enabled
             ? `<button class="small ghost" onclick="archiveTv('${t.id}')">Archive</button>`
-            : `<button class="small secondary" style="margin-top:0;" onclick="restoreTv('${t.id}')">Restore</button>`}
+            : `<button class="small secondary" style="margin-top:0;" onclick="restoreTv('${t.id}')">Restore</button>
+               <button class="small ghost" onclick="deleteTv('${t.id}', '${escapeHtml(t.name).replace(/'/g, "\\'")}')">Delete</button>`}
         </div>
       </div>`;
   }).join('');
@@ -970,6 +983,17 @@ async function archiveTv(id) {
   try {
     await withStepUp(() => api(`/api/venue-control/tvs/${id}/archive`, { method: 'POST' }));
     showTvMsg('TV archived.', 'success');
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) {
+    showTvMsg(e.message, 'error');
+  }
+}
+
+async function deleteTv(id, name) {
+  if (!confirm(`Delete ${name} for good? Its pairing is lost, layout steps that use it are removed, and its history stays in the activity log. This can't be undone.`)) return;
+  try {
+    await withStepUp(() => api(`/api/venue-control/tvs/${id}`, { method: 'DELETE' }));
+    showTvMsg('TV deleted.', 'success');
     await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
   } catch (e) {
     showTvMsg(e.message, 'error');
@@ -1571,6 +1595,15 @@ let DISCOVERY_COMMAND_ID = null;
 let DISCOVERY_POLL_TIMER = null;
 let DISCOVERY_POLL_STARTED_AT = null;
 let DISCOVERY_ADOPT_OPEN_ID = null;
+// Scan results hide what's already a TV or source here (matched server-side
+// by MAC, then IP) so a full-bar rescan only shows what still needs
+// adopting; the summary line has a toggle to see everything.
+let DISCOVERY_SHOW_ADOPTED = false;
+
+function toggleDiscoveryAdopted() {
+  DISCOVERY_SHOW_ADOPTED = !DISCOVERY_SHOW_ADOPTED;
+  renderDiscoveryResults();
+}
 
 async function loadDiscoveryAdmin(locationId) {
   const el = document.getElementById('discoveryResults');
@@ -1672,19 +1705,29 @@ function renderDiscoveryResults() {
   const secs = DISCOVERY_RUN.finished_at
     ? Math.max(0, Math.round((new Date(DISCOVERY_RUN.finished_at) - new Date(DISCOVERY_RUN.started_at)) / 1000))
     : null;
-  summaryEl.innerHTML = `<p class="muted" style="margin:0 0 12px;">${(DISCOVERY_RUN.ranges || []).join(', ') || 'default range'} · scanned ${scannedAt}${secs != null ? ` · ${secs}s` : ''} · ${DISCOVERY_DEVICES.length} device${DISCOVERY_DEVICES.length === 1 ? '' : 's'} found</p>`;
+  const adoptedCount = DISCOVERY_DEVICES.filter((d) => d.adopted_type).length;
+  const newCount = DISCOVERY_DEVICES.length - adoptedCount;
+  const toggle = adoptedCount
+    ? ` · <a href="#" onclick="toggleDiscoveryAdopted(); return false;">${DISCOVERY_SHOW_ADOPTED ? 'hide' : 'show'} the ${adoptedCount} already in the system</a>`
+    : '';
+  summaryEl.innerHTML = `<p class="muted" style="margin:0 0 12px;">${(DISCOVERY_RUN.ranges || []).join(', ') || 'default range'} · scanned ${scannedAt}${secs != null ? ` · ${secs}s` : ''} · ${DISCOVERY_DEVICES.length} device${DISCOVERY_DEVICES.length === 1 ? '' : 's'} found, ${newCount} new${toggle}</p>`;
 
   if (!DISCOVERY_DEVICES.length) {
     el.innerHTML = '<p class="muted">No devices answered on that range.</p>';
     return;
   }
+  const visible = DISCOVERY_SHOW_ADOPTED ? DISCOVERY_DEVICES : DISCOVERY_DEVICES.filter((d) => !d.adopted_type);
+  if (!visible.length) {
+    el.innerHTML = '<p class="muted">Everything the scan found is already in the system.</p>';
+    return;
+  }
 
   const groups = {};
-  DISCOVERY_DEVICES.forEach((d) => {
+  visible.forEach((d) => {
     const key = d.classified_as || 'unknown';
     (groups[key] = groups[key] || []).push(d);
   });
-  const order = ['directv_receiver', 'roku', 'samsung_tv', 'samsung_tv_legacy', 'unknown'];
+  const order = ['directv_receiver', 'roku', 'samsung_tv', 'samsung_tv_legacy', 'lg_tv', 'unknown'];
 
   el.innerHTML = order.filter((k) => groups[k] && groups[k].length).map((k) => `
     <h3 style="font-size:13px;color:var(--muted);margin:16px 0 6px;">${escapeHtml(DISCOVERY_KIND_LABEL[k] || k)} — ${groups[k].length}</h3>
@@ -1710,7 +1753,7 @@ function renderDiscoveryRow(d) {
   return `
     <div class="list-row"${formOpen ? ' style="flex-direction:column; align-items:stretch;"' : ''}>
       <div class="name">${escapeHtml(d.ip)} <span class="badge off">${escapeHtml(discoveryDeviceLabel(d))}</span>
-        ${alreadyAdopted ? `<span class="badge on">adopted as ${escapeHtml(d.adopted_type)}</span>` : ''}
+        ${alreadyAdopted ? `<span class="badge ${d.adopted_enabled === false ? 'off' : 'on'}">${d.adopted_enabled === false ? 'archived' : 'in system'} as ${escapeHtml(d.adopted_type === 'tv' ? 'TV' : 'source')}${d.adopted_name ? ' · ' + escapeHtml(d.adopted_name) : ''}</span>` : ''}
       </div>
       <p class="muted" style="margin:4px 0;">${discoveryControlBadges(d)}</p>
       ${!alreadyAdopted && adoptAs
