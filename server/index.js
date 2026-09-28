@@ -1433,7 +1433,7 @@ const { rows } = await client.query(
 [req.params.id]
 );
 if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'source.archive', targetType: 'source', targetId: rows[0].id, detail: { slot: rows[0].slot, label: rows[0].label } });
-return rows;
+return { rows };
 });
 if (!rows[0]) return res.status(404).json({ error: 'Source not found.' });
 res.json({ ok: true, source: rows[0] });
@@ -1482,7 +1482,7 @@ const { rows } = await client.query(
 [req.params.id]
 );
 if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'source.restore', targetType: 'source', targetId: rows[0].id, detail: { slot: rows[0].slot, label: rows[0].label } });
-return rows;
+return { rows };
 });
 if (!rows[0]) return res.status(404).json({ error: 'Source not found.' });
 res.json({ ok: true, source: rows[0] });
@@ -1552,7 +1552,7 @@ const { rows } = await client.query(
 // site_id is nullable here (shared favorites) -- nothing to log against
 // if it's a global favorite with no single owning site.
 if (rows[0] && rows[0].site_id) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'favorite.archive', targetType: 'favorite', targetId: rows[0].id, detail: { name: rows[0].name } });
-return rows;
+return { rows };
 });
 if (!rows[0]) return res.status(404).json({ error: 'Favorite not found.' });
 res.json({ ok: true, favorite: rows[0] });
@@ -1566,7 +1566,7 @@ const { rows } = await client.query(
 [req.params.id]
 );
 if (rows[0] && rows[0].site_id) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'favorite.restore', targetType: 'favorite', targetId: rows[0].id, detail: { name: rows[0].name } });
-return rows;
+return { rows };
 });
 if (!rows[0]) return res.status(404).json({ error: 'Favorite not found.' });
 res.json({ ok: true, favorite: rows[0] });
@@ -1665,7 +1665,7 @@ if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner onl
 const { rows } = await withServiceClient(async (client) => {
 const { rows } = await client.query('DELETE FROM vc_zones WHERE id = $1 RETURNING id, site_id, name', [req.params.id]);
 if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'zone.delete', targetType: 'zone', targetId: rows[0].id, detail: { name: rows[0].name } });
-return rows;
+return { rows };
 });
 if (!rows[0]) return res.status(404).json({ error: 'Zone not found.' });
 res.json({ ok: true });
@@ -1779,7 +1779,7 @@ const { rows } = await client.query(
 [req.params.id]
 );
 if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'tv.archive', targetType: 'tv', targetId: rows[0].id, detail: { name: rows[0].name } });
-return rows;
+return { rows };
 });
 if (!rows[0]) return res.status(404).json({ error: 'TV not found.' });
 res.json({ ok: true, tv: rows[0] });
@@ -1824,7 +1824,7 @@ const { rows } = await client.query(
 [req.params.id]
 );
 if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'tv.restore', targetType: 'tv', targetId: rows[0].id, detail: { name: rows[0].name } });
-return rows;
+return { rows };
 });
 if (!rows[0]) return res.status(404).json({ error: 'TV not found.' });
 res.json({ ok: true, tv: rows[0] });
@@ -1898,7 +1898,7 @@ if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner onl
 const { rows } = await withServiceClient(async (client) => {
 const { rows } = await client.query('DELETE FROM vc_schedules WHERE id = $1 RETURNING id, site_id, name', [req.params.id]);
 if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'schedule.delete', targetType: 'schedule', targetId: rows[0].id, detail: { name: rows[0].name } });
-return rows;
+return { rows };
 });
 if (!rows[0]) return res.status(404).json({ error: 'Schedule not found.' });
 res.json({ ok: true });
@@ -1989,7 +1989,7 @@ const { rows } = await withServiceClient(async (client) => {
 // ON DELETE CASCADE on vc_layout_items.layout_id takes care of its items.
 const { rows } = await client.query('DELETE FROM vc_layouts WHERE id = $1 RETURNING id, site_id, name', [req.params.id]);
 if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'layout.delete', targetType: 'layout', targetId: rows[0].id, detail: { name: rows[0].name } });
-return rows;
+return { rows };
 });
 if (!rows[0]) return res.status(404).json({ error: 'Layout not found.' });
 res.json({ ok: true });
