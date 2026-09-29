@@ -1125,6 +1125,7 @@ function renderSchedulesList() {
           ${s.last_run_at ? `<div class="sub">last ran ${new Date(s.last_run_at).toLocaleString()}: ${escapeHtml(s.last_result || '')}</div>` : ''}
         </div>
         <div class="stack-actions" style="margin-top:0;">
+          <button class="small ghost" onclick="editSchedule('${s.id}')">Edit</button>
           ${s.enabled
             ? `<button class="small ghost" onclick="toggleSchedule('${s.id}', false)">Disable</button>`
             : `<button class="small secondary" style="margin-top:0;" onclick="toggleSchedule('${s.id}', true)">Enable</button>`}
@@ -1151,6 +1152,51 @@ async function deleteSchedule(id) {
   } catch (e) {
     showSchedMsg(e.message, 'error');
   }
+}
+
+// ---- Edit a schedule (Scotto, 2026-09-29): the add form doubles as the
+// edit form. Edit loads the schedule into it, the button turns into "Save
+// changes", and saving goes through the existing /update route (name,
+// cron, action, payload all at once). Cancel puts the form back.
+let EDITING_SCHEDULE_ID = null;
+
+function editSchedule(id) {
+  const s = SCHEDULES_ADMIN.find((x) => String(x.id) === String(id));
+  if (!s) return;
+  EDITING_SCHEDULE_ID = s.id;
+  document.getElementById('newSchedName').value = s.name || '';
+  document.getElementById('newSchedCron').value = s.cron_expr || '';
+  onSchedRawCronEdit();
+  const p = s.payload || {};
+  document.getElementById('newSchedAction').value = s.action_type;
+  onSchedActionChange();
+  if (s.action_type === 'tvs_power') {
+    document.getElementById('newSchedTvState').value = p.state || 'on';
+    document.getElementById('newSchedTvZone').value = p.zone_id != null ? String(p.zone_id) : '';
+  } else if (s.action_type === 'source_tune') {
+    document.getElementById('newSchedSlot').value = p.slot != null ? p.slot : '';
+    document.getElementById('newSchedMajor').value = p.major != null ? p.major : '';
+    document.getElementById('newSchedMinor').value = p.minor != null ? p.minor : '';
+  } else if (s.action_type === 'source_launch') {
+    document.getElementById('newSchedLaunchSlot').value = p.slot != null ? p.slot : '';
+    document.getElementById('newSchedAppId').value = p.app_id != null ? p.app_id : '';
+  } else if (s.action_type === 'apply_layout') {
+    document.getElementById('newSchedLayout').value = p.layout_id != null ? String(p.layout_id) : '';
+  }
+  document.getElementById('schedFormTitle').textContent = `Editing "${s.name}" — name`;
+  document.getElementById('schedSubmitBtn').textContent = 'Save changes';
+  document.getElementById('schedCancelBtn').style.display = '';
+  showSchedMsg('');
+  document.getElementById('schedFormTitle').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function cancelScheduleEdit() {
+  EDITING_SCHEDULE_ID = null;
+  document.getElementById('newSchedName').value = '';
+  resetSchedForm();
+  document.getElementById('schedFormTitle').textContent = 'Add a schedule — name';
+  document.getElementById('schedSubmitBtn').textContent = 'Add schedule';
+  document.getElementById('schedCancelBtn').style.display = 'none';
 }
 
 async function addSchedule() {
@@ -1181,13 +1227,22 @@ async function addSchedule() {
     payload = { layout_id: Number(layoutId) };
   }
   try {
-    await withStepUp(() => api(`/api/venue-control/sites/${locationId}/schedules`, {
-      method: 'POST',
-      body: { name, cronExpr, actionType, payload },
-    }));
-    document.getElementById('newSchedName').value = '';
-    resetSchedForm();
-    showSchedMsg('Schedule added.', 'success');
+    if (EDITING_SCHEDULE_ID) {
+      await withStepUp(() => api(`/api/venue-control/schedules/${EDITING_SCHEDULE_ID}/update`, {
+        method: 'POST',
+        body: { name, cronExpr, actionType, payload },
+      }));
+      cancelScheduleEdit();
+      showSchedMsg('Schedule updated.', 'success');
+    } else {
+      await withStepUp(() => api(`/api/venue-control/sites/${locationId}/schedules`, {
+        method: 'POST',
+        body: { name, cronExpr, actionType, payload },
+      }));
+      document.getElementById('newSchedName').value = '';
+      resetSchedForm();
+      showSchedMsg('Schedule added.', 'success');
+    }
     await loadSchedulesAdmin(locationId);
   } catch (e) {
     showSchedMsg(e.message, 'error');

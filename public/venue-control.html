@@ -226,7 +226,7 @@
     <p class="muted">Fire automatically in this location's own timezone, evaluated on the agent box — e.g. all TVs on at 10:45, all off at 1:30 AM.</p>
     <div id="schedulesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
 
-    <label for="newSchedName">Add a schedule — name</label>
+    <label for="newSchedName" id="schedFormTitle">Add a schedule — name</label>
     <input id="newSchedName" placeholder="e.g. Morning TVs on">
 
     <label>Days</label>
@@ -282,7 +282,8 @@
       <label for="newSchedLayout">Layout</label>
       <select id="newSchedLayout"></select>
     </div>
-    <button class="secondary" onclick="addSchedule()">Add schedule</button>
+    <button class="secondary" id="schedSubmitBtn" onclick="addSchedule()">Add schedule</button>
+    <button class="ghost" id="schedCancelBtn" style="display:none; width:100%; margin-top:8px;" onclick="cancelScheduleEdit()">Cancel edit</button>
     <div id="schedMsg"></div>
   </div>
   </section>
