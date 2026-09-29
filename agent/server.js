@@ -126,7 +126,56 @@ app.use('/api/music', requireStaffPin);
 app.get('/api/music/state', async (req, res) => {
   const st = sonos.getState();
   const favs = sonos.getFavorites();
-  res.json({ ...st, favorites: favs.map((f) => ({ id: f.id, title: f.title, art: f.art, service: f.service })), currentFavoriteId: sonos.currentFavoriteId() });
+  const config = cache.get('config') || {};
+  const hidden = config.music_hidden || [];
+  const hiddenUris = new Set(hidden.map((h) => h.uri));
+  const all = favs.map((f) => ({ id: f.id, title: f.title, art: f.art, service: f.service, uri: f.uri }));
+  res.json({
+    ...st,
+    favorites: all.filter((f) => !hiddenUris.has(f.uri)),
+    hiddenStations: all.filter((f) => hiddenUris.has(f.uri)).map((f) => ({ ...f, hidden_by: (hidden.find((h) => h.uri === f.uri) || {}).hidden_by })),
+    lists: config.music_lists || [],
+    currentFavoriteId: sonos.currentFavoriteId(),
+    isOwner: req.vcActor === 'admin',
+  });
+});
+// ---- favorites lists (patch_040): written to the cloud through lib/sync.js
+function musicActor(req) { return req.vcActor === 'admin' ? 'owner' : (req.vcActor || 'staff'); }
+function ownerOnly(req, res) {
+  if (req.vcActor !== 'admin') { res.status(403).json({ error: 'Only the owner can remove things for good.' }); return false; }
+  return true;
+}
+app.post('/api/music/lists', async (req, res) => {
+  try {
+    const r = await sync.musicWrite('/lists', { name: req.body && req.body.name, copyOf: req.body && req.body.copyOf, actor: musicActor(req) });
+    activity.record('music.list.create', { actor: req.vcActor, targetType: 'music', targetId: r.id, detail: { name: req.body && req.body.name, copyOf: req.body && req.body.copyOf } });
+    res.json(r);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.post('/api/music/lists/:id/stations', async (req, res) => {
+  try {
+    const r = await sync.musicWrite(`/lists/${encodeURIComponent(req.params.id)}/stations`, { add: req.body && req.body.add, remove: req.body && req.body.remove });
+    activity.record('music.list.stations', { actor: req.vcActor, targetType: 'music', targetId: req.params.id, detail: { add: req.body && req.body.add && req.body.add.title, remove: req.body && req.body.remove } });
+    res.json(r);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.post('/api/music/lists/:id/:op(delete|restore|purge)', async (req, res) => {
+  if (req.params.op === 'purge' && !ownerOnly(req, res)) return;
+  try {
+    const r = await sync.musicWrite(`/lists/${encodeURIComponent(req.params.id)}/${req.params.op}`, { actor: musicActor(req) });
+    activity.record('music.list.' + req.params.op, { actor: req.vcActor, targetType: 'music', targetId: req.params.id, detail: {} });
+    res.json(r);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.post('/api/music/hidden/:op(hide|restore|purge)', async (req, res) => {
+  const { uri, title, favoriteId } = req.body || {};
+  if (req.params.op === 'purge' && !ownerOnly(req, res)) return;
+  try {
+    if (req.params.op === 'purge' && favoriteId) await sonos.removeFavorite(String(favoriteId));
+    const r = await sync.musicWrite(`/hidden/${req.params.op}`, { uri, title, actor: musicActor(req) });
+    activity.record('music.station.' + req.params.op, { actor: req.vcActor, targetType: 'music', targetId: null, detail: { title } });
+    res.json(r);
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 app.post('/api/music/refresh', async (req, res) => {
   try { await sonos.readState(); await sonos.readFavorites(true); } catch (e) { /* state carries the error */ }

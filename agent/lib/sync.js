@@ -94,6 +94,19 @@ async function reportScheduleResult(scheduleId, resultText) {
   if (!res.ok) throw new Error(`schedule result push failed: ${res.status} ${await res.text()}`);
 }
 
+// patch_040: staff favorites lists live in the cloud; the box writes
+// through here and re-pulls its config right after so the iPad's next
+// refresh already has the change. Throws with the cloud's message.
+async function musicWrite(path, body) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/music${path}`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `music write failed: ${res.status}`);
+  try { await pullConfig(); } catch (e) { /* next timer pull catches up */ }
+  return data;
+}
+
 async function reportTvToken(tvId, wsToken) {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/tvs/${tvId}/token`, {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({ ws_token: wsToken }),
@@ -357,6 +370,7 @@ function stop() {
 }
 
 module.exports = {
+  musicWrite,
   pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
   reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems,

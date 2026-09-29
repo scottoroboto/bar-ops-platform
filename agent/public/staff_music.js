@@ -86,13 +86,13 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-async function refreshAll() {
+async function refreshAll(force) {
   try {
     const before = MUSIC ? `${MUSIC.currentFavoriteId}|${(MUSIC.favorites || []).length}` : '';
     MUSIC = await api('/api/music/state');
     renderNowPlaying();
     const after = `${MUSIC.currentFavoriteId}|${(MUSIC.favorites || []).length}`;
-    if (after !== before && document.activeElement !== document.getElementById('muFilter')) renderStations();
+    if (force || (after !== before && document.activeElement !== document.getElementById('muFilter'))) renderStations();
   } catch (e) { /* keep last-known */ }
 }
 
@@ -129,45 +129,140 @@ function renderNowPlaying() {
 }
 
 let STATION_FILTER = '';
-let STATION_SORT = 'az';   // 'az' | 'sonos' (the order in My Sonos)
+let STATION_SORT = 'az';       // 'az' | 'list:<id>' | 'deleted-stations'
+let FAV_MENU_OPEN = false;
+let SHEET = null;              // { kind: 'save', station } | { kind: 'newlist', station?, copyOf? } | { kind: 'listmenu', list }
+let IS_OWNER = false;
+
+function liveLists() { return ((MUSIC && MUSIC.lists) || []).filter((l) => !l.deleted_at); }
+function deletedLists() { return ((MUSIC && MUSIC.lists) || []).filter((l) => l.deleted_at); }
+function listById(id) { return ((MUSIC && MUSIC.lists) || []).find((l) => String(l.id) === String(id)) || null; }
+function currentList() { return STATION_SORT.startsWith('list:') ? listById(STATION_SORT.slice(5)) : null; }
 
 // Scrollable list like the Pandora app: small art, station name, the
-// playing one lit; a filter box narrows it as you type. A–Z by default,
-// or the order the owner arranged in My Sonos.
+// playing one lit; a find box narrows it as you type. Sorted A–Z, or
+// showing one person's favorites list, or the Deleted stations folder.
 function renderStations() {
   const box = document.getElementById('muStations');
   const m = MUSIC || {};
+  IS_OWNER = !!m.isOwner;
   const all = m.favorites || [];
+  const list = currentList();
+  const showingDeleted = STATION_SORT === 'deleted-stations';
+  let favs;
+  if (list) {
+    const byUri = new Map(all.map((f) => [f.uri, f]));
+    favs = (list.stations || []).map((st) => byUri.get(st.uri) || { id: null, uri: st.uri, title: st.title, art: null, missing: true });
+  } else if (showingDeleted) {
+    favs = m.hiddenStations || [];
+  } else {
+    favs = all.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' }));
+  }
   const q = STATION_FILTER.trim().toLowerCase();
-  let favs = q ? all.filter((f) => (f.title || '').toLowerCase().includes(q)) : all.slice();
-  if (STATION_SORT === 'az') favs.sort((a, b) => (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' }));
+  if (q) favs = favs.filter((f) => (f.title || '').toLowerCase().includes(q));
+
+  const favLabel = list ? `★ ${escapeHtml(list.name)}` : showingDeleted ? 'Deleted stations' : '★ Favorites';
   const header = `<div class="tvs-col-header">
     <span class="tvs-col-title">Stations</span>
-    <span class="mu-who">${all.length} on the account</span>
+    <span class="mu-who">${list ? `${(list.stations || []).length} in ${escapeHtml(list.name)}'s list` : showingDeleted ? `${(m.hiddenStations || []).length} deleted` : `${all.length} on the account`}</span>
   </div>
   <div class="mu-tools">
     <input id="muFilter" type="search" placeholder="Find a station…" value="${escapeHtml(STATION_FILTER)}" oninput="setStationFilter(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
     <button type="button" class="mu-sort${STATION_SORT === 'az' ? ' on' : ''}" onclick="setStationSort('az')">A–Z</button>
-    <button type="button" class="mu-sort${STATION_SORT === 'sonos' ? ' on' : ''}" onclick="setStationSort('sonos')">My order</button>
+    <div class="mu-favwrap">
+      <button type="button" class="mu-sort mu-favbtn${list || showingDeleted ? ' on' : ''}" onclick="toggleFavMenu()">${favLabel} &#9662;</button>
+      ${FAV_MENU_OPEN ? favMenuHtml() : ''}
+    </div>
+    ${list ? `<button type="button" class="mu-sort" onclick="openSheet({ kind: 'listmenu', list: listById('${list.id}') })" title="Copy or delete this list">&#8943;</button>` : ''}
   </div>`;
-  if (!all.length) {
-    box.innerHTML = header + `<p class="muted" style="margin-top:12px;">No stations yet. In the Sonos app, play a Pandora station and add it to My Sonos. It shows up here within a minute.</p>`;
+
+  if (!all.length && !showingDeleted) {
+    box.innerHTML = header + `<p class="muted" style="margin-top:12px;">No stations yet. In the Sonos app, play a Pandora station and add it to My Sonos. It shows up here within a minute.</p>` + sheetHtml();
     return;
   }
+  let body;
   if (!favs.length) {
-    box.innerHTML = header + `<p class="muted" style="margin-top:12px;">Nothing matches "${escapeHtml(STATION_FILTER)}".</p>`;
-    return;
+    body = `<p class="muted" style="margin-top:12px;">${q ? `Nothing matches "${escapeHtml(STATION_FILTER)}".` : list ? 'Nothing in this list yet. Press and hold any station to save it here.' : showingDeleted ? 'Nothing deleted.' : 'No stations.'}</p>`;
+  } else {
+    body = `<div class="tvz-scroll mu-list">${favs.map((f) => rowHtml(f, list, showingDeleted)).join('')}</div>`;
   }
-  const rows = favs.map((f) => {
-    const now = m.currentFavoriteId && f.id === m.currentFavoriteId;
-    return `<button type="button" class="mu-row${now ? ' now' : ''}${MUSIC_BUSY === f.id ? ' busy' : ''}" onclick="musicStation('${escapeHtml(f.id).replace(/'/g, '&#39;')}')">
-      <span class="mu-row-art">${f.art ? `<img src="${escapeHtml(f.art)}" alt="">` : '<span class="blank"></span>'}</span>
-      <span class="mu-row-name">${escapeHtml(f.title)}</span>
-      <span class="mu-row-tag">${now ? 'PLAYING' : (f.service ? escapeHtml(f.service) : '')}</span>
-    </button>`;
-  }).join('');
-  box.innerHTML = header + `<div class="tvz-scroll mu-list">${rows}</div>`;
+  const hint = !list && !showingDeleted && liveLists().length === 0
+    ? `<p class="mu-hint muted">Press and hold a station to save it to a favorites list.</p>` : '';
+  box.innerHTML = header + hint + body + sheetHtml();
 }
+
+function rowHtml(f, list, showingDeleted) {
+  const m = MUSIC || {};
+  const now = f.id && m.currentFavoriteId && f.id === m.currentFavoriteId;
+  const busy = MUSIC_BUSY === f.id;
+  let right;
+  if (showingDeleted) {
+    right = `<span class="mu-row-acts"><button type="button" class="mu-mini" onclick="event.stopPropagation(); stationRestore('${escapeHtml(f.uri)}')">RESTORE</button>${IS_OWNER ? `<button type="button" class="mu-mini danger" onclick="event.stopPropagation(); stationPurge('${escapeHtml(f.uri)}', '${escapeHtml(f.id || '')}', '${escapeHtml(f.title).replace(/'/g, '&#39;')}')">REMOVE FOR GOOD</button>` : ''}</span>`;
+  } else if (list) {
+    right = `<span class="mu-row-acts">${now ? '<span class="mu-row-tag on">PLAYING</span>' : ''}<button type="button" class="mu-star on" title="Remove from ${escapeHtml(list.name)}'s list" onclick="event.stopPropagation(); listRemove('${list.id}', '${escapeHtml(f.uri)}')">&#9733;</button></span>`;
+  } else {
+    right = `<span class="mu-row-tag${now ? ' on' : ''}">${now ? 'PLAYING' : (f.service ? escapeHtml(f.service) : '')}</span>`;
+  }
+  const playable = !!f.id && !f.missing && !showingDeleted;
+  // A div, not a button: the star / restore buttons live inside the row and
+  // a button can't contain buttons (the parser would split them apart).
+  return `<div role="button" tabindex="0" class="mu-row${now ? ' now' : ''}${busy ? ' busy' : ''}${f.missing ? ' missing' : ''}" data-uri="${escapeHtml(f.uri)}" data-id="${escapeHtml(f.id || '')}" data-title="${escapeHtml(f.title)}" ${playable ? `onclick="rowTap(this)"` : ''}>
+    <span class="mu-row-art">${f.art ? `<img src="${escapeHtml(f.art)}" alt="">` : '<span class="blank"></span>'}</span>
+    <span class="mu-row-name">${escapeHtml(f.title)}${f.missing ? ' <small>no longer in My Sonos</small>' : ''}</span>
+    ${right}
+  </div>`;
+}
+
+function favMenuHtml() {
+  const lists = liveLists();
+  const dead = deletedLists();
+  const hiddenCount = ((MUSIC && MUSIC.hiddenStations) || []).length;
+  return `<div class="mu-menu" onclick="event.stopPropagation()">
+    <button type="button" class="mu-menu-item create" onclick="openSheet({ kind: 'newlist' })">&#65291; Create your favorites list</button>
+    ${lists.map((l) => `<button type="button" class="mu-menu-item${STATION_SORT === 'list:' + l.id ? ' on' : ''}" onclick="setStationSort('list:${l.id}')">&#9733; ${escapeHtml(l.name)} <span class="n">${(l.stations || []).length}</span></button>`).join('')}
+    ${!lists.length ? '<div class="mu-menu-empty muted">No lists yet</div>' : ''}
+    <div class="mu-menu-sep"></div>
+    ${hiddenCount ? `<button type="button" class="mu-menu-item dim${STATION_SORT === 'deleted-stations' ? ' on' : ''}" onclick="setStationSort('deleted-stations')">Deleted stations <span class="n">${hiddenCount}</span></button>` : ''}
+    ${dead.length ? `<div class="mu-menu-label muted">Deleted lists</div>` + dead.map((l) => `<div class="mu-menu-item dim static">&#9733; ${escapeHtml(l.name)} <span class="n">${(l.stations || []).length}</span>
+        <span class="acts"><button type="button" class="mu-mini" onclick="listOp('${l.id}', 'restore')">RESTORE</button>${IS_OWNER ? `<button type="button" class="mu-mini danger" onclick="listOp('${l.id}', 'purge')">REMOVE</button>` : ''}</span></div>`).join('') : ''}
+    ${!hiddenCount && !dead.length ? '<div class="mu-menu-empty muted">Nothing deleted</div>' : ''}
+  </div>`;
+}
+
+// Bottom sheet: save a station to one list, name a new list, or copy /
+// delete the list being viewed.
+function sheetHtml() {
+  if (!SHEET) return '';
+  const lists = liveLists();
+  let inner;
+  if (SHEET.kind === 'save') {
+    const st = SHEET.station;
+    inner = `<div class="mu-sheet-title">Save to favorites</div><div class="mu-sheet-sub">${escapeHtml(st.title)}</div>
+      <div class="mu-sheet-list">
+        ${lists.map((l) => { const has = (l.stations || []).some((x) => x.uri === st.uri); return `<button type="button" class="mu-sheet-row${has ? ' has' : ''}" onclick="listAdd('${l.id}', '${escapeHtml(st.uri)}', '${escapeHtml(st.title).replace(/'/g, '&#39;')}')">&#9733; ${escapeHtml(l.name)}${has ? '<span class="n">already in this list</span>' : ''}</button>`; }).join('')}
+        <button type="button" class="mu-sheet-row create" onclick="openSheet({ kind: 'newlist', station: SHEET.station })">&#65291; New list…</button>
+        ${!STATION_SORT.startsWith('list:') && !(STATION_SORT === 'deleted-stations') ? `<button type="button" class="mu-sheet-row dim" onclick="stationHide('${escapeHtml(st.uri)}', '${escapeHtml(st.title).replace(/'/g, '&#39;')}')">Remove from the main list (goes to Deleted stations)</button>` : ''}
+      </div>`;
+  } else if (SHEET.kind === 'newlist') {
+    inner = `<div class="mu-sheet-title">${SHEET.copyOf ? 'Copy list as' : 'New favorites list'}</div>
+      <div class="mu-sheet-sub">${SHEET.copyOf ? 'The copy gets its own name; the original stays until you delete it.' : 'Your name works best: Scott, Mindy, Barry.'}</div>
+      <input id="muNewListName" type="text" maxlength="40" placeholder="List name" autocomplete="off" autocapitalize="words">
+      <div class="mu-sheet-btns"><button type="button" class="mu-sheet-cancel" onclick="closeSheet()">Cancel</button><button type="button" class="mu-sheet-go" onclick="listCreate()">Create</button></div>`;
+  } else if (SHEET.kind === 'listmenu') {
+    const l = SHEET.list;
+    inner = `<div class="mu-sheet-title">${escapeHtml(l.name)}'s list</div><div class="mu-sheet-sub">${(l.stations || []).length} station${(l.stations || []).length === 1 ? '' : 's'}</div>
+      <div class="mu-sheet-list">
+        <button type="button" class="mu-sheet-row" onclick="openSheet({ kind: 'newlist', copyOf: '${l.id}' })">Copy this list under a new name</button>
+        <button type="button" class="mu-sheet-row dim" onclick="listOp('${l.id}', 'delete')">Delete this list (goes to Deleted lists)</button>
+      </div>`;
+  }
+  return `<div class="mu-sheet-back" onclick="closeSheet()"><div class="mu-sheet" onclick="event.stopPropagation()">${inner}${SHEET.kind !== 'newlist' ? '<button type="button" class="mu-sheet-cancel wide" onclick="closeSheet()">Cancel</button>' : ''}</div></div>`;
+}
+
+function openSheet(sheet) { SHEET = sheet; FAV_MENU_OPEN = false; renderStations(); const inp = document.getElementById('muNewListName'); if (inp) inp.focus(); }
+function closeSheet() { SHEET = null; renderStations(); }
+function toggleFavMenu() { FAV_MENU_OPEN = !FAV_MENU_OPEN; renderStations(); }
+document.addEventListener('click', (e) => { if (FAV_MENU_OPEN && !e.target.closest('.mu-favwrap')) { FAV_MENU_OPEN = false; renderStations(); } });
 
 function setStationFilter(v) {
   STATION_FILTER = v || '';
@@ -177,7 +272,24 @@ function setStationFilter(v) {
   const again = document.getElementById('muFilter');
   if (again) { again.focus(); if (pos != null) try { again.setSelectionRange(pos, pos); } catch (e) { /* ignore */ } }
 }
-function setStationSort(s) { STATION_SORT = s; renderStations(); }
+function setStationSort(s) { STATION_SORT = s; FAV_MENU_OPEN = false; renderStations(); }
+
+// Tap plays; press-and-hold (550ms) opens the Save sheet. A hold that
+// fires swallows the click that follows it.
+const HOLD_MS = 550;
+let holdTimer = null; let holdFired = false; let holdRow = null;
+document.addEventListener('pointerdown', (e) => {
+  const row = e.target.closest('.mu-row'); if (!row || e.target.closest('button.mu-star, button.mu-mini')) return;
+  holdRow = row; holdFired = false;
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => {
+    holdFired = true; row.classList.add('held');
+    if (STATION_SORT !== 'deleted-stations') openSheet({ kind: 'save', station: { uri: row.dataset.uri, title: row.dataset.title, id: row.dataset.id } });
+  }, HOLD_MS);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => document.addEventListener(ev, () => { clearTimeout(holdTimer); if (holdRow) holdRow.classList.remove('held'); }));
+document.addEventListener('pointermove', (e) => { if (holdRow && e.buttons && Math.abs(e.movementY) > 6) clearTimeout(holdTimer); });
+function rowTap(row) { if (holdFired) { holdFired = false; return; } musicStation(row.dataset.id); }
 
 // ---- actions ----------------------------------------------------------
 async function musicCmd(action) {
@@ -189,6 +301,51 @@ async function musicCmd(action) {
   } catch (e) { alert(e.message); }
   MUSIC_BUSY = null; renderPage();
   setTimeout(refreshAll, 1500);
+}
+
+async function listCreate() {
+  const inp = document.getElementById('muNewListName');
+  const name = inp ? inp.value.trim() : '';
+  if (!name) { if (inp) inp.focus(); return; }
+  try {
+    const r = await api('/api/music/lists', { method: 'POST', body: JSON.stringify({ name, copyOf: SHEET && SHEET.copyOf }) });
+    const st = SHEET && SHEET.station;
+    if (st && r.id) await api(`/api/music/lists/${r.id}/stations`, { method: 'POST', body: JSON.stringify({ add: { uri: st.uri, title: st.title } }) });
+    SHEET = null;
+    await refreshAll(true);
+    if (r.id) STATION_SORT = 'list:' + r.id;
+    renderStations();
+  } catch (e) { alert(e.message); }
+}
+async function listAdd(listId, uri, title) {
+  try { await api(`/api/music/lists/${listId}/stations`, { method: 'POST', body: JSON.stringify({ add: { uri, title } }) }); SHEET = null; await refreshAll(true); renderStations(); }
+  catch (e) { alert(e.message); }
+}
+async function listRemove(listId, uri) {
+  try { await api(`/api/music/lists/${listId}/stations`, { method: 'POST', body: JSON.stringify({ remove: uri }) }); await refreshAll(true); renderStations(); }
+  catch (e) { alert(e.message); }
+}
+async function listOp(listId, op) {
+  if (op === 'purge' && !confirm('Remove this list for good? This cannot be undone.')) return;
+  try {
+    await api(`/api/music/lists/${listId}/${op}`, { method: 'POST' });
+    SHEET = null; FAV_MENU_OPEN = false;
+    if (op !== 'restore' && STATION_SORT === 'list:' + listId) STATION_SORT = 'az';
+    await refreshAll(true); renderStations();
+  } catch (e) { alert(e.message); }
+}
+async function stationHide(uri, title) {
+  try { await api('/api/music/hidden/hide', { method: 'POST', body: JSON.stringify({ uri, title }) }); SHEET = null; await refreshAll(true); renderStations(); }
+  catch (e) { alert(e.message); }
+}
+async function stationRestore(uri) {
+  try { await api('/api/music/hidden/restore', { method: 'POST', body: JSON.stringify({ uri }) }); await refreshAll(true); renderStations(); }
+  catch (e) { alert(e.message); }
+}
+async function stationPurge(uri, favoriteId, title) {
+  if (!confirm(`Remove "${title}" from My Sonos for good? It can be added back from the Sonos app later.`)) return;
+  try { await api('/api/music/hidden/purge', { method: 'POST', body: JSON.stringify({ uri, favoriteId, title }) }); await refreshAll(true); renderStations(); }
+  catch (e) { alert(e.message); }
 }
 
 async function musicStation(id) {

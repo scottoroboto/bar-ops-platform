@@ -885,8 +885,19 @@ const { rows: layoutItems } = layouts.length
   [layouts.map((l) => l.id)]
 ))
 : { rows: [] };
+// patch_040: staff favorites lists + stations hidden from the main list.
+// Deleted lists ride along (deleted_at set) so the iPad can show its
+// "Deleted" section; the box never touches Postgres for these.
+const { rows: musicLists } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_music_lists WHERE site_id = $1 ORDER BY lower(name)',
+[req.vcSite.site_id]
+));
+const { rows: musicHidden } = await withServiceClient((client) => client.query(
+'SELECT uri, title, hidden_by, hidden_at FROM vc_music_hidden_stations WHERE site_id = $1 ORDER BY hidden_at DESC',
+[req.vcSite.site_id]
+));
 const config = {
-schema_version: 5,
+schema_version: 6,
 site: {
 id: req.vcSite.site_id, // patch_036: the box checks a pass is for this site
 location_id: req.vcSite.location_id,
@@ -924,6 +935,11 @@ layouts: layouts.map((l) => ({ id: l.id, name: l.name, description: l.descriptio
 layout_items: layoutItems.map((it) => ({
 id: it.id, layout_id: it.layout_id, target_type: it.target_type, target_id: it.target_id, action: it.action, step_order: it.step_order,
 })),
+music_lists: musicLists.map((l) => ({
+id: l.id, name: l.name, stations: l.stations || [], created_by: l.created_by, created_at: l.created_at,
+deleted_at: l.deleted_at, deleted_by: l.deleted_by,
+})),
+music_hidden: musicHidden,
 };
 const etag = crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
 if (req.get('if-none-match') === etag) return res.status(304).end();
@@ -944,6 +960,86 @@ measuredAt: b.measuredAt, ispName: b.ispName, wanIp: b.wanIp, ran: b.ran,
 });
 if (!result.ok) return res.status(400).json(result);
 res.json(result);
+});
+
+// ---- Music favorites lists (patch_040). The box is the only writer; each
+// call answers with nothing but ok, and the box re-pulls its config
+// (the ETag changes) so the iPad sees the change on its next refresh.
+function cleanStations(list) {
+  return (Array.isArray(list) ? list : []).filter((x) => x && x.uri).map((x) => ({ uri: String(x.uri), title: String(x.title || '') })).slice(0, 500);
+}
+app.post('/api/venue/agent/music/lists', requireAgentAuth(), async (req, res) => {
+const { name, stations, copyOf, actor } = req.body || {};
+const clean = String(name || '').trim().slice(0, 40);
+if (!clean) return res.status(400).json({ error: 'A list needs a name.' });
+try {
+const out = await withServiceClient(async (client) => {
+let items = cleanStations(stations);
+if (copyOf) {
+  const { rows } = await client.query('SELECT stations FROM vc_music_lists WHERE id = $1 AND site_id = $2', [copyOf, req.vcSite.site_id]);
+  if (rows[0]) items = cleanStations(rows[0].stations);
+}
+const { rows } = await client.query(
+`INSERT INTO vc_music_lists (site_id, name, stations, created_by) VALUES ($1, $2, $3::jsonb, $4) RETURNING id`,
+[req.vcSite.site_id, clean, JSON.stringify(items), actor || null]
+);
+return rows[0];
+});
+res.json({ ok: true, id: out.id });
+} catch (err) {
+if (/vc_music_lists_live_name/.test(err.message)) return res.status(409).json({ error: `There is already a list called ${clean}.` });
+res.status(500).json({ error: err.message });
+}
+});
+app.post('/api/venue/agent/music/lists/:id/stations', requireAgentAuth(), async (req, res) => {
+const { add, remove } = req.body || {};
+const { rows } = await withServiceClient((client) => client.query(
+'SELECT stations FROM vc_music_lists WHERE id = $1 AND site_id = $2 AND deleted_at IS NULL',
+[req.params.id, req.vcSite.site_id]
+));
+if (!rows[0]) return res.status(404).json({ error: 'List not found.' });
+let items = cleanStations(rows[0].stations);
+if (remove) items = items.filter((x) => x.uri !== String(remove));
+for (const a of cleanStations(add ? [add] : [])) if (!items.some((x) => x.uri === a.uri)) items.push(a);
+await withServiceClient((client) => client.query(
+'UPDATE vc_music_lists SET stations = $1::jsonb, updated_at = now() WHERE id = $2',
+[JSON.stringify(items), req.params.id]
+));
+res.json({ ok: true, count: items.length });
+});
+app.post('/api/venue/agent/music/lists/:id/:op', requireAgentAuth(), async (req, res) => {
+const { op } = req.params;
+if (!['delete', 'restore', 'purge'].includes(op)) return res.status(404).json({ error: 'Unknown operation.' });
+const { actor } = req.body || {};
+const sql = op === 'delete'
+? 'UPDATE vc_music_lists SET deleted_at = now(), deleted_by = $3 WHERE id = $1 AND site_id = $2 AND deleted_at IS NULL'
+: op === 'restore'
+? 'UPDATE vc_music_lists SET deleted_at = NULL, deleted_by = NULL WHERE id = $1 AND site_id = $2 AND $3::text IS NOT NULL'
+: 'DELETE FROM vc_music_lists WHERE id = $1 AND site_id = $2 AND deleted_at IS NOT NULL AND $3::text IS NOT NULL';
+const r = await withServiceClient((client) => client.query(sql, [req.params.id, req.vcSite.site_id, actor || 'staff']));
+if (!r.rowCount) return res.status(404).json({ error: op === 'restore' ? 'Nothing to restore.' : op === 'purge' ? 'Delete the list first, then remove it for good.' : 'List not found.' });
+res.json({ ok: true });
+});
+app.post('/api/venue/agent/music/hidden/:op', requireAgentAuth(), async (req, res) => {
+const { uri, title, actor } = req.body || {};
+const { op } = req.params;
+if (!['hide', 'restore', 'purge'].includes(op)) return res.status(404).json({ error: 'Unknown operation.' });
+if (!uri) return res.status(400).json({ error: 'Missing station.' });
+if (op === 'hide') {
+await withServiceClient((client) => client.query(
+`INSERT INTO vc_music_hidden_stations (site_id, uri, title, hidden_by) VALUES ($1, $2, $3, $4)
+ ON CONFLICT (site_id, uri) DO NOTHING`,
+[req.vcSite.site_id, String(uri), title || null, actor || null]
+));
+} else {
+// restore and purge both drop the hidden row; purge additionally has the
+// box remove the station from My Sonos (that part happens on the box).
+await withServiceClient((client) => client.query(
+'DELETE FROM vc_music_hidden_stations WHERE site_id = $1 AND uri = $2',
+[req.vcSite.site_id, String(uri)]
+));
+}
+res.json({ ok: true });
 });
 
 app.post('/api/venue/agent/heartbeat', requireAgentAuth(), async (req, res) => {

@@ -225,6 +225,14 @@ async function playFavorite(id) {
   return { state, station: fav.title };
 }
 
+// Owner-only "remove for good": drops the favorite from My Sonos itself.
+async function removeFavorite(id) {
+  const p = await ensurePlayer();
+  if (!p) throw new Error('No Sonos found on this network.');
+  await soap(p.ip, 'ContentDirectory', 'DestroyObject', { ObjectID: id });
+  await readFavorites(true).catch(() => {});
+}
+
 function getState() { return state; }
 function getFavorites() { return favorites; }
 function currentFavoriteId() {
@@ -242,4 +250,4 @@ function start() {
   console.log(config.SONOS_IP ? `[sonos] polling ${config.SONOS_IP}` : '[sonos] no SONOS_IP set — will look for a player on the network');
 }
 
-module.exports = { start, getState, getFavorites, readFavorites, currentFavoriteId, transport, playFavorite, readState };
+module.exports = { start, getState, getFavorites, readFavorites, currentFavoriteId, transport, playFavorite, readState, removeFavorite };
