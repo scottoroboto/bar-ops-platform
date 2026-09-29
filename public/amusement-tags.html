@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game stickers — Diamond Amusement</title>
+<style>
+  /* Printable QR sticker sheet: one label per active game. Each QR encodes
+     the app URL with ?tag=DA-0007, so it works both from the app's own
+     scanner and from the phone's camera app. Sized for 2" x 2" labels;
+     plain paper + tape works fine too. */
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #fff; color: #111; }
+  .toolbar { padding: 14px 20px; border-bottom: 1px solid #ddd; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .toolbar button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid #333; background: #fff; cursor: pointer; }
+  .toolbar button.primary { background: #0d74da; color: #fff; border-color: #0d74da; }
+  .toolbar .muted { color: #666; font-size: 13px; }
+  .sheet { display: grid; grid-template-columns: repeat(auto-fill, 2in); gap: 0.25in; padding: 0.4in; }
+  .tag { width: 2in; height: 2in; box-sizing: border-box; border: 1px dashed #999; border-radius: 8px; padding: 0.1in; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; page-break-inside: avoid; }
+  .tag .qr { width: 1.2in; height: 1.2in; }
+  .tag .qr canvas, .tag .qr img { width: 1.2in !important; height: 1.2in !important; display: block; }
+  .tag .name { font-weight: 700; font-size: 12px; text-align: center; line-height: 1.15; }
+  .tag .code { font-size: 11px; letter-spacing: 1px; color: #333; }
+  .tag .loc { font-size: 9px; color: #666; }
+  @media print { .toolbar { display: none; } .sheet { padding: 0.25in; } .tag { border-color: #ccc; } }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button class="primary" onclick="window.print()">Print</button>
+  <label class="muted"><input type="checkbox" id="retired" onchange="load()"> include retired</label>
+  <span class="muted" id="status">Loading…</span>
+</div>
+<div class="sheet" id="sheet"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="/common.js"></script>
+<script>
+async function load() {
+  const person = requireAuth();
+  if (!person) return;
+  const status = document.getElementById('status');
+  try {
+    const all = document.getElementById('retired').checked;
+    const { games } = await api('/api/amusement/games' + (all ? '?all=1' : ''));
+    const sheet = document.getElementById('sheet');
+    sheet.innerHTML = '';
+    const base = window.location.origin + '/amusement.html?tag=';
+    games.forEach((g) => {
+      const el = document.createElement('div');
+      el.className = 'tag';
+      el.innerHTML = `<div class="qr"></div><div class="name">${escapeHtml(g.name)}</div><div class="code">${escapeHtml(g.tag_code)}</div><div class="loc">${escapeHtml(g.location_name || '')}</div>`;
+      sheet.appendChild(el);
+      if (window.QRCode) {
+        new QRCode(el.querySelector('.qr'), { text: base + encodeURIComponent(g.tag_code), width: 116, height: 116, correctLevel: QRCode.CorrectLevel.M });
+      } else {
+        el.querySelector('.qr').textContent = 'QR library failed to load';
+      }
+    });
+    status.textContent = `${games.length} sticker${games.length === 1 ? '' : 's'} · each QR opens the app at that game`;
+  } catch (e) {
+    status.textContent = e.message;
+  }
+}
+load();
+</script>
+</body>
+</html>
