@@ -126,6 +126,12 @@ async function api(path, opts = {}) {
   return data;
 }
 
+function fmtClock(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = String(hhmm).split(':').map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -133,15 +139,15 @@ function escapeHtml(s) {
 function renderLayouts() {
   const box = document.getElementById('layoutsBox');
   if (!LAYOUTS.length) {
-    box.innerHTML = '<p class="muted">No layouts yet -- capture one from this box\'s admin page (Admin &rarr; Capture current state), or add one from TSB Platform: Venue Control &rarr; Layouts.</p>';
+    box.innerHTML = '<p class="muted">No scenes yet. A manager can capture one from the TVs tab (Capture scene) once the room looks right, or add one in TV Admin &rarr; Scenes.</p>';
     return;
   }
   box.innerHTML = LAYOUTS.map((l) => `
     <div class="layout-row">
       <div>
-        <div class="layout-name">${escapeHtml(l.name)}</div>
+        <div class="layout-name">${escapeHtml(l.name)}${l.enabled === false ? ' <span class="layout-count">(off)</span>' : ''}</div>
         ${l.description ? `<div class="layout-desc">${escapeHtml(l.description)}</div>` : ''}
-        <div class="layout-count">${l.items.length} item${l.items.length === 1 ? '' : 's'}</div>
+        <div class="layout-count">${l.daily_time ? `daily at ${fmtClock(l.daily_time)} · ` : ''}${l.kind === 'all_off' ? 'every TV off' : `${l.items.length} item${l.items.length === 1 ? '' : 's'}`}</div>
       </div>
       <button class="primary" ${l.items.length ? '' : 'disabled'} onclick="applyLayout(${l.id})">Apply</button>
     </div>
@@ -192,7 +198,7 @@ async function applyLayout(id) {
   const layout = LAYOUTS.find((l) => Number(l.id) === Number(id));
   const items = layout ? layout.items : [];
   const pendingRows = items.map((it) => ({ name: resolveItemName(it), detail: actionLabel(it.action), status: 'working' }));
-  renderApplyProgress(layout ? layout.name : 'Layout', pendingRows, id);
+  renderApplyProgress(layout ? layout.name : 'Scene', pendingRows, id);
 
   try {
     const result = await api(`/api/layouts/${id}/apply`, { method: 'POST' });
@@ -212,7 +218,7 @@ async function applyLayout(id) {
     // yet has nothing meaningful to undo back to.
     if (result.undo && result.undo.length) showUndoBar(result.name, result.undo);
   } catch (e) {
-    renderApplyProgress(layout ? layout.name : 'Layout', pendingRows.map((r) => ({ ...r, status: 'failed', error: e.message })), id);
+    renderApplyProgress(layout ? layout.name : 'Scene', pendingRows.map((r) => ({ ...r, status: 'failed', error: e.message })), id);
   }
 }
 

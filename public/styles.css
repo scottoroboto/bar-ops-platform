@@ -484,7 +484,7 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
   box-shadow: 0 8px 24px rgba(0,0,0,0.45);
 }
 .confirm-popover #confirmPopoverText { font-size: 13px; line-height: 1.4; margin-bottom: 10px; }
-.confirm-popover-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.confirm-popover-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 
 @media (max-width: 760px) {
   .emp-row { flex-wrap: wrap; }

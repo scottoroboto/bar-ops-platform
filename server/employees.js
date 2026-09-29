@@ -20,7 +20,7 @@ const storage = require('./storage');
 // actually enforces the "only managers" half; it's tracked the same way
 // as the other four but does not yet gate access to this app the way the
 // other four gate their own (see setAppAccess/activateEmployee).
-const APP_KEYS = ['time_clock', 'service_calls', 'scheduling', 'monitoring', 'employees', 'cash_handling', 'inventory_control', 'tv_staff'];
+const APP_KEYS = ['time_clock', 'service_calls', 'scheduling', 'monitoring', 'employees', 'cash_handling', 'inventory_control', 'tv_staff', 'amusement'];
 const MANAGER_ONLY_APP_KEYS = ['employees'];
 
 function slugUsername(name) {

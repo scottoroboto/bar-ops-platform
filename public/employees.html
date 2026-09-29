@@ -154,6 +154,8 @@
     <label class="switch"><input type="checkbox" id="accessInventory"><span class="slider"></span></label></div>
   <div class="toggle-row"><span class="label">TV Staff</span>
     <label class="switch"><input type="checkbox" id="accessTvStaff"><span class="slider"></span></label></div>
+  <div class="toggle-row"><span class="label">Games</span>
+    <label class="switch"><input type="checkbox" id="accessAmusement"><span class="slider"></span></label></div>
   <!-- Critical Systems widget — one row per active location, rendered by
        openActivateModal() into activateNetworkAccess since the location
        list is dynamic (not a fixed enum like the app-access toggles
@@ -291,7 +293,8 @@
   <div id="confirmPopoverText"></div>
   <div class="confirm-popover-actions">
     <button class="small ghost" onclick="cancelPopoverConfirm()">Cancel</button>
-    <button class="small primary" onclick="submitPopoverConfirm()">Yes</button>
+    <button class="small ghost" id="confirmPopoverAlt" style="display:none;" onclick="submitPopoverAlt()"></button>
+    <button class="small primary" id="confirmPopoverYes" onclick="submitPopoverConfirm()">Yes</button>
   </div>
 </div>
 

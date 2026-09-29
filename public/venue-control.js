@@ -300,6 +300,7 @@ function onSourcesLocationChange() {
   const healthP = loadHealthAdmin(locationId);
   const layoutsP = loadLayoutsAdmin(locationId);
   loadSchedulesAdmin(locationId);
+  layoutsP.then(() => loadEventsAdmin(locationId));
   loadBackupsAdmin(locationId);
 
   Promise.all([zonesP, tvsP, healthP]).then(() => { renderZonesList(); renderTvZoneChips(); renderTvsList(); renderHealthList(); });
@@ -1125,6 +1126,7 @@ function renderSchedulesList() {
           ${s.last_run_at ? `<div class="sub">last ran ${new Date(s.last_run_at).toLocaleString()}: ${escapeHtml(s.last_result || '')}</div>` : ''}
         </div>
         <div class="stack-actions" style="margin-top:0;">
+          <button class="small ghost" onclick="editSchedule('${s.id}')">Edit</button>
           ${s.enabled
             ? `<button class="small ghost" onclick="toggleSchedule('${s.id}', false)">Disable</button>`
             : `<button class="small secondary" style="margin-top:0;" onclick="toggleSchedule('${s.id}', true)">Enable</button>`}
@@ -1151,6 +1153,51 @@ async function deleteSchedule(id) {
   } catch (e) {
     showSchedMsg(e.message, 'error');
   }
+}
+
+// ---- Edit a schedule (Scotto, 2026-09-29): the add form doubles as the
+// edit form. Edit loads the schedule into it, the button turns into "Save
+// changes", and saving goes through the existing /update route (name,
+// cron, action, payload all at once). Cancel puts the form back.
+let EDITING_SCHEDULE_ID = null;
+
+function editSchedule(id) {
+  const s = SCHEDULES_ADMIN.find((x) => String(x.id) === String(id));
+  if (!s) return;
+  EDITING_SCHEDULE_ID = s.id;
+  document.getElementById('newSchedName').value = s.name || '';
+  document.getElementById('newSchedCron').value = s.cron_expr || '';
+  onSchedRawCronEdit();
+  const p = s.payload || {};
+  document.getElementById('newSchedAction').value = s.action_type;
+  onSchedActionChange();
+  if (s.action_type === 'tvs_power') {
+    document.getElementById('newSchedTvState').value = p.state || 'on';
+    document.getElementById('newSchedTvZone').value = p.zone_id != null ? String(p.zone_id) : '';
+  } else if (s.action_type === 'source_tune') {
+    document.getElementById('newSchedSlot').value = p.slot != null ? p.slot : '';
+    document.getElementById('newSchedMajor').value = p.major != null ? p.major : '';
+    document.getElementById('newSchedMinor').value = p.minor != null ? p.minor : '';
+  } else if (s.action_type === 'source_launch') {
+    document.getElementById('newSchedLaunchSlot').value = p.slot != null ? p.slot : '';
+    document.getElementById('newSchedAppId').value = p.app_id != null ? p.app_id : '';
+  } else if (s.action_type === 'apply_layout') {
+    document.getElementById('newSchedLayout').value = p.layout_id != null ? String(p.layout_id) : '';
+  }
+  document.getElementById('schedFormTitle').textContent = `Editing "${s.name}" — name`;
+  document.getElementById('schedSubmitBtn').textContent = 'Save changes';
+  document.getElementById('schedCancelBtn').style.display = '';
+  showSchedMsg('');
+  document.getElementById('schedFormTitle').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function cancelScheduleEdit() {
+  EDITING_SCHEDULE_ID = null;
+  document.getElementById('newSchedName').value = '';
+  resetSchedForm();
+  document.getElementById('schedFormTitle').textContent = 'Add a schedule — name';
+  document.getElementById('schedSubmitBtn').textContent = 'Add schedule';
+  document.getElementById('schedCancelBtn').style.display = 'none';
 }
 
 async function addSchedule() {
@@ -1181,13 +1228,22 @@ async function addSchedule() {
     payload = { layout_id: Number(layoutId) };
   }
   try {
-    await withStepUp(() => api(`/api/venue-control/sites/${locationId}/schedules`, {
-      method: 'POST',
-      body: { name, cronExpr, actionType, payload },
-    }));
-    document.getElementById('newSchedName').value = '';
-    resetSchedForm();
-    showSchedMsg('Schedule added.', 'success');
+    if (EDITING_SCHEDULE_ID) {
+      await withStepUp(() => api(`/api/venue-control/schedules/${EDITING_SCHEDULE_ID}/update`, {
+        method: 'POST',
+        body: { name, cronExpr, actionType, payload },
+      }));
+      cancelScheduleEdit();
+      showSchedMsg('Schedule updated.', 'success');
+    } else {
+      await withStepUp(() => api(`/api/venue-control/sites/${locationId}/schedules`, {
+        method: 'POST',
+        body: { name, cronExpr, actionType, payload },
+      }));
+      document.getElementById('newSchedName').value = '';
+      resetSchedForm();
+      showSchedMsg('Schedule added.', 'success');
+    }
     await loadSchedulesAdmin(locationId);
   } catch (e) {
     showSchedMsg(e.message, 'error');
@@ -1244,20 +1300,29 @@ function renderLayoutsList() {
         <div class="list-row" style="flex-direction:column; align-items:stretch;">
           <input id="editLayoutName" value="${escapeHtml(l.name)}" placeholder="Name">
           <input id="editLayoutDesc" value="${escapeHtml(l.description || '')}" placeholder="Description (optional)" style="margin-top:8px;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div><label for="editLayoutTime">Runs daily at (blank = manual)</label><input id="editLayoutTime" type="time" value="${escapeHtml(l.daily_time || '')}"></div>
+            <div><label for="editLayoutKind">Kind</label><select id="editLayoutKind"><option value="captured" ${l.kind !== 'all_off' ? 'selected' : ''}>Captured on the box</option><option value="all_off" ${l.kind === 'all_off' ? 'selected' : ''}>All TVs off</option></select></div>
+          </div>
           <div class="stack-actions">
             <button class="ghost small" onclick="cancelEditLayout()">Cancel</button>
             <button class="primary small" style="margin-top:0;" onclick="saveEditLayout('${l.id}')">Save</button>
           </div>
         </div>`;
     }
+    const when = l.daily_time ? `daily at ${fmtClock(l.daily_time)}` : 'manual';
+    const body = l.kind === 'all_off'
+      ? '<div class="sub">Every TV off — built in, nothing to capture.</div>'
+      : (l.items.length ? `<div class="sub">${l.items.map(describeLayoutItem).map(escapeHtml).join(' · ')}</div>` : '<div class="sub">Not captured yet — TVs tab → Capture scene on the box.</div>');
     return `
       <div class="list-row">
-        <div class="name">${escapeHtml(l.name)}
-          <div class="sub">${l.description ? escapeHtml(l.description) + ' · ' : ''}${l.items.length} item${l.items.length === 1 ? '' : 's'}</div>
-          ${l.items.length ? `<div class="sub">${l.items.map(describeLayoutItem).map(escapeHtml).join(' · ')}</div>` : '<div class="sub">Not captured yet -- see the agent\'s Admin page at the bar.</div>'}
+        <div class="name">${escapeHtml(l.name)} <span class="badge ${l.enabled === false ? 'off' : (l.daily_time ? 'on' : 'off')}">${l.enabled === false ? 'disabled' : when}</span>
+          <div class="sub">${l.description ? escapeHtml(l.description) + ' · ' : ''}${l.kind === 'all_off' ? 'all TVs off' : `${l.items.length} item${l.items.length === 1 ? '' : 's'}`}</div>
+          ${body}
         </div>
         <div class="stack-actions" style="margin-top:0;">
           <button class="small ghost" onclick="startEditLayout('${l.id}')">Edit</button>
+          <button class="small ghost" onclick="toggleLayoutEnabled('${l.id}', ${l.enabled === false ? 'true' : 'false'})">${l.enabled === false ? 'Enable' : 'Disable'}</button>
           <button class="small ghost" onclick="deleteLayout('${l.id}')">Delete</button>
         </div>
       </div>`;
@@ -1270,22 +1335,31 @@ function cancelEditLayout() { editingLayoutId = null; renderLayoutsList(); }
 async function saveEditLayout(id) {
   const name = document.getElementById('editLayoutName').value.trim();
   const description = document.getElementById('editLayoutDesc').value.trim();
+  const dailyTime = document.getElementById('editLayoutTime').value || null;
+  const kind = document.getElementById('editLayoutKind').value;
   if (!name) { showLayoutMsg('Name is required.', 'error'); return; }
   try {
-    await withStepUp(() => api(`/api/venue-control/layouts/${id}/update`, { method: 'POST', body: { name, description: description || null } }));
+    await withStepUp(() => api(`/api/venue-control/layouts/${id}/update`, { method: 'POST', body: { name, description: description || null, dailyTime, kind } }));
     editingLayoutId = null;
-    showLayoutMsg('Layout updated.', 'success');
+    showLayoutMsg('Scene updated.', 'success');
     await loadLayoutsAdmin(document.getElementById('sourcesLocationSelect').value);
   } catch (e) {
     showLayoutMsg(e.message, 'error');
   }
 }
 
+async function toggleLayoutEnabled(id, enabled) {
+  try {
+    await withStepUp(() => api(`/api/venue-control/layouts/${id}/update`, { method: 'POST', body: { enabled } }));
+    await loadLayoutsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) { showLayoutMsg(e.message, 'error'); }
+}
+
 async function deleteLayout(id) {
-  if (!confirm('Delete this layout? Any schedule set to apply it will stop working.')) return;
+  if (!confirm('Delete this scene? Any timer or event set to use it will stop working.')) return;
   try {
     await withStepUp(() => api(`/api/venue-control/layouts/${id}/delete`, { method: 'POST' }));
-    showLayoutMsg('Layout deleted.', 'success');
+    showLayoutMsg('Scene deleted.', 'success');
     await loadLayoutsAdmin(document.getElementById('sourcesLocationSelect').value);
   } catch (e) {
     showLayoutMsg(e.message, 'error');
@@ -1296,17 +1370,144 @@ async function addLayout() {
   const locationId = document.getElementById('sourcesLocationSelect').value;
   const name = document.getElementById('newLayoutName').value.trim();
   const description = document.getElementById('newLayoutDesc').value.trim();
+  const dailyTime = document.getElementById('newLayoutTime').value || null;
+  const kind = document.getElementById('newLayoutKind').value;
   if (!locationId) { showLayoutMsg('Turn Venue Control on for a location first.', 'error'); return; }
   if (!name) { showLayoutMsg('Name is required.', 'error'); return; }
   try {
-    await withStepUp(() => api(`/api/venue-control/sites/${locationId}/layouts`, { method: 'POST', body: { name, description: description || null } }));
+    await withStepUp(() => api(`/api/venue-control/sites/${locationId}/layouts`, { method: 'POST', body: { name, description: description || null, dailyTime, kind } }));
     document.getElementById('newLayoutName').value = '';
     document.getElementById('newLayoutDesc').value = '';
-    showLayoutMsg('Layout added -- capture its items from the agent\'s Admin page at the bar.', 'success');
+    document.getElementById('newLayoutTime').value = '';
+    showLayoutMsg(kind === 'all_off' ? 'Scene added.' : 'Scene added — capture what it looks like from the box\'s TVs tab (Capture scene).', 'success');
     await loadLayoutsAdmin(locationId);
   } catch (e) {
     showLayoutMsg(e.message, 'error');
   }
+}
+
+// ---- Events admin (owner-only, patch_043). Items are captured on the
+// box; here the owner edits when an event runs, what happens after, the
+// note, and can delete it.
+let EVENTS_ADMIN = [];
+let editingEventId = null;
+const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function fmtClock(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = String(hhmm).split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+function fmtEventDate(d) {
+  if (!d) return '';
+  const s = String(d).slice(0, 10);
+  return new Date(s + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function describeEventWhen(e) {
+  if (e.kind === 'once') return `${fmtEventDate(e.event_date)} · ${fmtClock(e.start_time)} to ${fmtClock(e.end_time)}`;
+  if (e.kind === 'weekly') return `${(e.days || []).map((d) => DAY_SHORT[d]).join(', ')} · ${fmtClock(e.start_time)} to ${fmtClock(e.end_time)}`;
+  return 'Manual — tap Apply on the TVs tab';
+}
+function describeAfter(e) {
+  if (e.after_mode === 'leave') return 'leave the TVs as they are';
+  if (e.after_mode === 'scene') return `go to scene "${e.after_layout_name || 'missing'}"`;
+  return 'put the TVs back how they were';
+}
+function showEventMsg(text, kind) {
+  document.getElementById('eventMsg').innerHTML = text ? `<div class="msg ${kind || 'info'}">${escapeHtml(text)}</div>` : '';
+}
+
+async function loadEventsAdmin(locationId) {
+  try {
+    EVENTS_ADMIN = await api(`/api/venue-control/sites/${locationId}/events`);
+    renderEventsList();
+  } catch (e) {
+    document.getElementById('eventsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderEventsList() {
+  const el = document.getElementById('eventsList');
+  if (!EVENTS_ADMIN.length) { el.innerHTML = '<p class="muted">No events yet. Capture one on the box\'s TVs tab.</p>'; return; }
+  el.innerHTML = EVENTS_ADMIN.map((e) => {
+    if (e.id === editingEventId) return eventEditFormHtml(e);
+    const running = e.running_since ? `<span class="badge on">running since ${new Date(e.running_since).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>` : '';
+    return `
+      <div class="list-row">
+        <div class="name">${escapeHtml(e.name)} ${running}${e.enabled === false ? '<span class="badge off">disabled</span>' : ''}
+          <div class="sub">${escapeHtml(describeEventWhen(e))} · ${e.tv_count} TV${e.tv_count === 1 ? '' : 's'} · after: ${escapeHtml(describeAfter(e))}</div>
+          ${e.note ? `<div class="sub">${escapeHtml(e.note)}</div>` : ''}
+          ${e.last_run_at ? `<div class="sub">last ran ${new Date(e.last_run_at).toLocaleString()}${e.last_result ? `: ${escapeHtml(e.last_result)}` : ''}</div>` : ''}
+        </div>
+        <div class="stack-actions" style="margin-top:0;">
+          <button class="small ghost" onclick="editingEventId=${e.id}; renderEventsList()">Edit</button>
+          <button class="small ghost" onclick="deleteEvent('${e.id}')">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function eventEditFormHtml(e) {
+  const days = e.days || [];
+  return `
+    <div class="list-row" style="flex-direction:column; align-items:stretch;">
+      <input id="evName" value="${escapeHtml(e.name)}" placeholder="Name">
+      <input id="evNote" value="${escapeHtml(e.note || '')}" placeholder="Note for staff (optional)" style="margin-top:8px;">
+      <label for="evKind">When</label>
+      <select id="evKind" onchange="onEvKindChange()"><option value="manual" ${e.kind === 'manual' ? 'selected' : ''}>Manual — staff tap Apply</option><option value="once" ${e.kind === 'once' ? 'selected' : ''}>One date</option><option value="weekly" ${e.kind === 'weekly' ? 'selected' : ''}>Weekly</option></select>
+      <div id="evOnce" style="display:${e.kind === 'once' ? '' : 'none'};"><label for="evDate">Date</label><input id="evDate" type="date" value="${escapeHtml(String(e.event_date || '').slice(0, 10))}"></div>
+      <div id="evWeekly" style="display:${e.kind === 'weekly' ? '' : 'none'};"><label>Days</label><div class="vc-day-chips">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<button type="button" class="vc-day-chip ${days.includes(d) ? 'active' : ''}" data-day="${d}" onclick="this.classList.toggle('active')">${DAY_SHORT[d][0]}</button>`).join('')}</div></div>
+      <div id="evTimes" style="display:${e.kind === 'manual' ? 'none' : 'grid'}; grid-template-columns:1fr 1fr; gap:10px;">
+        <div><label for="evStart">Start</label><input id="evStart" type="time" value="${escapeHtml(e.start_time || '')}"></div>
+        <div><label for="evEnd">End</label><input id="evEnd" type="time" value="${escapeHtml(e.end_time || '')}"></div>
+      </div>
+      <label for="evAfter">When it ends</label>
+      <select id="evAfter" onchange="document.getElementById('evAfterScene').style.display = this.value === 'scene' ? '' : 'none'">
+        <option value="restore" ${e.after_mode === 'restore' ? 'selected' : ''}>Put the TVs back how they were</option>
+        <option value="leave" ${e.after_mode === 'leave' ? 'selected' : ''}>Leave them as they are</option>
+        <option value="scene" ${e.after_mode === 'scene' ? 'selected' : ''}>Go to a scene</option>
+      </select>
+      <div id="evAfterScene" style="display:${e.after_mode === 'scene' ? '' : 'none'};"><label for="evAfterLayout">Scene</label><select id="evAfterLayout">${(LAYOUTS_ADMIN || []).map((l) => `<option value="${l.id}" ${String(l.id) === String(e.after_layout_id) ? 'selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}</select></div>
+      <div class="toggle-row" style="margin-top:10px;"><span class="label">Enabled</span><label class="switch"><input type="checkbox" id="evEnabled" ${e.enabled === false ? '' : 'checked'}><span class="slider"></span></label></div>
+      <div class="stack-actions">
+        <button class="ghost small" onclick="editingEventId=null; renderEventsList()">Cancel</button>
+        <button class="primary small" style="margin-top:0;" onclick="saveEvent('${e.id}')">Save</button>
+      </div>
+    </div>`;
+}
+function onEvKindChange() {
+  const k = document.getElementById('evKind').value;
+  document.getElementById('evOnce').style.display = k === 'once' ? '' : 'none';
+  document.getElementById('evWeekly').style.display = k === 'weekly' ? '' : 'none';
+  document.getElementById('evTimes').style.display = k === 'manual' ? 'none' : 'grid';
+}
+async function saveEvent(id) {
+  const kind = document.getElementById('evKind').value;
+  const body = {
+    name: document.getElementById('evName').value, note: document.getElementById('evNote').value, kind,
+    event_date: kind === 'once' ? document.getElementById('evDate').value : null,
+    days: kind === 'weekly' ? Array.from(document.querySelectorAll('#evWeekly .vc-day-chip.active')).map((b) => Number(b.dataset.day)) : [],
+    start_time: kind === 'manual' ? null : document.getElementById('evStart').value,
+    end_time: kind === 'manual' ? null : document.getElementById('evEnd').value,
+    after_mode: document.getElementById('evAfter').value,
+    after_layout_id: document.getElementById('evAfter').value === 'scene' ? document.getElementById('evAfterLayout').value : null,
+    enabled: document.getElementById('evEnabled').checked,
+  };
+  try {
+    await withStepUp(() => api(`/api/venue-control/events/${id}/update`, { method: 'POST', body }));
+    editingEventId = null;
+    showEventMsg('Event updated.', 'success');
+    await loadEventsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) { showEventMsg(e.message, 'error'); }
+}
+async function deleteEvent(id) {
+  if (!confirm('Delete this event?')) return;
+  try {
+    await withStepUp(() => api(`/api/venue-control/events/${id}/delete`, { method: 'POST' }));
+    showEventMsg('Event deleted.', 'success');
+    await loadEventsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) { showEventMsg(e.message, 'error'); }
 }
 
 // ---- Backups & restore admin (owner-only, Phase 5, docs/venue-control.md

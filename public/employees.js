@@ -17,6 +17,7 @@ const ICONS = {
   cash: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 9v0M18 15v0"/></svg>',
   inventory: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="11" rx="1.5"/><path d="M4 9l8-4 8 4"/><path d="M12 9v3"/></svg>',
   tv: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M8 21h8M12 18v3M8 2l4 4 4-4"/></svg>',
+  games: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 10.5v3"/></svg>',
   shift: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="7" width="15" height="10" rx="2"/><path d="M6 21h8M10 17v4"/><circle cx="19" cy="6" r="3.5"/><path d="M19 4.5V6l1 1"/></svg>',
 };
 
@@ -31,6 +32,7 @@ const TOGGLE_DEFS = [
   { key: 'cash_handling', label: 'Cash', icon: ICONS.cash },
   { key: 'inventory_control', label: 'Inv', icon: ICONS.inventory },
   { key: 'tv_staff', label: 'TVs', icon: ICONS.tv },
+  { key: 'amusement', label: 'Games', icon: ICONS.games },
 ];
 const EMPLOYEES_TOGGLE_DEF = { key: 'employees', label: 'Emp', icon: ICONS.people };
 
@@ -333,15 +335,16 @@ function renderAllEmployees() {
   el.innerHTML = rows.map(empRowHtml).join('');
 }
 
-// A timed TVs grant (patch_036): on now, off by itself after the TV pass
-// length set under TV Admin. Owner or manager; no cancel — it runs out.
+// A timed TVs grant (patch_036): on now, off by itself at the end of the
+// shift — 7:30 PM for the day bar, 3:00 AM for the night bar (Scotto,
+// 2026-09-29). Tapping it while it's on offers to turn it off early.
 function tvShiftButtonHtml(p, compact) {
   if (p.role === 'owner' || p.status !== 'active') return '';
   const until = p.appAccessUntil && p.appAccessUntil.tv_staff;
   if (until) {
     return compact
-      ? `<div class="emp-tgl on" title="TV Staff on for a shift, until ${escapeHtml(fmtUntil(until))}"><div class="ic">${ICONS.shift}</div><span class="lbl">til ${escapeHtml(fmtUntil(until))}</span></div>`
-      : `<span class="badge on" title="TV Staff on for a shift" style="flex-shrink:0;">TVs until ${escapeHtml(fmtUntil(until))}</span>`;
+      ? `<div class="emp-tgl on" onclick="event.stopPropagation(); confirmTvShiftOff(event, '${p.id}')" title="TV Staff on until ${escapeHtml(fmtUntil(until))} — tap to turn off"><div class="ic">${ICONS.shift}</div><span class="lbl">til ${escapeHtml(fmtUntil(until))}</span></div>`
+      : `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); confirmTvShiftOff(event, '${p.id}')">TVs until ${escapeHtml(fmtUntil(until))} · turn off</button>`;
   }
   if (p.appAccess && p.appAccess.tv_staff) return '';
   return compact
@@ -357,13 +360,36 @@ function fmtUntil(iso) {
 function confirmTvShift(evt, personId) {
   const person = ALL_EMPLOYEES.find(p => p.id === personId);
   const name = person ? person.name : 'this person';
-  openToggleConfirm(evt.currentTarget, `Turn on TV Staff for ${name} for one shift? It turns itself off after the pass length set under TV Admin.`, () => grantTvShift(personId));
+  // Suggest the shift that's on now: day until 7:30 PM, night until 3 AM.
+  const h = new Date().getHours() + new Date().getMinutes() / 60;
+  const dayFirst = h >= 3 && h < 19.5;
+  const day = { label: 'Day · til 7:30 PM', run: () => grantTvShift(personId, 'day') };
+  const night = { label: 'Night · til 3:00 AM', run: () => grantTvShift(personId, 'night') };
+  const first = dayFirst ? day : night;
+  const second = dayFirst ? night : day;
+  openToggleConfirm(evt.currentTarget, `Turn on TV Staff for ${name} for this shift? It turns itself off at the end of the shift.`, first.run, { yesLabel: first.label, alt: second });
 }
-async function grantTvShift(personId) {
+function confirmTvShiftOff(evt, personId) {
+  const person = ALL_EMPLOYEES.find(p => p.id === personId);
+  const name = person ? person.name : 'this person';
+  const until = person && person.appAccessUntil && person.appAccessUntil.tv_staff;
+  openToggleConfirm(evt.currentTarget, `Turn off TV Staff for ${name} now?${until ? ` It would have run until ${fmtUntil(until)}.` : ''}`, () => revokeTvShift(personId), { yesLabel: 'Turn off' });
+}
+async function grantTvShift(personId, which) {
   try {
-    const result = await withStepUp(() => api(`/api/employees/${personId}/app-access`, { method: 'POST', body: { appKey: 'tv_staff', until: 'shift' } }));
+    const result = await withStepUp(() => api(`/api/employees/${personId}/app-access`, { method: 'POST', body: { appKey: 'tv_staff', until: which || 'shift' } }));
     if (result && result.ok === false) { showMsg(result.error || 'Could not grant TV Staff.', 'error'); return; }
     showMsg(`TV Staff is on for them until ${fmtUntil(result.expiresAt)}.`, 'success');
+    await loadAllEmployees();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+async function revokeTvShift(personId) {
+  try {
+    const result = await withStepUp(() => api(`/api/employees/${personId}/app-access`, { method: 'POST', body: { appKey: 'tv_staff', enabled: false } }));
+    if (result && result.ok === false) { showMsg(result.error || 'Could not turn TV Staff off.', 'error'); return; }
+    showMsg('TV Staff is off for them.', 'success');
     await loadAllEmployees();
   } catch (e) {
     showMsg(e.message, 'error');
@@ -443,11 +469,19 @@ function empToggleHtml(person, def) {
 // toggleEmployeeStatus() functions unchanged, so the withStepUp() password
 // re-check still applies on top of this.
 let PENDING_TOGGLE_CONFIRM = null;
+let PENDING_TOGGLE_ALT = null;
 
-function openToggleConfirm(anchorEl, text, onConfirm) {
+// opts.yesLabel relabels the Yes button; opts.alt = { label, run } adds a
+// second choice (the TVs-for-a-shift day / night pick).
+function openToggleConfirm(anchorEl, text, onConfirm, opts = {}) {
   const pop = document.getElementById('confirmPopover');
   document.getElementById('confirmPopoverText').textContent = text;
   PENDING_TOGGLE_CONFIRM = onConfirm;
+  PENDING_TOGGLE_ALT = opts.alt || null;
+  document.getElementById('confirmPopoverYes').textContent = opts.yesLabel || 'Yes';
+  const altBtn = document.getElementById('confirmPopoverAlt');
+  altBtn.style.display = opts.alt ? '' : 'none';
+  altBtn.textContent = opts.alt ? opts.alt.label : '';
 
   pop.style.display = 'block';
   const rect = anchorEl.getBoundingClientRect();
@@ -472,6 +506,7 @@ function closeToggleConfirm() {
   document.getElementById('confirmPopover').style.display = 'none';
   document.removeEventListener('click', dismissPopoverOnOutsideClick);
   PENDING_TOGGLE_CONFIRM = null;
+  PENDING_TOGGLE_ALT = null;
 }
 
 function cancelPopoverConfirm() {
@@ -482,6 +517,11 @@ function submitPopoverConfirm() {
   const fn = PENDING_TOGGLE_CONFIRM;
   closeToggleConfirm();
   if (fn) fn();
+}
+function submitPopoverAlt() {
+  const alt = PENDING_TOGGLE_ALT;
+  closeToggleConfirm();
+  if (alt && alt.run) alt.run();
 }
 
 function confirmToggleAccess(evt, personId, appKey, enabled) {
@@ -589,6 +629,7 @@ function openActivateModal(id, name) {
   document.getElementById('accessTimeClock').checked = true;
   document.getElementById('accessCashHandling').checked = false;
   document.getElementById('accessInventory').checked = false;
+  document.getElementById('accessAmusement').checked = false;
   document.getElementById('accessTvStaff').checked = false;
   document.getElementById('accessServiceCalls').checked = false;
   document.getElementById('accessScheduling').checked = false;
@@ -610,6 +651,7 @@ async function submitActivate() {
     cash_handling: document.getElementById('accessCashHandling').checked,
     inventory_control: document.getElementById('accessInventory').checked,
     tv_staff: document.getElementById('accessTvStaff').checked,
+    amusement: document.getElementById('accessAmusement').checked,
     scheduling: document.getElementById('accessScheduling').checked,
     monitoring: document.getElementById('accessMonitoring').checked,
   };

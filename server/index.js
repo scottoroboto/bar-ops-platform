@@ -13,6 +13,7 @@ const monitoring = require('./monitoring');
 const scheduling = require('./scheduling');
 const cashhandling = require('./cashhandling');
 const inventorycontrol = require('./inventorycontrol');
+const amusement = require('./amusement');
 const notify = require('./notify');
 const jotform = require('./jotform');
 const multer = require('multer');
@@ -485,7 +486,7 @@ sameNetwork,
 // The pass rides in the URL fragment: the box's page reads it, keeps it,
 // and strips it from the address bar; it never reaches a server log.
 url: lanIp && r.agent_token_hash
-? `http://${lanIp}:8088/staff_tvs.html#pass=${tvpass.mintPass({ agentTokenHash: r.agent_token_hash, siteId: r.site_id, locationId: r.location_id, person: req.person, actor: req.person.role === 'owner' ? 'admin' : 'staff', expiresAt: passExpiresAt })}`
+? `http://${lanIp}:8088/staff_tvs.html#pass=${tvpass.mintPass({ agentTokenHash: r.agent_token_hash, siteId: r.site_id, locationId: r.location_id, person: req.person, actor: req.person.role === 'owner' ? 'admin' : req.person.role === 'manager' ? 'manager' : 'staff', expiresAt: passExpiresAt })}`
 : null,
 passExpiresAt: passExpiresAt.toISOString(),
 passLength,
@@ -888,6 +889,19 @@ const { rows: layoutItems } = layouts.length
 // patch_040: staff favorites lists + stations hidden from the main list.
 // Deleted lists ride along (deleted_at set) so the iPad can show its
 // "Deleted" section; the box never touches Postgres for these.
+// patch_043: events (a temporary override on part of the room) and their
+// items ride down like layouts do. The box applies/ends them and writes
+// running state back up through /api/venue/agent/events/:id/state.
+const { rows: events } = await withServiceClient((client) => client.query(
+'SELECT * FROM vc_events WHERE site_id = $1 ORDER BY name',
+[req.vcSite.site_id]
+));
+const { rows: eventItems } = events.length
+? await withServiceClient((client) => client.query(
+  'SELECT * FROM vc_event_items WHERE event_id = ANY($1::bigint[]) ORDER BY event_id, step_order',
+  [events.map((e) => e.id)]
+))
+: { rows: [] };
 const { rows: musicLists } = await withServiceClient((client) => client.query(
 'SELECT * FROM vc_music_lists WHERE site_id = $1 ORDER BY lower(name)',
 [req.vcSite.site_id]
@@ -897,7 +911,7 @@ const { rows: musicHidden } = await withServiceClient((client) => client.query(
 [req.vcSite.site_id]
 ));
 const config = {
-schema_version: 6,
+schema_version: 7,
 site: {
 id: req.vcSite.site_id, // patch_036: the box checks a pass is for this site
 location_id: req.vcSite.location_id,
@@ -931,9 +945,17 @@ default_source_slot: t.default_source_slot, last_known_slot: t.last_known_slot, 
 schedules: schedules.map((s) => ({
 id: s.id, name: s.name, cron_expr: s.cron_expr, action_type: s.action_type, payload: s.payload, enabled: s.enabled,
 })),
-layouts: layouts.map((l) => ({ id: l.id, name: l.name, description: l.description, sort_order: l.sort_order })),
+layouts: layouts.map((l) => ({ id: l.id, name: l.name, description: l.description, sort_order: l.sort_order, daily_time: l.daily_time, enabled: l.enabled, kind: l.kind })),
 layout_items: layoutItems.map((it) => ({
 id: it.id, layout_id: it.layout_id, target_type: it.target_type, target_id: it.target_id, action: it.action, step_order: it.step_order,
+})),
+events: events.map((e) => ({
+id: e.id, name: e.name, note: e.note, kind: e.kind, event_date: e.event_date, days: e.days || [], start_time: e.start_time, end_time: e.end_time,
+after_mode: e.after_mode, after_layout_id: e.after_layout_id, enabled: e.enabled, created_by: e.created_by,
+running_since: e.running_since, running_snapshot: e.running_snapshot, last_run_at: e.last_run_at, last_ended_at: e.last_ended_at, last_result: e.last_result,
+})),
+event_items: eventItems.map((it) => ({
+id: it.id, event_id: it.event_id, target_type: it.target_type, target_id: it.target_id, action: it.action, step_order: it.step_order,
 })),
 music_lists: musicLists.map((l) => ({
 id: l.id, name: l.name, stations: l.stations || [], created_by: l.created_by, created_at: l.created_at,
@@ -2027,6 +2049,56 @@ res.json({ ok: true });
 // actual capture happens on-site, same shape as Phase 4's channel_capable
 // being an on-site-verified toggle rather than something the cloud can
 // determine on its own.
+// ---- Events, owner side (patch_043): list, edit times / after / note,
+// delete. Items are only ever written by the box (it captures them from
+// live state), so there is no create here — that's the TVs tab's job.
+app.get('/api/venue-control/sites/:locationId/events', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows: events } = await withServiceClient((client) => client.query(
+`SELECT e.*, (SELECT count(*) FROM vc_event_items i WHERE i.event_id = e.id)::int AS item_count,
+        (SELECT count(*) FROM vc_event_items i WHERE i.event_id = e.id AND i.target_type = 'tv' AND i.action->>'op' = 'select_slot')::int AS tv_count,
+        al.name AS after_layout_name
+   FROM vc_events e JOIN vc_sites vs ON vs.id = e.site_id
+   LEFT JOIN vc_layouts al ON al.id = e.after_layout_id
+  WHERE vs.location_id = $1
+  ORDER BY (e.running_since IS NOT NULL) DESC, e.kind, e.event_date NULLS LAST, e.name`,
+[req.params.locationId]));
+res.json(events);
+});
+app.post('/api/venue-control/events/:id/update', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const parsed = eventFieldsFrom(req.body || {});
+if (parsed.error) return res.status(400).json({ error: parsed.error });
+try {
+const event = await withServiceClient(async (client) => {
+const { rows: cur } = await client.query('SELECT * FROM vc_events WHERE id = $1', [req.params.id]);
+if (!cur[0]) throw Object.assign(new Error('Event not found.'), { status: 404 });
+const merged = { ...cur[0], ...parsed.fields };
+const timing = checkEventTiming(merged);
+if (timing) throw Object.assign(new Error(timing), { status: 400 });
+const { rows } = await client.query(
+`UPDATE vc_events SET name=$2, note=$3, kind=$4, event_date=$5, days=$6, start_time=$7, end_time=$8, after_mode=$9, after_layout_id=$10, enabled=$11, updated_at=now()
+   WHERE id = $1 RETURNING *`,
+[cur[0].id, merged.name, merged.note, merged.kind, merged.event_date, merged.days || [], merged.start_time, merged.end_time, merged.after_mode, merged.after_layout_id, merged.enabled]);
+await recordActivity(client, cur[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'event.update', targetType: 'event', targetId: cur[0].id, detail: { name: merged.name } });
+return rows[0];
+});
+res.json({ ok: true, event });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+app.post('/api/venue-control/events/:id/delete', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query('DELETE FROM vc_events WHERE id = $1 RETURNING id, site_id, name', [req.params.id]);
+if (rows[0]) await recordActivity(client, rows[0].site_id, { actor: req.person.name || req.person.email, origin: 'cloud', action: 'event.delete', targetType: 'event', targetId: rows[0].id, detail: { name: rows[0].name } });
+return { rows };
+});
+if (!rows[0]) return res.status(404).json({ error: 'Event not found.' });
+res.json({ ok: true });
+});
+
 app.get('/api/venue-control/sites/:locationId/layouts', auth.requireSession('light'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 const { rows: layouts } = await withServiceClient((client) => client.query(
@@ -2050,16 +2122,19 @@ res.json(layouts.map((l) => ({ ...l, items: itemsByLayout.get(l.id) || [] })));
 
 app.post('/api/venue-control/sites/:locationId/layouts', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { name, description, sortOrder } = req.body || {};
+const { name, description, sortOrder, dailyTime, kind } = req.body || {};
 if (!(name || '').trim()) return res.status(400).json({ error: 'Name is required.' });
+const t = cleanTime(dailyTime);
+if (t === false) return res.status(400).json({ error: 'Daily time must be HH:MM.' });
+if (kind && !['captured', 'all_off'].includes(kind)) return res.status(400).json({ error: 'kind must be captured or all_off.' });
 try {
 const layout = await withServiceClient(async (client) => {
 const { rows: siteRows } = await client.query('SELECT id FROM vc_sites WHERE location_id = $1', [req.params.locationId]);
 if (!siteRows[0]) throw Object.assign(new Error('Turn Venue Control on for this location before adding layouts.'), { status: 404 });
 const { rows } = await client.query(
-`INSERT INTO vc_layouts (site_id, name, description, sort_order)
-   VALUES ($1,$2,$3,COALESCE($4,0)) RETURNING *`,
-[siteRows[0].id, name.trim(), description || null, sortOrder]
+`INSERT INTO vc_layouts (site_id, name, description, sort_order, daily_time, kind)
+   VALUES ($1,$2,$3,COALESCE($4,0),$5,COALESCE($6,'captured')) RETURNING *`,
+[siteRows[0].id, name.trim(), description || null, sortOrder, t, kind || null]
 );
 return { ...rows[0], items: [] };
 });
@@ -2072,13 +2147,17 @@ res.status(err.status || 400).json({ error: err.message });
 
 app.post('/api/venue-control/layouts/:id/update', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { name, description, sortOrder } = req.body || {};
+const { name, description, sortOrder, dailyTime, enabled, kind } = req.body || {};
+const t = dailyTime === undefined ? undefined : cleanTime(dailyTime);
+if (t === false) return res.status(400).json({ error: 'Daily time must be HH:MM.' });
+if (kind && !['captured', 'all_off'].includes(kind)) return res.status(400).json({ error: 'kind must be captured or all_off.' });
 try {
 const { rows } = await withServiceClient((client) => client.query(
 `UPDATE vc_layouts SET
-   name = COALESCE($1, name), description = COALESCE($2, description), sort_order = COALESCE($3, sort_order)
+   name = COALESCE($1, name), description = COALESCE($2, description), sort_order = COALESCE($3, sort_order),
+   daily_time = CASE WHEN $5 THEN $6 ELSE daily_time END, enabled = COALESCE($7, enabled), kind = COALESCE($8, kind)
    WHERE id = $4 RETURNING *`,
-[name ? name.trim() : null, description, sortOrder, req.params.id]
+[name ? name.trim() : null, description, sortOrder, req.params.id, t !== undefined, t === undefined ? null : t, enabled === undefined ? null : !!enabled, kind || null]
 ));
 if (!rows[0]) return res.status(404).json({ error: 'Layout not found.' });
 res.json({ ok: true, layout: rows[0] });
@@ -2108,6 +2187,164 @@ res.json({ ok: true });
 // the layout actually belongs to the calling agent's site first -- every
 // agent-facing route that touches a specific row does this same
 // site-ownership check (see the token/slot routes above).
+// ---- Scenes + Events, box-side writes (patch_043). The box is the only
+// writer of items (it's the only thing with live device state); the cloud
+// validates shape and stores. Each answers with the row so the box can
+// re-pull its config right after.
+function validItems(items) {
+  if (!Array.isArray(items)) return 'Missing "items" array.';
+  for (const it of items) {
+    if (!['source', 'tv'].includes(it.target_type)) return `Invalid target_type "${it.target_type}" -- expected "source" or "tv".`;
+    if (it.target_id == null) return 'Every item needs a "target_id".';
+    if (!it.action || typeof it.action !== 'object') return 'Every item needs an "action" object.';
+  }
+  return null;
+}
+function cleanTime(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const m = String(v).match(/^(\d{1,2}):(\d{2})$/);
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return false;
+  return `${m[1].padStart(2, '0')}:${m[2]}`;
+}
+function eventFieldsFrom(b) {
+  const out = {};
+  if (b.name !== undefined) { out.name = String(b.name || '').trim().slice(0, 60); if (!out.name) return { error: 'An event needs a name.' }; }
+  if (b.note !== undefined) out.note = b.note ? String(b.note).slice(0, 300) : null;
+  if (b.kind !== undefined) { if (!['manual', 'once', 'weekly'].includes(b.kind)) return { error: 'kind must be manual, once or weekly.' }; out.kind = b.kind; }
+  if (b.event_date !== undefined) { out.event_date = b.event_date ? String(b.event_date).slice(0, 10) : null; if (out.event_date && !/^\d{4}-\d{2}-\d{2}$/.test(out.event_date)) return { error: 'event_date must be YYYY-MM-DD.' }; }
+  if (b.days !== undefined) { out.days = Array.isArray(b.days) ? b.days.map(Number).filter((d) => d >= 0 && d <= 6) : []; }
+  for (const k of ['start_time', 'end_time']) {
+    if (b[k] !== undefined) { const t = cleanTime(b[k]); if (t === false) return { error: `${k} must be HH:MM.` }; out[k] = t; }
+  }
+  if (b.after_mode !== undefined) { if (!['restore', 'leave', 'scene'].includes(b.after_mode)) return { error: 'after_mode must be restore, leave or scene.' }; out.after_mode = b.after_mode; }
+  if (b.after_layout_id !== undefined) out.after_layout_id = b.after_layout_id ? Number(b.after_layout_id) : null;
+  if (b.enabled !== undefined) out.enabled = !!b.enabled;
+  return { fields: out };
+}
+function checkEventTiming(e) {
+  if (e.kind === 'once' && (!e.event_date || !e.start_time || !e.end_time)) return 'A one-time event needs a date, a start time and an end time.';
+  if (e.kind === 'weekly' && (!(e.days || []).length || !e.start_time || !e.end_time)) return 'A weekly event needs days, a start time and an end time.';
+  if (e.after_mode === 'scene' && !e.after_layout_id) return 'Pick the scene to go to afterwards.';
+  return null;
+}
+async function insertEventItems(client, eventId, items) {
+  await client.query('DELETE FROM vc_event_items WHERE event_id = $1', [eventId]);
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    await client.query('INSERT INTO vc_event_items (event_id, target_type, target_id, action, step_order) VALUES ($1,$2,$3,$4,$5)',
+      [eventId, it.target_type, it.target_id, JSON.stringify(it.action), it.step_order ?? i]);
+  }
+}
+
+// A new scene captured on the box's TVs tab (whole room, with items).
+app.post('/api/venue/agent/layouts', requireAgentAuth(), async (req, res) => {
+const { name, daily_time, items, actor } = req.body || {};
+const clean = String(name || '').trim().slice(0, 60);
+if (!clean) return res.status(400).json({ error: 'A scene needs a name.' });
+const t = cleanTime(daily_time);
+if (t === false) return res.status(400).json({ error: 'daily_time must be HH:MM.' });
+const bad = validItems(items || []);
+if (bad) return res.status(400).json({ error: bad });
+try {
+const layout = await withServiceClient(async (client) => {
+const { rows } = await client.query(
+`INSERT INTO vc_layouts (site_id, name, daily_time, sort_order) VALUES ($1,$2,$3,(SELECT COALESCE(MAX(sort_order),0)+1 FROM vc_layouts WHERE site_id = $1)) RETURNING *`,
+[req.vcSite.site_id, clean, t]);
+for (let i = 0; i < (items || []).length; i++) {
+const it = items[i];
+await client.query('INSERT INTO vc_layout_items (layout_id, target_type, target_id, action, step_order) VALUES ($1,$2,$3,$4,$5)',
+  [rows[0].id, it.target_type, it.target_id, JSON.stringify(it.action), it.step_order ?? i]);
+}
+await recordActivity(client, req.vcSite.site_id, { actor: actor || 'agent', origin: 'local', action: 'scene.capture', targetType: 'layout', targetId: rows[0].id, detail: { name: clean, item_count: (items || []).length } });
+return rows[0];
+});
+res.json({ ok: true, layout });
+} catch (err) {
+if (err.code === '23505') return res.status(400).json({ error: 'A scene with that name already exists here.' });
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue/agent/events', requireAgentAuth(), async (req, res) => {
+const b = req.body || {};
+const parsed = eventFieldsFrom({ kind: 'manual', after_mode: 'restore', ...b });
+if (parsed.error) return res.status(400).json({ error: parsed.error });
+const f = parsed.fields;
+if (!f.name) return res.status(400).json({ error: 'An event needs a name.' });
+const bad = validItems(b.items);
+if (bad) return res.status(400).json({ error: bad });
+if (!b.items.length) return res.status(400).json({ error: 'Highlight at least one TV with a live reading before capturing.' });
+const timing = checkEventTiming(f);
+if (timing) return res.status(400).json({ error: timing });
+try {
+const event = await withServiceClient(async (client) => {
+const { rows } = await client.query(
+`INSERT INTO vc_events (site_id, name, note, kind, event_date, days, start_time, end_time, after_mode, after_layout_id, created_by)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+[req.vcSite.site_id, f.name, f.note || null, f.kind, f.event_date || null, f.days || [], f.start_time || null, f.end_time || null, f.after_mode, f.after_layout_id || null, b.actor || null]);
+await insertEventItems(client, rows[0].id, b.items);
+await recordActivity(client, req.vcSite.site_id, { actor: b.actor || 'agent', origin: 'local', action: 'event.capture', targetType: 'event', targetId: rows[0].id, detail: { name: f.name, item_count: b.items.length } });
+return rows[0];
+});
+res.json({ ok: true, event });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue/agent/events/:id/update', requireAgentAuth(), async (req, res) => {
+const b = req.body || {};
+const parsed = eventFieldsFrom(b);
+if (parsed.error) return res.status(400).json({ error: parsed.error });
+if (b.items !== undefined) { const bad = validItems(b.items); if (bad) return res.status(400).json({ error: bad }); }
+try {
+const event = await withServiceClient(async (client) => {
+const { rows: cur } = await client.query('SELECT * FROM vc_events WHERE id = $1 AND site_id = $2', [req.params.id, req.vcSite.site_id]);
+if (!cur[0]) throw Object.assign(new Error('Event not found.'), { status: 404 });
+const merged = { ...cur[0], ...parsed.fields };
+const timing = checkEventTiming(merged);
+if (timing) throw Object.assign(new Error(timing), { status: 400 });
+const { rows } = await client.query(
+`UPDATE vc_events SET name=$2, note=$3, kind=$4, event_date=$5, days=$6, start_time=$7, end_time=$8, after_mode=$9, after_layout_id=$10, enabled=$11, updated_at=now()
+   WHERE id = $1 RETURNING *`,
+[cur[0].id, merged.name, merged.note, merged.kind, merged.event_date, merged.days || [], merged.start_time, merged.end_time, merged.after_mode, merged.after_layout_id, merged.enabled]);
+if (b.items !== undefined) await insertEventItems(client, cur[0].id, b.items);
+await recordActivity(client, req.vcSite.site_id, { actor: b.actor || 'agent', origin: 'local', action: 'event.update', targetType: 'event', targetId: cur[0].id, detail: { name: merged.name } });
+return rows[0];
+});
+res.json({ ok: true, event });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+app.post('/api/venue/agent/events/:id/delete', requireAgentAuth(), async (req, res) => {
+const { rows } = await withServiceClient(async (client) => {
+const { rows } = await client.query('DELETE FROM vc_events WHERE id = $1 AND site_id = $2 RETURNING id, name', [req.params.id, req.vcSite.site_id]);
+if (rows[0]) await recordActivity(client, req.vcSite.site_id, { actor: (req.body || {}).actor || 'agent', origin: 'local', action: 'event.delete', targetType: 'event', targetId: rows[0].id, detail: { name: rows[0].name } });
+return { rows };
+});
+if (!rows[0]) return res.status(404).json({ error: 'Event not found.' });
+res.json({ ok: true });
+});
+
+// Running state, written by the box when an event starts or ends.
+app.post('/api/venue/agent/events/:id/state', requireAgentAuth(), async (req, res) => {
+const b = req.body || {};
+const { rows } = await withServiceClient((client) => client.query(
+`UPDATE vc_events SET
+   running_since = CASE WHEN $3 THEN $4::timestamptz ELSE NULL END,
+   running_snapshot = CASE WHEN $3 THEN $5::jsonb ELSE NULL END,
+   last_run_at = COALESCE($6::timestamptz, last_run_at),
+   last_ended_at = COALESCE($7::timestamptz, last_ended_at),
+   last_result = COALESCE($8, last_result)
+ WHERE id = $1 AND site_id = $2 RETURNING id`,
+[req.params.id, req.vcSite.site_id, !!b.running, b.running_since || null, b.running_snapshot ? JSON.stringify(b.running_snapshot) : null,
+  b.last_run_at || null, b.last_ended_at || null, b.last_result || null]));
+if (!rows[0]) return res.status(404).json({ error: 'Event not found.' });
+res.json({ ok: true });
+});
+
 app.post('/api/venue/agent/layouts/:id/items', requireAgentAuth(), async (req, res) => {
 const { items } = req.body || {};
 if (!Array.isArray(items)) return res.status(400).json({ error: 'Missing "items" array.' });
@@ -2474,15 +2711,46 @@ const result = await employees.resendCredentials({ personId: req.params.id, rese
 res.json(result);
 });
 
+// The end of a TVs-for-a-shift grant, in bar time (Scotto, 2026-09-29):
+// the day bar runs to 7:30 PM, the night bar to 3:00 AM. 'day' / 'night'
+// pick one explicitly; the older 'shift' picks whichever comes next.
+const BAR_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
+const SHIFT_ENDS = { day: [19, 30], night: [3, 0] };
+function barTzOffsetMinutes(date) {
+  const dtf = new Intl.DateTimeFormat('en-US', { timeZone: BAR_TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const p = {};
+  dtf.formatToParts(date).forEach((x) => { if (x.type !== 'literal') p[x.type] = x.value; });
+  return (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - date.getTime()) / 60000;
+}
+// The next time the bar's clock reads hour:minute, as a real instant.
+function nextBarTime(hour, minute) {
+  const now = new Date();
+  const wall = new Date(now.getTime() + barTzOffsetMinutes(now) * 60000); // bar wall-clock, read as UTC fields
+  let cand = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), hour, minute);
+  if (cand <= wall.getTime() + 60000) cand += 86400000;
+  const rough = new Date(cand - barTzOffsetMinutes(now) * 60000);
+  return new Date(cand - barTzOffsetMinutes(rough) * 60000);
+}
+function shiftExpiry(which) {
+  if (which === 'shift') {
+    const wall = new Date(Date.now() + barTzOffsetMinutes(new Date()) * 60000);
+    const mins = wall.getUTCHours() * 60 + wall.getUTCMinutes();
+    which = mins < 19 * 60 + 30 && mins >= 3 * 60 ? 'day' : 'night';
+  }
+  const end = SHIFT_ENDS[which];
+  return end ? nextBarTime(end[0], end[1]) : null;
+}
+
 app.post('/api/employees/:id/app-access', auth.requireSession('full'), async (req, res) => {
-// patch_036: 'until: shift' is a timed grant — on now, off by itself
-// after the TV pass length. Owner only, like every other app switch
-// (Scotto, 2026-09-22: "I should be the only one who can authorize" —
-// the bar has the remotes and the TVs' own apps as failovers).
-const timed = req.body.until === 'shift';
+// patch_036: 'until: shift' | 'day' | 'night' is a timed grant — on now,
+// off by itself at the end of that shift (see shiftExpiry above). Owner
+// only, like every other app switch (Scotto, 2026-09-22: "I should be the
+// only one who can authorize" — the bar has the remotes and the TVs' own
+// apps as failovers).
+const timed = ['shift', 'day', 'night'].includes(req.body.until);
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change app access.' });
 let expiresAt = null;
-if (timed) expiresAt = tvpass.expiryFor(await tvpass.getPassLength());
+if (timed) expiresAt = shiftExpiry(req.body.until);
 const result = await employees.setAppAccess({ personId: req.params.id, appKey: req.body.appKey, enabled: timed ? true : req.body.enabled, expiresAt, updatedBy: req.person.id });
 res.json(result);
 });
@@ -4121,6 +4389,238 @@ app.get('/api/scheduling/my-shifts/upcoming', auth.requireSession('light'), asyn
   if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
   res.json(await scheduling.getEmployeeUpcomingShifts(req.person.id));
 });
+
+// =====================================================================
+// Diamond Amusement — coin-op collections (patch_041, server/amusement.js).
+// Two access levels: 'owner' (everything) and 'collector' (the
+// 'amusement' app toggle: run collections, mark them posted). Every
+// route goes through withServiceClient; the tables have no RLS
+// policies, same posture as Cash Handling / Inventory.
+// =====================================================================
+async function amusementGate(req, minLevel) {
+  const level = await withServiceClient((client) => amusement.getAccess(client, req.person));
+  const rank = { none: 0, collector: 1, owner: 2 };
+  if (rank[level] < rank[minLevel]) return null;
+  return level;
+}
+function amusementRoute(minLevel, handler) {
+  return async (req, res) => {
+    const level = await amusementGate(req, minLevel);
+    if (!level) return res.status(403).json({ error: minLevel === 'owner' ? 'Owner only.' : 'Games is not enabled for you.' });
+    try {
+      const result = await withServiceClient((client) => handler(client, req, level));
+      if (result && result.error) return res.status(result.status || 400).json(result);
+      res.json(result === undefined ? { ok: true } : result);
+    } catch (e) {
+      if (e.statusCode) return res.status(e.statusCode).json({ error: e.message, missing: e.missing });
+      console.error('[amusement]', req.method, req.path, e);
+      res.status(500).json({ error: 'Something went wrong on the server.' });
+    }
+  };
+}
+const amusementPhotoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 }, // matches the amusement-photos bucket (patch_041)
+}).single('photo');
+function parseAmusementPhoto(req, res, next) {
+  amusementPhotoUpload(req, res, (err) => {
+    if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'That photo is too big — please keep it under 10 MB.' });
+    if (err) return res.status(400).json({ error: err.message || 'Could not read the uploaded photo.' });
+    next();
+  });
+}
+
+app.get('/api/amusement/access', auth.requireSession('light'), async (req, res) => {
+  const level = await withServiceClient((client) => amusement.getAccess(client, req.person));
+  res.json({ level, photoReader: amusement.readerConfigured(), photoStorage: storage.isConfigured() });
+});
+
+// ---- Home ----
+app.get('/api/amusement/home', auth.requireSession('light'), amusementRoute('collector', async (client, req, level) => ({
+  level,
+  locations: await amusement.listLocations(client),
+  recent: await amusement.listCollections(client, { limit: 12 }),
+  settings: await amusement.getSettings(client),
+  photoReader: amusement.readerConfigured(),
+})));
+
+// ---- Settings (owner) ----
+app.get('/api/amusement/settings', auth.requireSession('light'), amusementRoute('collector', async (client) => ({ settings: await amusement.getSettings(client) })));
+app.post('/api/amusement/settings', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  settings: await amusement.updateSettings(client, req.body || {}, req.person.id),
+})));
+
+// ---- Locations ----
+app.get('/api/amusement/locations', auth.requireSession('light'), amusementRoute('collector', async (client, req, level) => ({
+  locations: await amusement.listLocations(client, { includeInactive: level === 'owner' && req.query.all === '1' }),
+})));
+app.post('/api/amusement/locations', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  location: await amusement.createLocation(client, { ...req.body, createdBy: req.person.id }),
+})));
+app.post('/api/amusement/locations/:id/update', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  location: await amusement.updateLocation(client, req.params.id, req.body || {}),
+})));
+
+// ---- Games ----
+app.get('/api/amusement/games', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
+  games: await amusement.listGames(client, { locationId: req.query.locationId || null, includeRetired: req.query.all === '1' }),
+})));
+app.get('/api/amusement/games/by-tag/:tag', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const game = await amusement.getGameByTag(client, req.params.tag);
+  if (!game) return { error: 'No game has that tag.', status: 404 };
+  return { game };
+}));
+app.get('/api/amusement/games/:id', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const game = await amusement.getGame(client, req.params.id);
+  if (!game) return { error: 'Game not found.', status: 404 };
+  return {
+    game,
+    placements: await amusement.getGamePlacements(client, game.id),
+    history: await amusement.getGameHistory(client, game.id),
+  };
+}));
+app.post('/api/amusement/games', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.createGame(client, { ...req.body, createdBy: req.person.id }),
+})));
+app.post('/api/amusement/games/:id/update', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.updateGame(client, req.params.id, req.body || {}),
+})));
+app.post('/api/amusement/games/:id/move', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.moveGame(client, req.params.id, { locationId: req.body.locationId, movedBy: req.person.id }),
+})));
+app.post('/api/amusement/games/:id/retire', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.setGameStatus(client, req.params.id, 'retired', req.person.id),
+})));
+app.post('/api/amusement/games/:id/reactivate', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.setGameStatus(client, req.params.id, 'active', req.person.id),
+})));
+
+// ---- Collections ----
+app.get('/api/amusement/collections', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
+  collections: await amusement.listCollections(client, { locationId: req.query.locationId || null, limit: Math.min(200, Number(req.query.limit) || 40) }),
+})));
+app.post('/api/amusement/collections/start', auth.requireSession('light'), amusementRoute('collector', async (client, req) =>
+  amusement.startOrResumeCollection(client, { locationId: req.body.locationId, startedBy: req.person.id })));
+app.get('/api/amusement/collections/:id', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const sheet = await amusement.getCollectionSheet(client, req.params.id);
+  if (!sheet) return { error: 'Collection not found.', status: 404 };
+  return sheet;
+}));
+app.post('/api/amusement/collections/:id/items/:gameId', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
+  item: await amusement.upsertItem(client, req.params.id, req.params.gameId, req.body || {}, req.person.id),
+  sheet: await amusement.getCollectionSheet(client, req.params.id),
+})));
+app.post('/api/amusement/collections/:id/items/:gameId/remove', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  await amusement.removeItem(client, req.params.id, req.params.gameId);
+  return { sheet: await amusement.getCollectionSheet(client, req.params.id) };
+}));
+app.post('/api/amusement/collections/:id/note', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  await amusement.updateCollectionNote(client, req.params.id, req.body.note);
+}));
+app.post('/api/amusement/collections/:id/finalize', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
+  collection: await amusement.finalizeCollection(client, req.params.id, { finalizedBy: req.person.id, allowMissing: !!req.body.allowMissing }),
+})));
+// Multipart: an optional photo of the SpotOn ticket rides along with the
+// reference number, so a posted collection has proof at both ends.
+app.post('/api/amusement/collections/:id/posted', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('collector', async (client, req) => {
+  let photoPath = null;
+  if (req.file) {
+    if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+    photoPath = await amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: req.params.id });
+  }
+  const undo = req.body.undo === true || req.body.undo === 'true' || req.body.undo === '1';
+  return { collection: await amusement.markPosted(client, req.params.id, { postedBy: req.person.id, reference: req.body.reference, photoPath, undo }) };
+}));
+
+// Per-game coin-box tare (patch_042). Two steps from the game page:
+// photo the empty box -> /read-scale?gameId= reads it and stores the
+// photo under games/<id>; then this saves the confirmed grams.
+app.post('/api/amusement/games/:id/tare', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.setGameTare(client, req.params.id, { grams: req.body.grams, photoPath: req.body.photoPath || null, by: req.person.id }),
+})));
+
+// Read a scale photo outside a collection (setting a game's coin-box
+// tare). Same reader, photo filed under the game.
+app.post('/api/amusement/read-scale', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('owner', async (client, req) => {
+  if (!req.file) return { error: 'No photo received.' };
+  if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+  const gameId = String(req.body.gameId || '');
+  if (!/^[0-9a-f-]{36}$/i.test(gameId)) return { error: 'gameId is required.' };
+  const [photoPath, reading] = await Promise.all([
+    amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, folder: 'games/' + gameId }),
+    amusement.readScalePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype }),
+  ]);
+  return { ...reading, photoPath, photoStored: !!photoPath };
+}));
+app.post('/api/amusement/collections/:id/discard', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  await amusement.discardDraft(client, req.params.id);
+}));
+
+// The $10-roll scale check at the start of a visit: a photo (optional)
+// plus the grams typed or read from it.
+app.post('/api/amusement/collections/:id/scale-check', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('collector', async (client, req) => {
+  let photoPath = null;
+  if (req.file) {
+    if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+    photoPath = await amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: req.params.id });
+  }
+  return amusement.recordScaleCheck(client, req.params.id, { grams: req.body.grams, photoPath });
+}));
+
+// Photo of the scale display -> { value, unit, confidence, photoPath }.
+// The photo is stored first (it's the evidence, whether or not the read
+// works), then read. Nothing about the sheet changes here — the client
+// shows the reading, the collector confirms, and THAT save goes through
+// the items route above with weightPhotoPath pointing back at this file.
+app.post('/api/amusement/collections/:id/read-scale', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('collector', async (client, req) => {
+  if (!req.file) return { error: 'No photo received.' };
+  if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+  const collection = await amusement.getCollection(client, req.params.id);
+  if (!collection) return { error: 'Collection not found.', status: 404 };
+  if (collection.status !== 'draft') return { error: 'This collection is finalized.' };
+  const [photoPath, reading] = await Promise.all([
+    amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: collection.id }),
+    amusement.readScalePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype }),
+  ]);
+  return { ...reading, photoPath, photoStored: !!photoPath };
+}));
+
+// Never the raw bucket path — a short-lived signed URL, same as receipts.
+app.get('/api/amusement/photo', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const p = String(req.query.path || '');
+  if (!p || p.includes('..')) return { error: 'Bad path.' };
+  const { rows } = await client.query(
+    `SELECT 1 FROM amusement_collection_items WHERE weight_photo_path = $1
+     UNION ALL SELECT 1 FROM amusement_collections WHERE scale_check_photo_path = $1 OR pos_photo_path = $1
+     UNION ALL SELECT 1 FROM amusement_games WHERE tare_photo_path = $1 LIMIT 1`, [p]);
+  if (!rows.length) return { error: 'Not found.', status: 404 };
+  try {
+    return { url: await amusement.photoUrl(p) };
+  } catch (e) {
+    return { error: e.message, status: 500 };
+  }
+}));
+
+// QR codes for the sticker sheet, rendered server-side (the `qrcode`
+// package) so the print page needs no CDN. One call for the whole sheet:
+// { svgs: { <gameId>: '<svg…>' } }. Each encodes the app URL with the
+// game's tag, so the phone's camera app opens the right weigh screen.
+app.get('/api/amusement/qr', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const QRCode = require('qrcode');
+  const ids = String(req.query.ids || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 200);
+  const base = `${(process.env.APP_BASE_URL || (req.headers.origin || `${req.protocol}://${req.get('host')}`)).replace(/\/$/, '')}/amusement.html?tag=`;
+  const svgs = {};
+  const games = ids.length ? await amusement.listGames(client, { includeRetired: true }) : [];
+  for (const g of games) {
+    if (!ids.includes(g.id)) continue;
+    svgs[g.id] = await QRCode.toString(base + encodeURIComponent(g.tag_code), { type: 'svg', errorCorrectionLevel: 'M', margin: 1 });
+  }
+  return { svgs, base };
+}));
+
+// ---- Reports (owner) ----
+app.get('/api/amusement/report', auth.requireSession('light'), amusementRoute('owner', async (client, req) =>
+  amusement.report(client, { days: req.query.days })));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Bar platform listening on http://localhost:${PORT}`));

@@ -139,6 +139,25 @@ async function reportTvSlot(tvId, slot) {
 // Phase 5 (docs/venue-control.md §12/§6): pushes a captured layout's items
 // up wholesale after an admin-PIN-gated "Capture current state"
 // (lib/layouts.js's captureCurrentState(), called from agent/server.js).
+// patch_043 -- scenes captured on the box's TVs tab, and events (a
+// temporary override on part of the room). Every write re-pulls config
+// right after, the same way musicWrite does, so the box's own copy of
+// vc_events/vc_layouts is fresh before the staff page re-lists them.
+async function agentWrite(path, body) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent${path}`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `${path} failed: ${res.status}`);
+  try { await pullConfig(); } catch (e) { /* next timer pull catches up */ }
+  return data;
+}
+function createScene(body) { return agentWrite('/layouts', body); }
+function pushEvent(body) { return agentWrite('/events', body); }
+function updateEvent(id, body) { return agentWrite(`/events/${id}/update`, body); }
+function deleteEvent(id, body) { return agentWrite(`/events/${id}/delete`, body); }
+function reportEventState(id, body) { return agentWrite(`/events/${id}/state`, body); }
+
 async function pushLayoutItems(layoutId, items) {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/layouts/${layoutId}/items`, {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({ items }),
@@ -385,6 +404,7 @@ module.exports = {
   pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
   reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems,
+  createScene, pushEvent, updateEvent, deleteEvent, reportEventState,
   takeBackupNow, listBackups, restoreBackup, pushActivity, pushHealth,
   pollCommands,
 };

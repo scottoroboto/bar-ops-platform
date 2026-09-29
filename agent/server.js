@@ -15,6 +15,7 @@ const speedtest = require('./lib/speedtest');
 const sonos = require('./lib/sonos');
 const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
+const events = require('./lib/events');
 const activity = require('./lib/activity');
 const directv = require('./lib/drivers/directv');
 const roku = require('./lib/drivers/roku');
@@ -117,6 +118,8 @@ app.use('/api/favorites', requireStaffPin);
 app.use('/api/tvs', requireStaffPin);
 app.use('/api/zones', requireStaffPin);
 app.use('/api/layouts', requireStaffPin);
+app.use('/api/events', requireStaffPin);
+app.use('/api/scenes', requireStaffPin);
 app.use('/api/attention', requireStaffPin);
 app.use('/api/music', requireStaffPin);
 
@@ -800,6 +803,103 @@ app.post('/api/layouts/replay', async (req, res) => {
 // pushes it to the cloud, replacing that layout's items wholesale. See the
 // big comment on the cloud's Layouts section (server/index.js) for why
 // this lives here and not on TSB Platform.
+// ---------------- Scenes and events (patch_043, lib/events.js) ----------------
+// Staff can list, Apply now and End (a plain confirm on the page, no PIN).
+// Capturing, editing and deleting is for the owner or a manager -- the
+// pass from the Bar Ops app says which (server/tvpass.js actor).
+function isManager(req) {
+  return req.vcActor === 'admin' || (req.vcPass && (req.vcPass.actor === 'admin' || req.vcPass.actor === 'manager'));
+}
+function requireManager(req, res, next) {
+  if (!isManager(req)) return res.status(403).json({ error: 'Only the owner or a manager can do that.' });
+  next();
+}
+
+app.get('/api/events', (req, res) => {
+  res.json({
+    events: events.listEvents(),
+    scenes: layouts.listLayouts().map((l) => ({ id: l.id, name: l.name, description: l.description, daily_time: l.daily_time, enabled: l.enabled, kind: l.kind, item_count: l.items.length })),
+    pending_conflict: events.pendingConflict(),
+    is_manager: isManager(req),
+  });
+});
+app.post('/api/events/:id/apply', async (req, res) => {
+  try {
+    const result = await events.applyEvent(req.params.id, { actor: req.vcActor, choice: (req.body || {}).choice, source: 'manual' });
+    if (result.started) activity.record('event.apply', { actor: req.vcActor, targetType: 'event', targetId: result.event_id, detail: { name: result.name, ok: result.results.filter((r) => r.ok).length, total: result.results.length } });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post('/api/events/:id/end', async (req, res) => {
+  try {
+    const result = await events.endEvent(req.params.id, { actor: req.vcActor, reason: 'ended early' });
+    activity.record('event.end', { actor: req.vcActor, targetType: 'event', targetId: result.event_id, detail: { name: result.name, how: result.how } });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post('/api/events/conflict/resolve', async (req, res) => {
+  try {
+    const result = await events.resolveConflict((req.body || {}).choice, { actor: req.vcActor });
+    activity.record('event.conflict', { actor: req.vcActor, targetType: 'event', targetId: result.event_id || null, detail: { choice: (req.body || {}).choice } });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+// Capture: nothing changes on any device -- the items are built from what
+// the highlighted TVs are doing (or the picked source) and saved for later.
+app.post('/api/events', requireManager, async (req, res) => {
+  const b = req.body || {};
+  try {
+    const items = events.buildItems({ tvIds: b.tv_ids, slot: b.slot, major: b.major, minor: b.minor, appId: b.app_id });
+    const data = await sync.pushEvent({
+      name: b.name, note: b.note, kind: b.kind, event_date: b.event_date, days: b.days, start_time: b.start_time, end_time: b.end_time,
+      after_mode: b.after_mode, after_layout_id: b.after_layout_id, items, actor: req.vcActor,
+    });
+    res.json({ ok: true, event: data.event, item_count: items.length });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post('/api/events/:id/update', requireManager, async (req, res) => {
+  const b = req.body || {};
+  try {
+    const body = { ...b, actor: req.vcActor };
+    delete body.tv_ids; delete body.slot; delete body.major; delete body.minor; delete body.app_id;
+    if (Array.isArray(b.tv_ids) && b.tv_ids.length) body.items = events.buildItems({ tvIds: b.tv_ids, slot: b.slot, major: b.major, minor: b.minor, appId: b.app_id });
+    const data = await sync.updateEvent(req.params.id, body);
+    res.json({ ok: true, event: data.event });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post('/api/events/:id/delete', requireManager, async (req, res) => {
+  try {
+    await sync.deleteEvent(req.params.id, { actor: req.vcActor });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+// A whole-room scene captured from the TVs tab (what every source and TV
+// is doing right now), saved to the cloud with an optional daily time.
+app.post('/api/scenes/capture', requireManager, async (req, res) => {
+  const b = req.body || {};
+  try {
+    const items = layouts.captureCurrentState();
+    if (!items.length) return res.status(400).json({ error: 'Nothing to capture yet -- no source or TV has a live reading. Wait a few seconds and try again.' });
+    const data = await sync.createScene({ name: b.name, daily_time: b.daily_time || null, items, actor: req.vcActor });
+    activity.record('scene.capture', { actor: req.vcActor, targetType: 'layout', targetId: data.layout && data.layout.id, detail: { name: b.name, item_count: items.length } });
+    res.json({ ok: true, layout: data.layout, item_count: items.length });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/layouts/:id/capture', async (req, res) => {
   try {
     const items = layouts.captureCurrentState();

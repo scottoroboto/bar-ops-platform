@@ -20,6 +20,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const RECEIPTS_BUCKET = 'cash-receipts';
 const PHOTOS_BUCKET = 'people-photos';
+const AMUSEMENT_BUCKET = 'amusement-photos';
 const SIGNED_URL_TTL_SECONDS = 300; // 5 minutes — minted fresh on every request, not cached
 
 let client = null;
@@ -134,8 +135,29 @@ async function deletePersonPhoto(path) {
   if (error) console.warn(`[storage] could not delete photo ${path}: ${error.message}`);
 }
 
+// ---- Amusement scale photos (patch_041) -------------------------------
+// The photo of the scale display a collection item's weight was read
+// from, plus the $10-roll scale check at the start of a visit. Keyed by
+// collection so a whole visit's evidence sits together in one folder.
+async function uploadAmusementPhoto({ buffer, mimetype, collectionId }) {
+  const ext = extensionFor(mimetype);
+  return uploadTo(AMUSEMENT_BUCKET, `${collectionId}/${crypto.randomUUID()}.${ext}`, buffer, mimetype, 'Scale photo');
+}
+
+async function getSignedAmusementPhotoUrl(path) {
+  return signedUrlFor(AMUSEMENT_BUCKET, path, 'scale photo');
+}
+
+// Whether uploads can work at all right now — the amusement app degrades
+// to "reading kept, photo not stored" locally instead of failing the
+// whole weigh step when Supabase Storage isn't configured.
+function isConfigured() {
+  return !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
 module.exports = {
   uploadReceipt, getSignedReceiptUrl,
+  uploadAmusementPhoto, getSignedAmusementPhotoUrl, isConfigured,
   uploadPersonPhoto, getSignedPersonPhotoUrl, deletePersonPhoto, looksLikeImage, PHOTO_MIMES,
   EXT_BY_MIME,
 };
