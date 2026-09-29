@@ -792,3 +792,130 @@ body.staff {
 .staff #undoBar.show { display: flex; }
 .staff #undoBar #undoText { font-size: 14px; }
 .staff #undoBar #undoCountdown { color: var(--amber-bright); font-weight: 700; margin-top: 2px; }
+
+/* =======================================================================
+   "Neon" staff theme (Sept 2026, Scotto's pick from four concepts) --
+   black base, colored slot badges per source type (blue DirecTV, purple
+   Roku, pink static), green for the picked source and the TVs already on
+   it, magenta for "selected to move". Both TVs-page columns sit in boxes,
+   the source rail fits 16 rows on a 12.9" iPad without scrolling, and the
+   TV grid runs 12 tiles per row so a 12-TV zone is one line. Everything
+   above this block still applies; this only re-points the variables and
+   overrides the handful of rules that carry the look. No JS changes.
+   ======================================================================= */
+:root {
+  --base: #07070A;
+  --card: #101015;
+  --card-alt: #15151C;
+  --card-raised: #1C1C25;
+  --border: #23232E;
+  --border-mid: #2C2C3A;
+  --border-strong: #3A3A4C;
+  --muted: #7A7A90;
+  --muted-strong: #B8B8CC;
+  --text: #FFFFFF;
+  --amber: #FFB020;
+  --amber-bright: #FFC24D;
+  --amber-dim: #6E4A0A;
+  --amber-dim-strong: #4E3406;
+  --on-fg: #39FF88;
+  --neon-green: #39FF88;
+  --neon-green-bg: #0C2A18;
+  --neon-cyan: #4DD8FF;
+  --neon-purple: #B48CFF;
+  --neon-pink: #FF6BD6;
+  --neon-magenta: #FF3BD4;
+  --neon-magenta-bg: #2A0C24;
+  --box: #0E0E14;
+}
+
+.staff-topbar { background: #0C0C11; border-bottom: 1px solid var(--border-mid); box-shadow: 0 0 24px rgba(57,255,136,0.08); }
+.staff-topbar .tb-nav a.active, .staff-topbar .tb-nav a.active:hover { background: var(--neon-green); color: #06110A; }
+.staff-topbar .tva-on { color: var(--neon-green); border-color: #1E7A45; background: rgba(57,255,136,0.06); box-shadow: 0 0 12px rgba(57,255,136,0.25); }
+.staff-topbar .tva-on:hover { background: rgba(57,255,136,0.12); }
+.staff-topbar button.tva-off.hold-danger { border-color: var(--border-strong); color: var(--muted-strong); }
+.staff-topbar .tva-off .hold-fill { background: rgba(255,59,212,0.22); }
+.staff-topbar .tva-remote { color: var(--neon-cyan); border-color: #1E5A70; }
+.staff-topbar .tva-remote.open { color: #06110A; background: var(--neon-cyan); border-color: var(--neon-cyan); }
+
+/* TVs page frame: the wrap becomes a column that fills the screen under the
+   topbar, so the attention box (when there is one) takes its share and the
+   two boxed columns get the rest. */
+.staff .wrap:has(.tvs-workspace) {
+  max-width: none; height: calc(100vh - 64px); box-sizing: border-box;
+  padding: 12px 16px 12px; display: flex; flex-direction: column;
+}
+.staff .tvs-workspace { flex: 1 1 auto; height: auto; min-height: 0; margin-top: 0; gap: 14px; }
+.staff .tvs-col-source, .staff .tvs-col-tvs {
+  background: var(--box); border: 1px solid var(--border-mid); border-radius: 14px; padding: 8px 12px 12px;
+}
+.staff .tvs-col-source { width: 372px; }
+.staff .tvs-col-header { height: 34px; flex-shrink: 0; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+.staff .tvs-col-header .tvs-col-title { color: var(--neon-cyan); text-shadow: 0 0 8px rgba(77,216,255,0.45); }
+.staff .tvs-legend .sw-box.on { background: var(--neon-green); }
+.staff .tvs-legend .sw-box.sel { background: var(--neon-magenta-bg); border-color: var(--neon-magenta); }
+
+/* Source rail: rows share the column's height evenly (16 rows on a 12.9"
+   iPad land around 52px each), never below 40px -- past that the rail
+   scrolls like before. */
+.staff .tvsrc-scroll { display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(36px, 1fr); gap: 3px; align-content: start; }
+.staff .tvsrc-list { display: contents; }
+.staff .tvsrc-row { height: auto; min-height: 36px; box-sizing: border-box; background: var(--card-alt); border: 1px solid var(--border-mid); border-radius: 9px; padding: 0 10px; }
+.staff .tvsrc-row .tvsrc-title { font-size: 17px; }
+.staff .tvsrc-row .tvsrc-slot {
+  width: 42px; padding: 4px 0; border-radius: 6px; text-align: center; font-size: 12px; font-weight: 800;
+  background: var(--neon-cyan); color: #0A0A0E;
+}
+.staff .tvsrc-row .tvsrc-slot.roku { background: var(--neon-purple); color: #0A0A0E; }
+.staff .tvsrc-row.sc-static .tvsrc-slot { background: var(--neon-pink); color: #0A0A0E; }
+.staff .tvsrc-row .tvsrc-callsign { color: var(--neon-cyan); }
+.staff .tvsrc-row .tvsrc-count { color: var(--neon-green); }
+.staff .tvsrc-row.picked { background: var(--neon-green-bg); border-color: var(--neon-green); box-shadow: 0 0 0 1px var(--neon-green) inset, 0 0 18px rgba(57,255,136,0.35); }
+.staff .tvsrc-row.picked .tvsrc-title { color: #FFFFFF; }
+.staff .tvsrc-row.picked .tvsrc-slot { background: var(--neon-green); color: #06110A; }
+.staff .tvsrc-row.picked .tvsrc-callsign, .staff .tvsrc-row.picked .tvsrc-count { color: var(--neon-green); }
+.staff .tvsrc-row.sc-asleep .tvsrc-slot, .staff .tvsrc-row.sc-idle .tvsrc-slot { background: var(--border-strong); color: var(--muted-strong); }
+.staff .tvsrc-row.sc-alert { background: #2A0F12; border-color: #7A2430; }
+.staff .tvsrc-row.sc-alert .tvsrc-slot { background: #FF3B57; color: #fff; }
+.staff .tvsrc-row.sc-open { border-style: dashed; border-color: var(--border-mid); }
+.staff .tvsrc-row.sc-open .tvsrc-slot { background: transparent; color: var(--muted); border: 1px dashed var(--border-strong); }
+
+/* TV grid: zones are sections with a sticky header; 12 tiles per row on a
+   tablet in landscape (a 12-TV zone is one line), auto-fit narrower. */
+.staff .tvz-group { border-top: 1px solid var(--border); padding-top: 4px; margin-bottom: 8px; }
+.staff .tvz-group:first-child { border-top: 0; padding-top: 0; }
+.staff .tvz-header { position: sticky; top: 0; z-index: 1; background: var(--box); height: 30px; }
+.staff .tvz-header .tvz-name { color: #FFFFFF; font-size: 16px; }
+.staff .tvz-header .tvz-count { color: var(--neon-cyan); }
+.staff .zone-toggle .chev { color: var(--muted-strong); }
+.staff .tv-chip-grid { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 5px; margin-top: 4px; }
+@media (min-width: 1200px) { .staff .tv-chip-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); } }
+.staff .tv-chip { min-height: 58px; padding: 4px 2px; border-radius: 10px; background: var(--card-alt); border: 1px solid var(--border-strong); min-width: 0; }
+.staff .tv-chip .chip-qam { font-size: 11px; color: #8E8EA6; }
+.staff .tv-chip .chip-tag { font-size: 16px; color: #FFFFFF; text-align: center; line-height: 1.05; white-space: normal; overflow-wrap: anywhere; }
+.staff .tv-chip .chip-source { font-size: 11px; color: #8E8EA6; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.staff .tv-chip.picked-on { background: var(--neon-green-bg); border-color: var(--neon-green); box-shadow: 0 0 12px rgba(57,255,136,0.35); }
+.staff .tv-chip.picked-on .chip-tag { color: var(--neon-green); }
+.staff .tv-chip.picked-on .chip-qam, .staff .tv-chip.picked-on .chip-source { color: #8FE9B5; }
+.staff .tv-chip.dead-source { background: #2A0F12; border-color: #7A2430; }
+.staff .tv-chip.dead-source .chip-tag { color: #FFB3BC; }
+.staff .tv-chip.dead-source .chip-qam, .staff .tv-chip.dead-source .chip-source { color: #FF3B57; }
+.staff .remote-target { background: var(--neon-magenta-bg) !important; border-color: var(--neon-magenta) !important; box-shadow: 0 0 0 2px var(--neon-magenta) inset, 0 0 16px rgba(255,59,212,0.5) !important; }
+.staff .tv-chip.remote-target .chip-tag { color: #FF7EE3; }
+.staff .tv-chip.remote-target .chip-qam, .staff .tv-chip.remote-target .chip-source { color: #FFB3EE; }
+.staff .tv-chip.remote-target.dead-source .chip-source { color: #FF3B57; }
+.staff .remote-target .live-title, .staff .remote-target .name, .staff .remote-target .tag { color: #FF7EE3 !important; }
+
+.staff .tvs-commit-bar { background: var(--card); border-color: var(--border-strong); }
+.staff .tvs-commit-bar .cb-count { color: var(--neon-magenta); }
+.staff .tvs-commit-bar button.cb-commit { background: var(--neon-green); color: #06110A; }
+.staff .tvs-commit-bar button.cb-commit:hover { background: #6DFFA8; }
+
+.staff .tv-remote-panel { background: var(--box); border-color: var(--border-mid); }
+
+@media (max-width: 980px) {
+  .staff .wrap:has(.tvs-workspace) { height: auto; display: block; padding: 12px 12px 70px; }
+  .staff .tvs-workspace { height: auto; }
+  .staff .tvsrc-scroll { display: flex; flex-direction: column; gap: 4px; }
+  .staff .tvsrc-row { height: 44px; }
+}
