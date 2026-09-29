@@ -376,7 +376,7 @@ body.staff {
   padding: 10px 24px; gap: 16px; flex-wrap: wrap;
 }
 .staff-topbar .tb-brand { display: flex; align-items: center; gap: 14px; }
-.staff-topbar .tb-logo { height: 40px; width: auto; display: block; }
+.staff-topbar .tb-logo { height: 52px; width: auto; display: block; }
 .staff-topbar .tb-divider { width: 1px; height: 26px; background: var(--border); }
 .staff-topbar .tb-conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--on-fg); flex-shrink: 0; }
 .staff-topbar .tb-conn-dot[title] { cursor: help; }
@@ -1075,6 +1075,7 @@ body.staff {
   .staff-topbar .tva-btn { padding: 12px 13px; font-size: 13.5px; }
   .staff-topbar button.tva-off.hold-danger { padding: 12px 11px 12px 13px; }
   .staff-topbar-inner { gap: 10px; padding: 10px 16px; }
+  .staff-topbar .tva-remote .label { display: none; } /* icon only: "Scenes & Events" needs the room */
 }
 
 /* Music: station list (replaces the tile grid) */

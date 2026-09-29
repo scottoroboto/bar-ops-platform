@@ -60,6 +60,9 @@ function enter() {
     LAYOUTS = layouts;
     renderLayouts();
     loadNames(); // non-blocking -- only needed to label items by name in the apply progress list
+    refreshEvents(true);
+    if (eventsTimer) clearInterval(eventsTimer);
+    eventsTimer = setInterval(() => refreshEvents(true), 15000);
     updateTopbarClock();
     if (clockTimer) clearInterval(clockTimer);
     clockTimer = setInterval(updateTopbarClock, 15000);
@@ -72,6 +75,7 @@ function enter() {
 enter();
 
 let clockTimer = null;
+let eventsTimer = null;
 
 // Topbar clock -- same shared header as staff_sources.html; see that file's
 // staff_sources.js for the fuller comment on why this isn't a live seconds
@@ -136,8 +140,46 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ---- Events (shared code in staff_events.js; this page draws the list) ----
+function renderEventsSection() {
+  const box = document.getElementById('eventsBox');
+  if (!box) return;
+  const evs = EVENTS.events || [];
+  if (!evs.length) {
+    box.innerHTML = `<p class="muted">${EVENTS.is_manager ? 'No events yet. On the TVs tab, highlight the TVs for one (pick a source first if it should change channel) and tap Capture event.' : 'No events set up. A manager captures them from the TVs tab.'}</p>`;
+    return;
+  }
+  box.innerHTML = evs.map((e) => `
+    <div class="layout-row ev-row ${e.running ? 'running' : ''}">
+      <div class="ev-main">
+        <div class="layout-name ev-name">${escapeHtml(e.name)}${e.enabled === false ? ' <span class="layout-count">(off)</span>' : ''}</div>
+        <div class="layout-count ev-when">${escapeHtml(eventWhen(e))} · ${e.tv_ids.length} TV${e.tv_ids.length === 1 ? '' : 's'}</div>
+      </div>
+      ${EVENTS.is_manager && !e.running ? `<button class="ghost" onclick="openEditEvent(${e.id})">Edit</button>` : ''}
+      ${e.running
+        ? `<button class="off" onclick="confirmEndEvent(${e.id})">End</button>`
+        : `<button class="primary" ${e.items.length ? '' : 'disabled'} onclick="confirmApplyEvent(${e.id})">Apply</button>`}
+    </div>`).join('');
+}
+// The shared events code expects these from its host page.
+function renderBulkProgress(title, rows) { renderApplyProgress(title, rows, null); }
+function flashAttention(text) {
+  const box = document.getElementById('attentionFlash');
+  if (!box) return;
+  const note = document.createElement('div');
+  note.className = 'attention-flash';
+  note.textContent = text;
+  box.replaceChildren(note);
+  setTimeout(() => { if (note.parentNode) note.remove(); }, 8000);
+}
+async function refreshAll() {
+  try { LAYOUTS = await api('/api/layouts'); renderLayouts(); } catch (e) { /* keep last */ }
+  await refreshEvents(true);
+}
+
 function renderLayouts() {
   const box = document.getElementById('layoutsBox');
+  if (!box) return; // the Events page shares this script and has no scenes list
   if (!LAYOUTS.length) {
     box.innerHTML = '<p class="muted">No scenes yet. A manager can capture one from the TVs tab (Capture scene) once the room looks right, or add one in TV Admin &rarr; Scenes.</p>';
     return;
@@ -246,7 +288,7 @@ function renderApplyProgress(layoutName, rows, layoutId) {
       <div class="failure-banner">
         <span class="text">${failed.length} item${failed.length === 1 ? '' : 's'} didn't apply.</span>
         <div class="actions">
-          <button class="small" onclick="applyLayout(${layoutId})">Retry</button>
+          ${layoutId != null ? `<button class="small" onclick="applyLayout(${layoutId})">Retry</button>` : ''}
           <button class="small" onclick="document.getElementById('applyProgress').innerHTML=''">Dismiss</button>
         </div>
       </div>` : ''}

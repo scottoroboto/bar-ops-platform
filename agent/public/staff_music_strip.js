@@ -3,7 +3,7 @@
 // api(); it only draws the strip once the page has let the person in. Now
 // playing, play / pause, skip, and STATIONS -> the Music page. No volume.
 (function () {
-  if (!/staff_(sources|tvs|layouts|power)\.html$/.test(location.pathname)) return;
+  if (!/staff_(sources|tvs|layouts|events|power)\.html$/.test(location.pathname)) return;
   let stripEl = null;
   let last = null;
   let busy = null;
@@ -27,12 +27,13 @@
   }
 
   function render(m) {
-    const el = ensureStrip();
     if (!m || !m.ok) {
-      el.innerHTML = `<div class="mu-strip-art blank"></div><div class="mu-strip-text"><div class="s muted">${esc((m && m.error) || 'Music player not answering')}</div></div>
-        <div class="mu-strip-btns"><a class="mu-strip-btn stations" href="/staff_music.html">MUSIC</a></div>`;
+      // No player found (or it stopped answering): no strip at all, and the
+      // page takes its space back. The Music tab still explains the state.
+      if (stripEl) { stripEl.remove(); stripEl = null; document.body.classList.remove('has-music-strip'); }
       return;
     }
+    const el = ensureStrip();
     const t = m.track || {};
     const station = m.station && m.station.title ? m.station.title : '';
     el.innerHTML = `
