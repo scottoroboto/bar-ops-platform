@@ -29,23 +29,32 @@ function currentConfig() {
   return cache.get('config') || {};
 }
 
-function itemsForLayout(config, layoutId) {
+// patch_043: a scene of kind 'all_off' is the built-in "every TV off" --
+// nobody has to capture a dark room. Its items are synthesized from the
+// current TV list every time, so a TV added later is included.
+function allOffItems(config) {
+  return (config.tvs || []).filter((t) => t.enabled !== false && t.ip)
+    .map((t) => ({ target_type: 'tv', target_id: t.id, action: { op: 'power', state: 'off' }, step_order: 0 }));
+}
+
+function itemsForLayout(config, layout) {
+  if (layout.kind === 'all_off') return allOffItems(config);
   return (config.layout_items || [])
-    .filter((it) => Number(it.layout_id) === Number(layoutId))
+    .filter((it) => Number(it.layout_id) === Number(layout.id))
     .sort((a, b) => (a.step_order || 0) - (b.step_order || 0));
 }
 
 function listLayouts() {
   const config = currentConfig();
-  return (config.layouts || []).map((l) => ({ ...l, items: itemsForLayout(config, l.id) }));
+  return (config.layouts || []).map((l) => ({ ...l, items: itemsForLayout(config, l) }));
 }
 
 function getLayout(idParam) {
   const id = Number(idParam);
   const config = currentConfig();
   const layout = (config.layouts || []).find((l) => Number(l.id) === id);
-  if (!layout) throw new Error(`No layout with id ${idParam}.`);
-  return { ...layout, items: itemsForLayout(config, id) };
+  if (!layout) throw new Error(`No scene with id ${idParam}.`);
+  return { ...layout, items: itemsForLayout(config, layout) };
 }
 
 // Same gate as agent/server.js's requireChannelCapable -- duplicated
@@ -227,4 +236,4 @@ function captureCurrentState() {
   return items;
 }
 
-module.exports = { listLayouts, getLayout, apply, replay, captureCurrentState, runOneItem, runItems };
+module.exports = { listLayouts, getLayout, apply, replay, captureCurrentState, snapshotBefore, runOneItem, runItems };

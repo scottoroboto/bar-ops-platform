@@ -1026,6 +1026,57 @@ when someone walks up to the rack and changes a box by hand.
 
 ---
 
+## 10a. Scenes and events (patch_043)
+
+One rule staff can remember: **scenes are how the bar normally looks,
+events are what's on tonight.**
+
+**Scenes** are whole-room presets (`vc_layouts` — the table kept its name,
+only the words changed). Every source's channel and every TV's slot and
+power. A scene can run by itself at a daily bar-local time (`daily_time`:
+Open at 10:45, Close at 1:30) or be tapped from the box's TVs tab or Scenes
+tab. Kind `all_off` is the built-in "every TV off" — its items are
+synthesized from the TV list, nothing to capture. A manager captures a
+scene on the box (TVs tab → Capture scene) once the room looks right; the
+owner can also add/edit/disable them in TV Admin → Scenes. The old cron
+timers (`vc_schedules`) still work and sit under TV Admin → Events →
+"Timers (advanced)".
+
+**Events** (`vc_events` + `vc_event_items`) are a temporary override on
+part of the room. A manager highlights the TVs on the box's TVs tab
+(picking a source in column 1 first if the event should change channel),
+taps **Capture event**, and names it. **Capture changes nothing on any
+device** — it saves the setup. Kinds: `manual` (no time; someone taps
+Apply), `once` (a date), `weekly` (days); each with a start and end time.
+`after_mode` says what happens when it ends: `restore` (replay the snapshot
+the box took at start), `leave`, or `scene` (apply `after_layout_id`).
+
+Who does what: the owner or a manager (the TV Staff pass carries
+`actor` admin/manager) captures, edits and deletes — on the box or in TV
+Admin → Events. Anyone with a pass can **Apply now** (start early) and
+**End** (end early), each behind a plain confirm popup, no PIN.
+
+The box (`agent/lib/events.js`, ticked by `lib/scheduler.js` every 30 s)
+is the only thing that starts or ends events. It keeps running state in
+memory and writes it up (`POST /api/venue/agent/events/:id/state` →
+`running_since`, `running_snapshot`) so a box restart mid-event recovers
+the event from the next config pull and still ends it properly. A start
+missed while the box was down still fires within 10 minutes.
+
+**Conflicts** — two events wanting the same TV: the box never guesses. The
+TVs tab shows a popup: *Switch* (end the running one on those TVs now),
+*Stay* (keep the running one; the new one starts when it ends, if there's
+time left), or *Split* (alternate the shared TVs down the TV list). A
+scheduled start with no answer in 90 s means Stay. Ending an event never
+touches a TV another running event holds.
+
+Agent routes (all behind the staff pass): `GET /api/events` (events with
+running state, scenes, pending conflict, `is_manager`), `POST
+/api/events/:id/apply` (`{choice}` optional), `/:id/end`,
+`/api/events/conflict/resolve {choice}`; manager-only `POST /api/events`
+(capture: `tv_ids`, optional `slot`/`major`), `/:id/update`, `/:id/delete`,
+`POST /api/scenes/capture {name, daily_time}`.
+
 ## 11. Security
 
 - **Never expose the agent to the internet.** Bind to LAN interfaces only. No

@@ -1151,3 +1151,41 @@ body.staff {
 .staff .mu-sheet-cancel { min-height: 50px; border-radius: 10px; background: transparent; border: 1px solid var(--border-strong); color: var(--muted-strong); font-weight: 700; font-family: inherit; font-size: 15px; }
 .staff .mu-sheet-cancel.wide { width: 100%; margin-top: 10px; }
 .staff .mu-sheet-go { min-height: 50px; border-radius: 10px; background: var(--neon-green); border: 0; color: #06110A; font-weight: 800; font-family: inherit; font-size: 15px; }
+
+/* Events & scenes on the TVs tab (patch_043). The events list sits under
+   the source rail in the left column; scenes are a chip row below it.
+   Modals reuse .fav-backdrop/.fav-panel. */
+.staff .ev-block { flex-shrink: 0; margin-top: 10px; border-top: 1px solid var(--border-strong); padding-top: 8px; max-height: 46%; display: flex; flex-direction: column; min-height: 0; }
+.staff .ev-block .tvs-col-header { flex-shrink: 0; }
+.staff .ev-block .tvs-col-header button.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
+.staff .ev-scroll { overflow-y: auto; min-height: 0; }
+.staff .ev-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+.staff .ev-row:last-child { border-bottom: none; }
+.staff .ev-row .ev-main { flex: 1; min-width: 0; }
+.staff .ev-row .ev-name { font-size: 14px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staff .ev-row .ev-when { font-size: 12px; color: var(--muted-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staff .ev-row.running { background: #1E2A1F; border-radius: 8px; }
+.staff .ev-row.running .ev-name { color: var(--on-fg); }
+.staff .ev-row.running .ev-when { color: #9fd3ac; }
+.staff .ev-row button.small { min-height: 34px; padding: 4px 12px; font-size: 13px; flex-shrink: 0; }
+.staff .ev-row button.ghost { background: transparent; border-color: transparent; color: var(--muted); padding: 4px 6px; min-height: 34px; font-size: 12px; }
+.staff .ev-empty { font-size: 12.5px; color: var(--muted); padding: 6px 4px; }
+.staff .ev-scenes { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0 2px; }
+.staff .ev-scenes button { min-height: 34px; padding: 4px 12px; font-size: 13px; border-radius: 999px; }
+.staff .ev-scenes button .t { color: var(--muted); font-size: 11px; margin-left: 5px; }
+.staff .ev-panel { max-width: 560px; }
+.staff .ev-panel p { margin: 6px 0 12px; color: var(--muted-strong); font-size: 14.5px; line-height: 1.4; }
+.staff .ev-panel label { display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 10px 0 4px; }
+.staff .ev-panel input, .staff .ev-panel select { width: 100%; box-sizing: border-box; }
+.staff .ev-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.staff .ev-days { display: flex; gap: 6px; }
+.staff .ev-days button { flex: 1; min-height: 40px; padding: 0; font-size: 13px; }
+.staff .ev-days button.active { background: var(--amber-dim); border-color: var(--amber); color: var(--amber-bright); }
+.staff .ev-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.staff .ev-actions button { min-width: 110px; }
+.staff .ev-choice { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.staff .ev-choice button { text-align: left; padding: 12px 14px; }
+.staff .ev-choice button .sub { display: block; font-size: 12.5px; color: var(--muted-strong); font-weight: 500; margin-top: 2px; }
+.staff .ev-countdown { font-size: 13px; color: var(--amber-bright); font-weight: 700; margin-top: 8px; }
+.staff .ev-tvs { font-size: 12.5px; color: var(--muted-strong); margin: 2px 0 8px; }
+.staff .cb-right button.cb-capture { background: var(--amber-dim); border-color: var(--amber-dim-strong); color: var(--amber-bright); }
