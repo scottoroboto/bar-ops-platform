@@ -1042,6 +1042,15 @@ await withServiceClient((client) => client.query(
 res.json({ ok: true });
 });
 
+// WAN port link states from the box (agent lib/health.js reportWans).
+app.post('/api/venue/agent/wans', requireAgentAuth(), async (req, res) => {
+try {
+res.json(await monitoring.reportAgentWans({ locationId: req.vcSite.location_id, wans: req.body && req.body.wans }));
+} catch (err) {
+res.status(500).json({ error: err.message });
+}
+});
+
 app.post('/api/venue/agent/heartbeat', requireAgentAuth(), async (req, res) => {
 const { status, agentVersion, configEtag, lanIp } = req.body || {};
 await withServiceClient((client) => client.query(

@@ -1022,6 +1022,52 @@ function wanDetail(system, sample) {
   };
 }
 
+// The box reports every WAN port on the gateway once a minute (agent
+// lib/health.js reportWans -> POST /api/venue/agent/wans). Each line row
+// on the board maps to a port: config.wan_port when set, else by kind
+// (fiber / unifi_wan -> wan1, cable -> wan2, cell -> wan3). Cable and
+// cell lines get their status straight from the link (there is no speed
+// test on a standby line); the primary keeps its speed-based status from
+// the poll and only goes offline here when its link is actually down.
+const WAN_PORT_BY_KIND = { unifi_wan: 'wan1', fiber_wan: 'wan1', cable_wan: 'wan2', cell_wan: 'wan3' };
+async function reportAgentWans({ locationId, wans }) {
+  if (!locationId) return { ok: false, error: 'Missing location.' };
+  const links = (Array.isArray(wans) ? wans : []).filter((w) => w && w.port);
+  if (!links.length) return { ok: true, count: 0 };
+  const byPort = new Map(links.map((w) => [String(w.port).toLowerCase(), w]));
+  const { rows } = await withServiceClient((svc) => svc.query(
+    `SELECT * FROM monitored_systems WHERE location_id = $1 AND active = true AND category = 'network'
+      AND kind IN ('unifi_wan', 'fiber_wan', 'cable_wan', 'cell_wan')`,
+    [locationId]
+  ));
+  let count = 0;
+  for (const system of rows) {
+    const cfg = system.config || {};
+    const port = String(cfg.wan_port || (cfg.wan === 'wan2' ? 'wan2' : WAN_PORT_BY_KIND[system.kind]) || '').toLowerCase();
+    const link = byPort.get(port);
+    if (!link) continue;
+    const linkDetail = { port, up: !!link.up, ip: link.ip || null, isp: link.isp || null, link_at: new Date().toISOString() };
+    await withServiceClient((svc) => svc.query(
+      `UPDATE monitored_systems SET config = COALESCE(config, '{}'::jsonb) || jsonb_build_object('wan_link', $2::jsonb) WHERE id = $1`,
+      [system.id, JSON.stringify(linkDetail)]
+    ));
+    if (system.kind === 'unifi_wan' || system.kind === 'fiber_wan') {
+      // Primary: the poll owns its status (speed vs par). Only step in when
+      // the link itself is down, so the tile goes red instead of "unknown".
+      if (!link.up) await recordStatus({ systemId: system.id, status: 'offline', detail: { ...(system.last_detail || {}), source: 'agent', link: linkDetail } }).catch(() => {});
+      count += 1;
+      continue;
+    }
+    await recordStatus({
+      systemId: system.id,
+      status: link.up ? 'online' : 'offline',
+      detail: { source: 'agent', link: linkDetail, download_mbps: null, upload_mbps: null, measured_at: null },
+    }).catch((err) => console.error(`[monitoring] recordStatus failed for ${system.name}`, err));
+    count += 1;
+  }
+  return { ok: true, count };
+}
+
 async function reportAgentSpeed({ locationId, downloadMbps, uploadMbps, latencyMs, measuredAt, ispName, wanIp, ran }) {
   if (!locationId) return { ok: false, error: 'Missing location.' };
   const down = Number(downloadMbps), up = Number(uploadMbps);
@@ -1330,6 +1376,6 @@ module.exports = {
   getNotifySettings, setNotifyChannel,
   listAlertRoutes, addAlertRoute, removeAlertRoute,
   pollUnifiSystems, unifiConfigured,
-  reportAvHealth, reportAgentSpeed, freshAgentSpeed,
+  reportAvHealth, reportAgentSpeed, reportAgentWans, freshAgentSpeed,
   getCriticalSystemsStatus,
 };

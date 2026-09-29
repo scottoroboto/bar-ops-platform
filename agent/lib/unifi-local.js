@@ -119,6 +119,35 @@ async function lastResult() {
   };
 }
 
+// Every WAN port on the gateway with its link state -- the UDM keeps them
+// on its own device record as wan1 / wan2 (a cable modem on the second
+// port shows up as wan2 with up:true and a public IP the moment it links).
+// Reported to the cloud once a minute (lib/health.js) so the CABLE WAN /
+// CELL WAN tiles on the Apps Home board have something real behind them.
+async function wanLinks() {
+  const gw = await gatewayDevice();
+  if (!gw) return [];
+  const out = [];
+  for (const key of Object.keys(gw)) {
+    if (!/^wan\d*$/.test(key)) continue;
+    const w = gw[key];
+    if (!w || typeof w !== 'object') continue;
+    const port = key === 'wan' ? 'wan1' : key;
+    out.push({
+      port,
+      up: w.up === true || w.up === 'true' || (w.up == null && !!w.ip),
+      ip: w.ip || null,
+      isp: w.isp_name || w.isp_organization || null,
+      name: w.name || null,
+      ifname: w.ifname || null,
+      type: w.type || null,
+      speed_mbps: typeof w.speed === 'number' ? w.speed : (typeof w.max_speed === 'number' ? w.max_speed : null),
+    });
+  }
+  out.sort((a, b) => a.port.localeCompare(b.port));
+  return out;
+}
+
 // For finding where a new Network version hides things: raw JSON of any path.
 async function raw(path) {
   const res = await authed('GET', path);
@@ -143,4 +172,4 @@ async function runSpeedTest({ waitMs = 120 * 1000 } = {}) {
   throw new Error('UniFi speed test did not finish in time.');
 }
 
-module.exports = { configured, lastResult, runSpeedTest, login, raw, gatewayDevice };
+module.exports = { configured, lastResult, runSpeedTest, login, raw, gatewayDevice, wanLinks };

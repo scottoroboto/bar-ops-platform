@@ -107,6 +107,16 @@ async function musicWrite(path, body) {
   return data;
 }
 
+// WAN port link states off the gateway (lib/unifi-local.js wanLinks) --
+// the cloud lights the board's CABLE WAN / CELL WAN tiles from these.
+async function pushWans(wans) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/wans`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ wans }),
+  });
+  if (!res.ok) throw new Error(`wan push failed: ${res.status} ${await res.text()}`);
+  return res.json().catch(() => ({}));
+}
+
 async function reportTvToken(tvId, wsToken) {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/tvs/${tvId}/token`, {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({ ws_token: wsToken }),
@@ -371,6 +381,7 @@ function stop() {
 
 module.exports = {
   musicWrite,
+  pushWans,
   pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
   reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems,

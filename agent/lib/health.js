@@ -94,13 +94,33 @@ async function reportOnce() {
   }
 }
 
+// WAN ports (cable / fiber / cell) off the gateway, same cadence, only
+// when this box has UDM credentials. Independent of the TV/source items
+// so a bar with no TVs adopted yet still reports its lines.
+const unifiLocal = require('./unifi-local');
+let lastWanSig = null;
+async function reportWans() {
+  if (!unifiLocal.configured()) return;
+  let wans;
+  try { wans = await unifiLocal.wanLinks(); } catch (err) { return; } // UDM unreachable: say nothing rather than guess
+  if (!wans.length) return;
+  try {
+    await sync.pushWans(wans);
+    const sig = wans.map((w) => `${w.port}:${w.up ? 'up' : 'down'}:${w.ip || ''}`).join(' ');
+    if (sig !== lastWanSig) { console.log(`[health] wan links: ${sig}`); lastWanSig = sig; }
+  } catch (err) {
+    console.error('[health] wan push failed (will retry next cycle):', err.message);
+  }
+}
+
 let timer = null;
 
 function start() {
   if (timer) return;
-  setTimeout(() => { reportOnce().catch(() => {}); }, FIRST_REPORT_DELAY_MS);
+  setTimeout(() => { reportOnce().catch(() => {}); reportWans().catch(() => {}); }, FIRST_REPORT_DELAY_MS);
   timer = setInterval(() => {
     reportOnce().catch(() => {});
+    reportWans().catch(() => {});
   }, REPORT_INTERVAL_MS);
 }
 
@@ -109,4 +129,4 @@ function stop() {
   timer = null;
 }
 
-module.exports = { start, stop, reportOnce, buildItems, getAttention, rememberAttention };
+module.exports = { start, stop, reportOnce, reportWans, buildItems, getAttention, rememberAttention };
