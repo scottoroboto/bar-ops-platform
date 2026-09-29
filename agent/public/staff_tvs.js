@@ -545,7 +545,9 @@ function chipHtml(t) {
   if (pickedOn && !selected) classes.push('picked-on');
   if (selected || aimed) classes.push('remote-target');
 
-  const qam = info.slot != null ? (qamForSlot(info.slot) || '') : '';
+  // Tiles are narrow: "12.1" reads as "12" here (every QAM slot at the bars
+  // is a .1), so "NFLRZ 19" fits where "NFLRZ 19.1" clipped on the 11" iPad.
+  const qam = info.slot != null ? (qamForSlot(info.slot) || '').replace(/\.1$/, '') : '';
   const tag = t.tag || t.name;
   let sourceLine;
   if (info.slot == null) sourceLine = 'no source';
