@@ -16,7 +16,7 @@
     <p class="muted" id="deviceNote"></p>
     <p>Controls the DirecTV receivers and TVs on the headend — channels,
       power, and whole-room presets — from this iPad or from here remotely.
-      Day-to-day control happens on the agent's own Sources/TVs/Layouts tabs
+      Day-to-day control happens on the agent's own Sources/TVs/Scenes tabs
       at the bar; the tabs below manage the inventory behind it.</p>
   </div>
 
@@ -33,8 +33,8 @@
       <button class="vc-tab" data-panel="zones-favorites" onclick="showVcPanel('zones-favorites')">Zones &amp; Favourites</button>
       <button class="vc-tab" data-panel="tvs" onclick="showVcPanel('tvs')">TVs</button>
       <button class="vc-tab" data-panel="health" onclick="showVcPanel('health')">Device Health</button>
-      <button class="vc-tab" data-panel="schedules" onclick="showVcPanel('schedules')">Schedules</button>
-      <button class="vc-tab" data-panel="layouts" onclick="showVcPanel('layouts')">Layouts</button>
+      <button class="vc-tab" data-panel="schedules" onclick="showVcPanel('schedules')">Events</button>
+      <button class="vc-tab" data-panel="layouts" onclick="showVcPanel('layouts')">Scenes</button>
       <button class="vc-tab" data-panel="backups-activity" onclick="showVcPanel('backups-activity')">Backups &amp; Activity</button>
     </nav>
 
@@ -221,9 +221,16 @@
   </section>
 
   <section class="vc-panel" data-panel="schedules">
-  <div class="card" id="schedulesCard">
-    <h2>Schedules</h2>
-    <p class="muted">Fire automatically in this location's own timezone, evaluated on the agent box. A schedule does one thing: turn TVs on or off (tvs_power), tune one receiver (source_tune), launch a Roku app (source_launch), or apply a saved layout (apply_layout). The simplest open/close is tvs_power on at 10:45 and off at 1:30 AM. To have the room come up <em>arranged</em> — every TV on its receiver and every receiver on its channel — capture that arrangement as a layout on the agent box and have the open schedule apply it instead; a layout includes power-on.</p>
+  <div class="card" id="eventsCard">
+    <h2>Events</h2>
+    <p class="muted">What's on tonight: a temporary override on part of the room. A manager captures one on the box's TVs tab (highlight the TVs, tap <strong>Capture event</strong>); nothing changes until its start time or someone taps Apply. When it ends, the TVs go back how they were, stay as they are, or go to a scene. Edit times and delete here; the TVs themselves are captured at the bar.</p>
+    <div id="eventsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+    <div id="eventMsg"></div>
+  </div>
+
+  <details class="card" id="schedulesCard">
+    <summary style="cursor:pointer; font-weight:600;">Timers (advanced)</summary>
+    <p class="muted">Plain cron timers evaluated on the agent box: turn TVs on or off (tvs_power), tune one receiver (source_tune), launch a Roku app (source_launch), or apply a scene (apply_layout). Your existing open/close timers live here and keep working. A scene with a daily time under Scenes does the same job with less setup.</p>
     <div id="schedulesList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
 
     <label for="newSchedName" id="schedFormTitle">Add a schedule — name</label>
@@ -285,20 +292,24 @@
     <button class="secondary" id="schedSubmitBtn" onclick="addSchedule()">Add schedule</button>
     <button class="ghost" id="schedCancelBtn" style="display:none; width:100%; margin-top:8px;" onclick="cancelScheduleEdit()">Cancel edit</button>
     <div id="schedMsg"></div>
-  </div>
+  </details>
   </section>
 
   <section class="vc-panel" data-panel="layouts">
   <div class="card" id="layoutsCard">
-    <h2>Layouts</h2>
-    <p class="muted">Whole-room presets — what every source is tuned to and what every TV is showing, applied in one tap from the agent's Layouts tab. Add the layout here, then capture its actual items from the bar itself (agent Admin page → Capture current state) once the room looks right.</p>
+    <h2>Scenes</h2>
+    <p class="muted">How the bar normally looks: a whole-room preset, every TV and every source. A scene can run by itself at a daily time (Open at 10:45, Close at 1:30 AM) or be tapped from the box's TVs tab. Capture a scene on the box once the room looks right (TVs tab → Capture scene, or the box's Admin page). The one exception needs no capture: an <strong>all TVs off</strong> scene.</p>
     <div id="layoutsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
 
-    <label for="newLayoutName">Add a layout — name</label>
-    <input id="newLayoutName" placeholder="e.g. Sunday NFL">
+    <label for="newLayoutName">Add a scene — name</label>
+    <input id="newLayoutName" placeholder="e.g. Open">
     <label for="newLayoutDesc">Description (optional)</label>
-    <input id="newLayoutDesc" placeholder="e.g. Every TV on the RedZone feed">
-    <button class="secondary" onclick="addLayout()">Add layout</button>
+    <input id="newLayoutDesc" placeholder="e.g. Every TV on, bar receivers on ESPN">
+    <div class="am-grid2" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+      <div><label for="newLayoutTime">Runs daily at (optional)</label><input id="newLayoutTime" type="time"></div>
+      <div><label for="newLayoutKind">Kind</label><select id="newLayoutKind"><option value="captured">Captured on the box</option><option value="all_off">All TVs off (no capture needed)</option></select></div>
+    </div>
+    <button class="secondary" onclick="addLayout()">Add scene</button>
     <div id="layoutMsg"></div>
   </div>
   </section>
@@ -315,7 +326,7 @@
 
     <div class="card" id="activityCard">
       <h2>Activity log</h2>
-      <p class="muted">Who did what, from where — every archive/delete/restore made here, plus the real day-to-day actions (TV power, source selection, layout apply) taken from the agent's own Sources/TVs/Layouts tabs.</p>
+      <p class="muted">Who did what, from where — every archive/delete/restore made here, plus the real day-to-day actions (TV power, source selection, scenes and events) taken from the agent's own Sources/TVs/Scenes tabs.</p>
       <div id="activityList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
     </div>
   </div>

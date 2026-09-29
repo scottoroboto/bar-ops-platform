@@ -25,6 +25,7 @@ const poller = require('./poller');
 const tvPoller = require('./tv-poller');
 const sync = require('./sync');
 const layouts = require('./layouts');
+const events = require('./events');
 
 const TICK_MS = 30 * 1000; // sub-minute so a minute is never skipped even with a little jitter
 const BULK_TV_CONCURRENCY = 4; // docs/venue-control.md §7.2: "Bulk operations run with concurrency 4"
@@ -218,12 +219,40 @@ async function runSchedule(schedule) {
 
 const lastFiredKey = new Map(); // schedule id -> minuteKey already fired for, so a 30s tick never double-fires within one minute
 
+// patch_043: a scene with a daily_time fires by itself every day at that
+// bar-local time (Open at 10:45, Close at 1:30) -- the same thing the old
+// apply_layout timers did, without anyone having to write a cron line.
+async function runDailyScene(layout) {
+  let resultText;
+  try {
+    const { name, results } = await layouts.apply(layout.id);
+    const ok = results.filter((r) => r.ok).length;
+    resultText = `scene "${name}" applied: ${ok}/${results.length} item(s) succeeded`;
+  } catch (err) {
+    resultText = `Failed: ${err.message}`;
+  }
+  console.log(`[scheduler] daily scene "${layout.name}" (#${layout.id}) fired: ${resultText}`);
+}
+
+const lastSceneKey = new Map(); // layout id -> minuteKey already fired for
+
 async function tick() {
   const config = cache.get('config') || {};
-  const schedules = (config.schedules || []).filter((s) => s.enabled !== false);
-  if (!schedules.length) return;
   const timezone = (config.site && config.site.timezone) || 'America/Los_Angeles';
   const parts = nowPartsInZone(timezone);
+
+  events.tick().catch((err) => console.error('[scheduler] events tick failed:', err.message));
+
+  const hhmm = `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`;
+  for (const layout of (config.layouts || [])) {
+    if (layout.enabled === false || !layout.daily_time || layout.daily_time !== hhmm) continue;
+    if (lastSceneKey.get(layout.id) === parts.minuteKey) continue;
+    lastSceneKey.set(layout.id, parts.minuteKey);
+    runDailyScene(layout).catch((err) => console.error(`[scheduler] scene #${layout.id} threw unexpectedly:`, err.message));
+  }
+
+  const schedules = (config.schedules || []).filter((s) => s.enabled !== false);
+  if (!schedules.length) return;
   for (const schedule of schedules) {
     if (lastFiredKey.get(schedule.id) === parts.minuteKey) continue;
     let matched;
