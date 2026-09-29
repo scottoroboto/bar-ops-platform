@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Diamond Amusement — Bar Ops</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/amusement.css">
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<div class="wrap" id="app">
+  <div id="msgBox"></div>
+  <div id="panelMain"><div class="card"><p class="muted">Loading…</p></div></div>
+</div>
+<nav class="am-bottomnav" id="bottomNav"></nav>
+
+<!-- QR decoding for the "scan the game's sticker" step (jsQR 1.4.0,
+     vendored so the bar's network never has to reach a CDN for it). If it
+     somehow fails, the scan step still works via the phone's own camera
+     app (the sticker is a URL) and the typed tag-code fallback. -->
+<script src="/vendor/jsQR.js" defer></script>
+<script src="/common.js"></script>
+<script src="/amusement.js"></script>
+</body>
+</html>

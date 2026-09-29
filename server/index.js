@@ -13,6 +13,7 @@ const monitoring = require('./monitoring');
 const scheduling = require('./scheduling');
 const cashhandling = require('./cashhandling');
 const inventorycontrol = require('./inventorycontrol');
+const amusement = require('./amusement');
 const notify = require('./notify');
 const jotform = require('./jotform');
 const multer = require('multer');
@@ -4112,6 +4113,238 @@ app.get('/api/scheduling/my-shifts/upcoming', auth.requireSession('light'), asyn
   if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
   res.json(await scheduling.getEmployeeUpcomingShifts(req.person.id));
 });
+
+// =====================================================================
+// Diamond Amusement — coin-op collections (patch_041, server/amusement.js).
+// Two access levels: 'owner' (everything) and 'collector' (the
+// 'amusement' app toggle: run collections, mark them posted). Every
+// route goes through withServiceClient; the tables have no RLS
+// policies, same posture as Cash Handling / Inventory.
+// =====================================================================
+async function amusementGate(req, minLevel) {
+  const level = await withServiceClient((client) => amusement.getAccess(client, req.person));
+  const rank = { none: 0, collector: 1, owner: 2 };
+  if (rank[level] < rank[minLevel]) return null;
+  return level;
+}
+function amusementRoute(minLevel, handler) {
+  return async (req, res) => {
+    const level = await amusementGate(req, minLevel);
+    if (!level) return res.status(403).json({ error: minLevel === 'owner' ? 'Owner only.' : 'Diamond Amusement is not enabled for you.' });
+    try {
+      const result = await withServiceClient((client) => handler(client, req, level));
+      if (result && result.error) return res.status(result.status || 400).json(result);
+      res.json(result === undefined ? { ok: true } : result);
+    } catch (e) {
+      if (e.statusCode) return res.status(e.statusCode).json({ error: e.message, missing: e.missing });
+      console.error('[amusement]', req.method, req.path, e);
+      res.status(500).json({ error: 'Something went wrong on the server.' });
+    }
+  };
+}
+const amusementPhotoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 }, // matches the amusement-photos bucket (patch_041)
+}).single('photo');
+function parseAmusementPhoto(req, res, next) {
+  amusementPhotoUpload(req, res, (err) => {
+    if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'That photo is too big — please keep it under 10 MB.' });
+    if (err) return res.status(400).json({ error: err.message || 'Could not read the uploaded photo.' });
+    next();
+  });
+}
+
+app.get('/api/amusement/access', auth.requireSession('light'), async (req, res) => {
+  const level = await withServiceClient((client) => amusement.getAccess(client, req.person));
+  res.json({ level, photoReader: amusement.readerConfigured(), photoStorage: storage.isConfigured() });
+});
+
+// ---- Home ----
+app.get('/api/amusement/home', auth.requireSession('light'), amusementRoute('collector', async (client, req, level) => ({
+  level,
+  locations: await amusement.listLocations(client),
+  recent: await amusement.listCollections(client, { limit: 12 }),
+  settings: await amusement.getSettings(client),
+  photoReader: amusement.readerConfigured(),
+})));
+
+// ---- Settings (owner) ----
+app.get('/api/amusement/settings', auth.requireSession('light'), amusementRoute('collector', async (client) => ({ settings: await amusement.getSettings(client) })));
+app.post('/api/amusement/settings', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  settings: await amusement.updateSettings(client, req.body || {}, req.person.id),
+})));
+
+// ---- Locations ----
+app.get('/api/amusement/locations', auth.requireSession('light'), amusementRoute('collector', async (client, req, level) => ({
+  locations: await amusement.listLocations(client, { includeInactive: level === 'owner' && req.query.all === '1' }),
+})));
+app.post('/api/amusement/locations', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  location: await amusement.createLocation(client, { ...req.body, createdBy: req.person.id }),
+})));
+app.post('/api/amusement/locations/:id/update', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  location: await amusement.updateLocation(client, req.params.id, req.body || {}),
+})));
+
+// ---- Games ----
+app.get('/api/amusement/games', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
+  games: await amusement.listGames(client, { locationId: req.query.locationId || null, includeRetired: req.query.all === '1' }),
+})));
+app.get('/api/amusement/games/by-tag/:tag', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const game = await amusement.getGameByTag(client, req.params.tag);
+  if (!game) return { error: 'No game has that tag.', status: 404 };
+  return { game };
+}));
+app.get('/api/amusement/games/:id', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const game = await amusement.getGame(client, req.params.id);
+  if (!game) return { error: 'Game not found.', status: 404 };
+  return {
+    game,
+    placements: await amusement.getGamePlacements(client, game.id),
+    history: await amusement.getGameHistory(client, game.id),
+  };
+}));
+app.post('/api/amusement/games', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.createGame(client, { ...req.body, createdBy: req.person.id }),
+})));
+app.post('/api/amusement/games/:id/update', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.updateGame(client, req.params.id, req.body || {}),
+})));
+app.post('/api/amusement/games/:id/move', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.moveGame(client, req.params.id, { locationId: req.body.locationId, movedBy: req.person.id }),
+})));
+app.post('/api/amusement/games/:id/retire', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.setGameStatus(client, req.params.id, 'retired', req.person.id),
+})));
+app.post('/api/amusement/games/:id/reactivate', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.setGameStatus(client, req.params.id, 'active', req.person.id),
+})));
+
+// ---- Collections ----
+app.get('/api/amusement/collections', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
+  collections: await amusement.listCollections(client, { locationId: req.query.locationId || null, limit: Math.min(200, Number(req.query.limit) || 40) }),
+})));
+app.post('/api/amusement/collections/start', auth.requireSession('light'), amusementRoute('collector', async (client, req) =>
+  amusement.startOrResumeCollection(client, { locationId: req.body.locationId, startedBy: req.person.id })));
+app.get('/api/amusement/collections/:id', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const sheet = await amusement.getCollectionSheet(client, req.params.id);
+  if (!sheet) return { error: 'Collection not found.', status: 404 };
+  return sheet;
+}));
+app.post('/api/amusement/collections/:id/items/:gameId', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
+  item: await amusement.upsertItem(client, req.params.id, req.params.gameId, req.body || {}, req.person.id),
+  sheet: await amusement.getCollectionSheet(client, req.params.id),
+})));
+app.post('/api/amusement/collections/:id/items/:gameId/remove', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  await amusement.removeItem(client, req.params.id, req.params.gameId);
+  return { sheet: await amusement.getCollectionSheet(client, req.params.id) };
+}));
+app.post('/api/amusement/collections/:id/note', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  await amusement.updateCollectionNote(client, req.params.id, req.body.note);
+}));
+app.post('/api/amusement/collections/:id/finalize', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
+  collection: await amusement.finalizeCollection(client, req.params.id, { finalizedBy: req.person.id, allowMissing: !!req.body.allowMissing }),
+})));
+// Multipart: an optional photo of the SpotOn ticket rides along with the
+// reference number, so a posted collection has proof at both ends.
+app.post('/api/amusement/collections/:id/posted', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('collector', async (client, req) => {
+  let photoPath = null;
+  if (req.file) {
+    if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+    photoPath = await amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: req.params.id });
+  }
+  const undo = req.body.undo === true || req.body.undo === 'true' || req.body.undo === '1';
+  return { collection: await amusement.markPosted(client, req.params.id, { postedBy: req.person.id, reference: req.body.reference, photoPath, undo }) };
+}));
+
+// Per-game coin-box tare (patch_042). Two steps from the game page:
+// photo the empty box -> /read-scale?gameId= reads it and stores the
+// photo under games/<id>; then this saves the confirmed grams.
+app.post('/api/amusement/games/:id/tare', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.setGameTare(client, req.params.id, { grams: req.body.grams, photoPath: req.body.photoPath || null, by: req.person.id }),
+})));
+
+// Read a scale photo outside a collection (setting a game's coin-box
+// tare). Same reader, photo filed under the game.
+app.post('/api/amusement/read-scale', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('owner', async (client, req) => {
+  if (!req.file) return { error: 'No photo received.' };
+  if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+  const gameId = String(req.body.gameId || '');
+  if (!/^[0-9a-f-]{36}$/i.test(gameId)) return { error: 'gameId is required.' };
+  const [photoPath, reading] = await Promise.all([
+    amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, folder: 'games/' + gameId }),
+    amusement.readScalePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype }),
+  ]);
+  return { ...reading, photoPath, photoStored: !!photoPath };
+}));
+app.post('/api/amusement/collections/:id/discard', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  await amusement.discardDraft(client, req.params.id);
+}));
+
+// The $10-roll scale check at the start of a visit: a photo (optional)
+// plus the grams typed or read from it.
+app.post('/api/amusement/collections/:id/scale-check', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('collector', async (client, req) => {
+  let photoPath = null;
+  if (req.file) {
+    if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+    photoPath = await amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: req.params.id });
+  }
+  return amusement.recordScaleCheck(client, req.params.id, { grams: req.body.grams, photoPath });
+}));
+
+// Photo of the scale display -> { value, unit, confidence, photoPath }.
+// The photo is stored first (it's the evidence, whether or not the read
+// works), then read. Nothing about the sheet changes here — the client
+// shows the reading, the collector confirms, and THAT save goes through
+// the items route above with weightPhotoPath pointing back at this file.
+app.post('/api/amusement/collections/:id/read-scale', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('collector', async (client, req) => {
+  if (!req.file) return { error: 'No photo received.' };
+  if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+  const collection = await amusement.getCollection(client, req.params.id);
+  if (!collection) return { error: 'Collection not found.', status: 404 };
+  if (collection.status !== 'draft') return { error: 'This collection is finalized.' };
+  const [photoPath, reading] = await Promise.all([
+    amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: collection.id }),
+    amusement.readScalePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype }),
+  ]);
+  return { ...reading, photoPath, photoStored: !!photoPath };
+}));
+
+// Never the raw bucket path — a short-lived signed URL, same as receipts.
+app.get('/api/amusement/photo', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const p = String(req.query.path || '');
+  if (!p || p.includes('..')) return { error: 'Bad path.' };
+  const { rows } = await client.query(
+    `SELECT 1 FROM amusement_collection_items WHERE weight_photo_path = $1
+     UNION ALL SELECT 1 FROM amusement_collections WHERE scale_check_photo_path = $1 OR pos_photo_path = $1
+     UNION ALL SELECT 1 FROM amusement_games WHERE tare_photo_path = $1 LIMIT 1`, [p]);
+  if (!rows.length) return { error: 'Not found.', status: 404 };
+  try {
+    return { url: await amusement.photoUrl(p) };
+  } catch (e) {
+    return { error: e.message, status: 500 };
+  }
+}));
+
+// QR codes for the sticker sheet, rendered server-side (the `qrcode`
+// package) so the print page needs no CDN. One call for the whole sheet:
+// { svgs: { <gameId>: '<svg…>' } }. Each encodes the app URL with the
+// game's tag, so the phone's camera app opens the right weigh screen.
+app.get('/api/amusement/qr', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const QRCode = require('qrcode');
+  const ids = String(req.query.ids || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 200);
+  const base = `${(process.env.APP_BASE_URL || (req.headers.origin || `${req.protocol}://${req.get('host')}`)).replace(/\/$/, '')}/amusement.html?tag=`;
+  const svgs = {};
+  const games = ids.length ? await amusement.listGames(client, { includeRetired: true }) : [];
+  for (const g of games) {
+    if (!ids.includes(g.id)) continue;
+    svgs[g.id] = await QRCode.toString(base + encodeURIComponent(g.tag_code), { type: 'svg', errorCorrectionLevel: 'M', margin: 1 });
+  }
+  return { svgs, base };
+}));
+
+// ---- Reports (owner) ----
+app.get('/api/amusement/report', auth.requireSession('light'), amusementRoute('owner', async (client, req) =>
+  amusement.report(client, { days: req.query.days })));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Bar platform listening on http://localhost:${PORT}`));

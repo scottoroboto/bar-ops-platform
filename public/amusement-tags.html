@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game stickers — Diamond Amusement</title>
+<style>
+  /* QR sticker sheet laid out for Avery 6578 (Durable ID, laser, film):
+     US Letter, 15 labels per sheet — 3 across x 5 down, each 2-5/8" wide
+     by 2" tall. Sheet geometry: 0.1875" side margins, 0.125" column
+     gutters, 0.5" top and bottom margins, no row gap. Print at 100%
+     ("Actual size", not "Fit to page"). Each QR encodes the app URL with
+     ?tag=DA-0007 so it works from the in-app scanner or the phone's own
+     camera app. Sticker goes on the game's coin box.
+
+     Pick which games to print, and where on a partly-used sheet to start,
+     in the toolbar; ?ids=<game id>,... preselects (the "Print sticker"
+     button on a game page). */
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f2f2f2; color: #111; }
+  .toolbar { background: #fff; padding: 14px 20px; border-bottom: 1px solid #ddd; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .toolbar button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid #333; background: #fff; cursor: pointer; }
+  .toolbar button.primary { background: #0d74da; color: #fff; border-color: #0d74da; }
+  .toolbar .muted { color: #666; font-size: 13px; }
+  .picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 14px; font-size: 13px; max-width: 900px; }
+  .picker label { display: flex; gap: 6px; align-items: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .controls select, .controls input { font: inherit; padding: 6px 8px; }
+  .page { width: 8.5in; height: 11in; box-sizing: border-box; background: #fff; margin: 20px auto; padding: 0.5in 0.1875in; display: grid; grid-template-columns: repeat(3, 2.625in); column-gap: 0.125in; grid-auto-rows: 2in; box-shadow: 0 2px 10px rgba(0,0,0,0.15); page-break-after: always; }
+  .page:last-child { page-break-after: auto; }
+  .tag { width: 2.625in; height: 2in; box-sizing: border-box; padding: 0.12in 0.15in; display: flex; align-items: center; gap: 0.12in; }
+  .tag.blank { visibility: hidden; }
+  .tag .qr { width: 1.3in; height: 1.3in; flex-shrink: 0; }
+  .tag .qr svg { width: 1.3in; height: 1.3in; display: block; }
+  .tag .txt { display: flex; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; }
+  .tag .name { font-weight: 800; font-size: 12.5px; line-height: 1.1; overflow-wrap: break-word; }
+  .tag .code { font-size: 12px; letter-spacing: 1px; font-weight: 700; color: #111; }
+  .tag .loc { font-size: 9px; color: #444; }
+  .tag .brand { font-size: 8px; color: #777; letter-spacing: 0.5px; text-transform: uppercase; }
+  .guides .tag { outline: 1px dashed #bbb; outline-offset: -1px; }
+  @media print {
+    body { background: #fff; }
+    .toolbar { display: none; }
+    .page { margin: 0; box-shadow: none; }
+    .guides .tag { outline: none; }
+    @page { size: letter; margin: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <div style="display:flex; flex-direction:column; gap:10px;">
+    <div class="controls">
+      <button class="primary" onclick="window.print()">Print</button>
+      <label>Start at label <select id="startAt"></select> <span class="muted">(for a partly used sheet, counting left to right, top to bottom)</span></label>
+      <label><input type="checkbox" id="guides" checked onchange="render()"> show label outlines on screen</label>
+      <label><input type="checkbox" id="retired" onchange="load()"> include retired</label>
+      <span class="muted" id="status">Loading…</span>
+    </div>
+    <div class="controls"><button onclick="setAll(true)">Select all</button><button onclick="setAll(false)">Select none</button><span class="muted">Avery 6578 · 15 per sheet · print at 100% scale</span></div>
+    <div class="picker" id="picker"></div>
+  </div>
+</div>
+<div id="sheets"></div>
+<script src="/common.js"></script>
+<script>
+let GAMES = [];
+const PER_SHEET = 15;
+function setAll(on) { document.querySelectorAll('#picker input').forEach((i) => { i.checked = on; }); render(); }
+async function load() {
+  const person = requireAuth();
+  if (!person) return;
+  const status = document.getElementById('status');
+  try {
+    const all = document.getElementById('retired').checked;
+    GAMES = (await api('/api/amusement/games' + (all ? '?all=1' : ''))).games;
+    const preselect = (new URLSearchParams(window.location.search).get('ids') || '').split(',').filter(Boolean);
+    document.getElementById('picker').innerHTML = GAMES.map((g) => `<label><input type="checkbox" value="${g.id}" ${preselect.length ? (preselect.includes(g.id) ? 'checked' : '') : 'checked'} onchange="render()"> ${escapeHtml(g.name)} <span class="muted">${escapeHtml(g.tag_code)}</span></label>`).join('');
+    const sel = document.getElementById('startAt');
+    sel.innerHTML = Array.from({ length: PER_SHEET }, (_, i) => `<option value="${i}">${i + 1}</option>`).join('');
+    sel.onchange = render;
+    render();
+  } catch (e) {
+    status.textContent = e.message;
+  }
+}
+let SVGS = {};
+async function render() {
+  const chosen = new Set(Array.from(document.querySelectorAll('#picker input:checked')).map((i) => i.value));
+  const games = GAMES.filter((g) => chosen.has(g.id));
+  const need = games.filter((g) => !SVGS[g.id]).map((g) => g.id);
+  if (need.length) {
+    try { Object.assign(SVGS, (await api('/api/amusement/qr?ids=' + need.join(','))).svgs); }
+    catch (e) { document.getElementById('status').textContent = e.message; }
+  }
+  const start = Number(document.getElementById('startAt').value) || 0;
+  const host = document.getElementById('sheets');
+  host.className = document.getElementById('guides').checked ? 'guides' : '';
+  host.innerHTML = '';
+  const slots = Array(start).fill(null).concat(games);
+  for (let p = 0; p < Math.max(1, Math.ceil(slots.length / PER_SHEET)); p++) {
+    const page = document.createElement('div');
+    page.className = 'page';
+    for (let i = 0; i < PER_SHEET; i++) {
+      const g = slots[p * PER_SHEET + i];
+      const el = document.createElement('div');
+      el.className = 'tag' + (g ? '' : ' blank');
+      if (g) {
+        el.innerHTML = `<div class="qr"></div><div class="txt"><div class="brand">Diamond Amusement</div><div class="name">${escapeHtml(g.name)}</div><div class="code">${escapeHtml(g.tag_code)}</div><div class="loc">${escapeHtml(g.location_name || '')}</div></div>`;
+        el.querySelector('.qr').innerHTML = SVGS[g.id] || '<div style="font-size:10px;color:#999;">QR unavailable</div>';
+      }
+      page.appendChild(el);
+    }
+    host.appendChild(page);
+  }
+  document.getElementById('status').textContent = `${games.length} sticker${games.length === 1 ? '' : 's'} on ${Math.max(1, Math.ceil(slots.length / PER_SHEET))} sheet${Math.ceil(slots.length / PER_SHEET) > 1 ? 's' : ''}`;
+}
+load();
+</script>
+</body>
+</html>
