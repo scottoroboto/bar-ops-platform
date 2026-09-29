@@ -2466,15 +2466,46 @@ const result = await employees.resendCredentials({ personId: req.params.id, rese
 res.json(result);
 });
 
+// The end of a TVs-for-a-shift grant, in bar time (Scotto, 2026-09-29):
+// the day bar runs to 7:30 PM, the night bar to 3:00 AM. 'day' / 'night'
+// pick one explicitly; the older 'shift' picks whichever comes next.
+const BAR_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
+const SHIFT_ENDS = { day: [19, 30], night: [3, 0] };
+function barTzOffsetMinutes(date) {
+  const dtf = new Intl.DateTimeFormat('en-US', { timeZone: BAR_TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const p = {};
+  dtf.formatToParts(date).forEach((x) => { if (x.type !== 'literal') p[x.type] = x.value; });
+  return (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - date.getTime()) / 60000;
+}
+// The next time the bar's clock reads hour:minute, as a real instant.
+function nextBarTime(hour, minute) {
+  const now = new Date();
+  const wall = new Date(now.getTime() + barTzOffsetMinutes(now) * 60000); // bar wall-clock, read as UTC fields
+  let cand = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), hour, minute);
+  if (cand <= wall.getTime() + 60000) cand += 86400000;
+  const rough = new Date(cand - barTzOffsetMinutes(now) * 60000);
+  return new Date(cand - barTzOffsetMinutes(rough) * 60000);
+}
+function shiftExpiry(which) {
+  if (which === 'shift') {
+    const wall = new Date(Date.now() + barTzOffsetMinutes(new Date()) * 60000);
+    const mins = wall.getUTCHours() * 60 + wall.getUTCMinutes();
+    which = mins < 19 * 60 + 30 && mins >= 3 * 60 ? 'day' : 'night';
+  }
+  const end = SHIFT_ENDS[which];
+  return end ? nextBarTime(end[0], end[1]) : null;
+}
+
 app.post('/api/employees/:id/app-access', auth.requireSession('full'), async (req, res) => {
-// patch_036: 'until: shift' is a timed grant — on now, off by itself
-// after the TV pass length. Owner only, like every other app switch
-// (Scotto, 2026-09-22: "I should be the only one who can authorize" —
-// the bar has the remotes and the TVs' own apps as failovers).
-const timed = req.body.until === 'shift';
+// patch_036: 'until: shift' | 'day' | 'night' is a timed grant — on now,
+// off by itself at the end of that shift (see shiftExpiry above). Owner
+// only, like every other app switch (Scotto, 2026-09-22: "I should be the
+// only one who can authorize" — the bar has the remotes and the TVs' own
+// apps as failovers).
+const timed = ['shift', 'day', 'night'].includes(req.body.until);
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change app access.' });
 let expiresAt = null;
-if (timed) expiresAt = tvpass.expiryFor(await tvpass.getPassLength());
+if (timed) expiresAt = shiftExpiry(req.body.until);
 const result = await employees.setAppAccess({ personId: req.params.id, appKey: req.body.appKey, enabled: timed ? true : req.body.enabled, expiresAt, updatedBy: req.person.id });
 res.json(result);
 });
