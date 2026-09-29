@@ -87,7 +87,13 @@ function escapeHtml(s) {
 }
 
 async function refreshAll() {
-  try { MUSIC = await api('/api/music/state'); renderPage(); } catch (e) { /* keep last-known */ }
+  try {
+    const before = MUSIC ? `${MUSIC.currentFavoriteId}|${(MUSIC.favorites || []).length}` : '';
+    MUSIC = await api('/api/music/state');
+    renderNowPlaying();
+    const after = `${MUSIC.currentFavoriteId}|${(MUSIC.favorites || []).length}`;
+    if (after !== before && document.activeElement !== document.getElementById('muFilter')) renderStations();
+  } catch (e) { /* keep last-known */ }
 }
 
 // ---- render ------------------------------------------------------------
@@ -122,26 +128,56 @@ function renderNowPlaying() {
     <div class="mu-foot muted">Thumbs, search and new stations: the Pandora app on this iPad. Volume: the mixer.</div>`;
 }
 
+let STATION_FILTER = '';
+let STATION_SORT = 'az';   // 'az' | 'sonos' (the order in My Sonos)
+
+// Scrollable list like the Pandora app: small art, station name, the
+// playing one lit; a filter box narrows it as you type. A–Z by default,
+// or the order the owner arranged in My Sonos.
 function renderStations() {
   const box = document.getElementById('muStations');
   const m = MUSIC || {};
-  const favs = m.favorites || [];
-  const header = `<div class="tvs-col-header"><span class="tvs-col-title">Stations · tap to change the vibe</span><span class="mu-who">${favs.length} saved in My Sonos</span></div>`;
-  if (!favs.length) {
+  const all = m.favorites || [];
+  const q = STATION_FILTER.trim().toLowerCase();
+  let favs = q ? all.filter((f) => (f.title || '').toLowerCase().includes(q)) : all.slice();
+  if (STATION_SORT === 'az') favs.sort((a, b) => (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' }));
+  const header = `<div class="tvs-col-header">
+    <span class="tvs-col-title">Stations</span>
+    <span class="mu-who">${all.length} on the account</span>
+  </div>
+  <div class="mu-tools">
+    <input id="muFilter" type="search" placeholder="Find a station…" value="${escapeHtml(STATION_FILTER)}" oninput="setStationFilter(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <button type="button" class="mu-sort${STATION_SORT === 'az' ? ' on' : ''}" onclick="setStationSort('az')">A–Z</button>
+    <button type="button" class="mu-sort${STATION_SORT === 'sonos' ? ' on' : ''}" onclick="setStationSort('sonos')">My order</button>
+  </div>`;
+  if (!all.length) {
     box.innerHTML = header + `<p class="muted" style="margin-top:12px;">No stations yet. In the Sonos app, play a Pandora station and add it to My Sonos. It shows up here within a minute.</p>`;
     return;
   }
-  const tiles = favs.map((f, i) => {
+  if (!favs.length) {
+    box.innerHTML = header + `<p class="muted" style="margin-top:12px;">Nothing matches "${escapeHtml(STATION_FILTER)}".</p>`;
+    return;
+  }
+  const rows = favs.map((f) => {
     const now = m.currentFavoriteId && f.id === m.currentFavoriteId;
-    const hue = (i * 47) % 360;
-    return `<button type="button" class="mu-tile${now ? ' now' : ''}${MUSIC_BUSY === f.id ? ' busy' : ''}" style="--hue:${hue}" onclick="musicStation('${escapeHtml(f.id).replace(/'/g, '&#39;')}')">
-      <span class="k">${now ? 'PLAYING' : (f.service ? escapeHtml(f.service) : '')}</span>
-      ${f.art ? `<img class="mu-tile-art" src="${escapeHtml(f.art)}" alt="">` : ''}
-      <span class="n">${escapeHtml(f.title)}</span>
+    return `<button type="button" class="mu-row${now ? ' now' : ''}${MUSIC_BUSY === f.id ? ' busy' : ''}" onclick="musicStation('${escapeHtml(f.id).replace(/'/g, '&#39;')}')">
+      <span class="mu-row-art">${f.art ? `<img src="${escapeHtml(f.art)}" alt="">` : '<span class="blank"></span>'}</span>
+      <span class="mu-row-name">${escapeHtml(f.title)}</span>
+      <span class="mu-row-tag">${now ? 'PLAYING' : (f.service ? escapeHtml(f.service) : '')}</span>
     </button>`;
   }).join('');
-  box.innerHTML = header + `<div class="tvz-scroll"><div class="mu-grid">${tiles}</div></div>`;
+  box.innerHTML = header + `<div class="tvz-scroll mu-list">${rows}</div>`;
 }
+
+function setStationFilter(v) {
+  STATION_FILTER = v || '';
+  const el = document.getElementById('muFilter');
+  const pos = el ? el.selectionStart : null;
+  renderStations();
+  const again = document.getElementById('muFilter');
+  if (again) { again.focus(); if (pos != null) try { again.setSelectionRange(pos, pos); } catch (e) { /* ignore */ } }
+}
+function setStationSort(s) { STATION_SORT = s; renderStations(); }
 
 // ---- actions ----------------------------------------------------------
 async function musicCmd(action) {
