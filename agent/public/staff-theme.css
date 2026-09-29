@@ -994,3 +994,85 @@ body.staff {
 .staff .pw-rk .st { font-size: 11.5px; }
 .staff .pw-btn.hold-danger, .staff .tvs-commit-bar button.cb-secondary.hold-danger, .staff .pw-rack-bar .hold-danger { background: transparent; }
 .staff .pw-rack-bar .lbl { font-size: 13px; white-space: nowrap; }
+
+/* ---- Music tab (staff_music.html) + the strip on every staff page ------- */
+.staff .wrap:has(.mu-workspace) {
+  max-width: none; height: calc(100vh - 64px); box-sizing: border-box;
+  padding: 12px 16px 12px; display: flex; flex-direction: column;
+}
+.staff .mu-np { width: 400px; }
+.staff .mu-who { font-size: 12px; font-weight: 700; color: var(--muted); }
+.staff .mu-empty { padding: 12px 4px; }
+.staff .mu-art { width: 100%; aspect-ratio: 1; border-radius: 14px; overflow: hidden; background: var(--card-alt); flex-shrink: 0; margin-top: 4px; }
+.staff .mu-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.staff .mu-art-blank { width: 100%; height: 100%; background: linear-gradient(135deg, #1D2B64, #4DD8FF33); }
+.staff .mu-song { font-size: 24px; font-weight: 800; margin-top: 14px; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; }
+.staff .mu-artist { font-size: 16px; color: var(--muted-strong); margin-top: 4px; }
+.staff .mu-station { margin-top: 10px; font-size: 12px; font-weight: 700; color: var(--neon-cyan); letter-spacing: 0.06em; min-height: 22px; }
+.staff .mu-station b { background: #0E3A48; color: var(--neon-cyan); border-radius: 5px; padding: 3px 8px; margin-right: 8px; font-size: 10px; letter-spacing: 0.1em; }
+.staff .mu-transport { display: flex; gap: 10px; margin-top: 16px; }
+.staff .mu-tb {
+  flex: 1; min-height: 64px; padding: 0; border-radius: 12px; font-size: 15px; font-weight: 800; letter-spacing: 0.06em;
+  background: var(--card); border: 1px solid var(--border-strong); color: #fff;
+}
+.staff .mu-tb.mu-play { flex: 1.4; background: var(--neon-green); color: #06110A; border: 0; }
+.staff .mu-tb.busy, .staff .mu-tile.busy { opacity: 0.55; }
+.staff .mu-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; }
+.staff .mu-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 1300px) { .staff .mu-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.staff .mu-tile {
+  position: relative; overflow: hidden; min-height: 120px; border-radius: 14px; text-align: left;
+  border: 1px solid var(--border-strong); background: var(--card); padding: 14px 16px; display: flex; flex-direction: column; justify-content: flex-end;
+  font-family: inherit; cursor: pointer; color: #fff;
+}
+.staff .mu-tile:before { content: ""; position: absolute; inset: 0; background: hsl(var(--hue) 70% 55%); opacity: 0.22; }
+.staff .mu-tile .n { position: relative; font-size: 22px; font-weight: 800; line-height: 1.05; }
+.staff .mu-tile .k { position: absolute; top: 10px; right: 12px; font-size: 10px; font-weight: 800; letter-spacing: 0.08em; background: rgba(0,0,0,0.5); color: var(--muted-strong); border-radius: 5px; padding: 3px 7px; text-transform: uppercase; }
+.staff .mu-tile-art { position: absolute; top: 10px; left: 12px; width: 44px; height: 44px; border-radius: 8px; object-fit: cover; opacity: 0.9; }
+.staff .mu-tile.now { border-color: var(--neon-green); box-shadow: 0 0 0 2px var(--neon-green) inset, 0 0 18px rgba(57,255,136,0.4); }
+.staff .mu-tile.now .n { color: var(--neon-green); }
+.staff .mu-tile.now .k { background: var(--neon-green); color: #06110A; }
+
+/* The strip: fixed to the bottom of every staff page; pages that fill the
+   screen (TVs, Power) give up its height so nothing hides under it. */
+.staff .mu-strip {
+  position: fixed; left: 16px; right: 16px; bottom: 12px; height: 72px; z-index: 35;
+  border-radius: 14px; background: #101015; border: 1px solid var(--border-mid);
+  display: flex; align-items: center; gap: 14px; padding: 0 12px; box-shadow: 0 -8px 30px rgba(0,0,0,0.6);
+}
+.staff .mu-strip-art { width: 52px; height: 52px; border-radius: 9px; overflow: hidden; flex-shrink: 0; background: var(--card-alt); }
+.staff .mu-strip-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.staff .mu-strip-art .blank, .staff .mu-strip-art.blank { width: 100%; height: 100%; background: linear-gradient(135deg, #1D2B64, #4DD8FF33); }
+.staff .mu-strip-text { flex: 1; min-width: 0; }
+.staff .mu-strip-text .s { font-size: 16px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.staff .mu-strip-text .ar { font-size: 12.5px; color: var(--muted-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.staff .mu-strip-text .stn { font-size: 10.5px; font-weight: 700; color: var(--neon-cyan); letter-spacing: 0.08em; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.staff .mu-strip-btns { display: flex; gap: 8px; flex-shrink: 0; }
+.staff .mu-strip-btn {
+  height: 48px; min-width: 48px; border-radius: 10px; font-family: inherit; font-weight: 800; font-size: 13px; letter-spacing: 0.06em;
+  border: 1px solid var(--border-strong); background: var(--card); color: #fff; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center;
+  text-decoration: none; min-height: 0;
+}
+.staff .mu-strip-btn.play { background: var(--neon-green); color: #06110A; border: 0; }
+.staff .mu-strip-btn.stations { color: var(--neon-cyan); border-color: #1E5A70; }
+.staff .mu-strip-btn.busy { opacity: 0.55; }
+.staff.has-music-strip .wrap:has(.tvs-workspace), .staff.has-music-strip .wrap:has(.pw-workspace) { height: calc(100vh - 64px - 84px); }
+.staff.has-music-strip .wrap { padding-bottom: 96px; }
+.staff.has-music-strip .wrap:has(.tvs-workspace), .staff.has-music-strip .wrap:has(.pw-workspace) { padding-bottom: 12px; }
+.staff.has-music-strip #undoBar { bottom: 96px; }
+@media (max-width: 980px) {
+  .staff .wrap:has(.mu-workspace) { height: auto; display: block; padding: 12px 12px 110px; }
+  .staff .mu-np { width: 100%; }
+  .staff .mu-strip { left: 8px; right: 8px; bottom: 8px; }
+  .staff .mu-strip-btn.stations span { display: none; }
+}
+
+/* Five tabs + three action buttons + the clock have to fit one row on a
+   12.9" iPad (1366px); trim the nav and action padding under 1440px. */
+@media (max-width: 1440px) {
+  .staff-topbar .tb-nav a { padding: 10px 11px; font-size: 16px; }
+  .staff-topbar .tb-nav { gap: 4px; }
+  .staff-topbar .tva-btn { padding: 12px 13px; font-size: 13.5px; }
+  .staff-topbar button.tva-off.hold-danger { padding: 12px 11px 12px 13px; }
+  .staff-topbar-inner { gap: 10px; padding: 10px 16px; }
+}

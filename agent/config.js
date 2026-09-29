@@ -15,6 +15,9 @@ const UNIFI_PASS = process.env.UNIFI_PASS || '';
 const UNIFI_SITE = process.env.UNIFI_SITE || 'default';
 const SPEEDTEST_EVERY_HOURS = Number(process.env.SPEEDTEST_EVERY_HOURS) || 6;
 const PORT = Number(process.env.PORT) || 8088;
+// The bar's Sonos (lib/sonos.js). Blank = find it on the network by SSDP.
+const SONOS_IP = process.env.SONOS_IP || '';
+const SONOS_PORT = Number(process.env.SONOS_PORT) || 1400;
 
 if (!AGENT_TOKEN) {
   // Not fatal -- the local status UI still comes up so whoever's setting
@@ -27,4 +30,4 @@ if (!AGENT_TOKEN) {
   );
 }
 
-module.exports = { CLOUD_URL, AGENT_TOKEN, ADMIN_PIN, STAFF_PIN, SMARTTHINGS_TOKEN, PORT, UNIFI_URL, UNIFI_USER, UNIFI_PASS, UNIFI_SITE, SPEEDTEST_EVERY_HOURS };
+module.exports = { CLOUD_URL, AGENT_TOKEN, ADMIN_PIN, STAFF_PIN, SMARTTHINGS_TOKEN, PORT, UNIFI_URL, UNIFI_USER, UNIFI_PASS, UNIFI_SITE, SPEEDTEST_EVERY_HOURS, SONOS_IP, SONOS_PORT };

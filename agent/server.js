@@ -12,6 +12,7 @@ const poller = require('./lib/poller');
 const tvPoller = require('./lib/tv-poller');
 const health = require('./lib/health');
 const speedtest = require('./lib/speedtest');
+const sonos = require('./lib/sonos');
 const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
 const activity = require('./lib/activity');
@@ -117,6 +118,41 @@ app.use('/api/tvs', requireStaffPin);
 app.use('/api/zones', requireStaffPin);
 app.use('/api/layouts', requireStaffPin);
 app.use('/api/attention', requireStaffPin);
+app.use('/api/music', requireStaffPin);
+
+// ---------------- Music (lib/sonos.js) ----------------
+// Now playing + the station tiles (Sonos favorites) for the staff Music
+// page and the strip on every staff page. Volume is deliberately absent.
+app.get('/api/music/state', async (req, res) => {
+  const st = sonos.getState();
+  const favs = sonos.getFavorites();
+  res.json({ ...st, favorites: favs.map((f) => ({ id: f.id, title: f.title, art: f.art, service: f.service })), currentFavoriteId: sonos.currentFavoriteId() });
+});
+app.post('/api/music/refresh', async (req, res) => {
+  try { await sonos.readState(); await sonos.readFavorites(true); } catch (e) { /* state carries the error */ }
+  res.json({ ok: true });
+});
+app.post('/api/music/:action(play|pause|next|previous)', async (req, res) => {
+  const map = { play: 'Play', pause: 'Pause', next: 'Next', previous: 'Previous' };
+  try {
+    const st = await sonos.transport(map[req.params.action]);
+    activity.record('music.' + req.params.action, { actor: req.vcActor, targetType: 'music', targetId: null, detail: {} });
+    res.json({ ok: true, state: st });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post('/api/music/station', async (req, res) => {
+  const { id } = req.body || {};
+  if (!id) return res.status(400).json({ error: 'Missing station "id".' });
+  try {
+    const r = await sonos.playFavorite(String(id));
+    activity.record('music.station', { actor: req.vcActor, targetType: 'music', targetId: null, detail: { station: r.station } });
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // ---------------- Attention: TVs the bar should look at (cloud patch_034) ----------------
 // The cloud flags a TV that has been unreachable 3+ minutes inside TV
@@ -769,6 +805,7 @@ app.listen(config.PORT, () => {
   tvPoller.start();
   health.start();
   speedtest.start();
+  sonos.start();
   scheduler.start();
   activity.start();
 });
