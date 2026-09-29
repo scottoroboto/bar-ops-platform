@@ -27,7 +27,7 @@ const APP_INFO = {
   scheduling: { label: 'Scheduling', icon: ICONS.scheduling, href: '/scheduling.html' },
   cash_handling: { label: 'Cash Handling', icon: ICONS.cash_handling, href: '/cashhandling.html' },
   inventory_control: { label: 'Inventory', icon: ICONS.inventory_control, href: '/inventory.html' },
-  amusement: { label: 'Diamond Amusement', icon: ICON_AMUSEMENT, href: '/amusement.html' },
+  amusement: { label: 'Games', icon: ICON_AMUSEMENT, href: '/amusement.html' },
 };
 
 // Plain external link, not one of the toggle-gated apps above — every

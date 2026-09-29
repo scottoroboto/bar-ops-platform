@@ -9,7 +9,7 @@ Files: `db/patch_041_amusement.sql`, `db/patch_042_amusement_tare_pos_photo.sql`
 `/api/amusement/*` routes at the bottom of `server/index.js`,
 `public/amusement.html|js|css`, `public/amusement-tags.html` (printable QR
 stickers). App key `amusement` on `employee_apps`; the tile is
-"Diamond Amusement" on Apps Home.
+"Games" on Apps Home (the toggle in Employees is "Games" too).
 
 ## Turning it on (one time)
 
@@ -27,7 +27,7 @@ stickers). App key `amusement` on `employee_apps`; the tile is
    `SUPABASE_SERVICE_ROLE_KEY` (same as cash receipts). If those aren't
    set the reading is still kept, the photo just isn't stored.
 4. **Access.** The owner always has the app. For Ryan (or anyone else
-   who collects), switch on "Diamond Amusement" in Employees.
+   who collects), switch on "Games" in Employees.
 5. **Games.** Games → "+ Add game" for each machine, at the right
    location. Each gets a tag code (DA-0001, DA-0002, …). Stickers:
    Admin → "Print QR stickers" for a batch (pick which games, and where

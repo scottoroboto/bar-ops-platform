@@ -4130,7 +4130,7 @@ async function amusementGate(req, minLevel) {
 function amusementRoute(minLevel, handler) {
   return async (req, res) => {
     const level = await amusementGate(req, minLevel);
-    if (!level) return res.status(403).json({ error: minLevel === 'owner' ? 'Owner only.' : 'Diamond Amusement is not enabled for you.' });
+    if (!level) return res.status(403).json({ error: minLevel === 'owner' ? 'Owner only.' : 'Games is not enabled for you.' });
     try {
       const result = await withServiceClient((client) => handler(client, req, level));
       if (result && result.error) return res.status(result.status || 400).json(result);

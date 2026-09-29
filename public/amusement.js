@@ -120,7 +120,7 @@ async function photoUrlFor(path) {
 async function init() {
   ME = requireAuth();
   if (!ME) return;
-  renderTopbar('Diamond Amusement');
+  renderTopbar('Games');
   try {
     const a = await api('/api/amusement/access');
     LEVEL = a.level;
@@ -130,7 +130,7 @@ async function init() {
     return;
   }
   if (LEVEL === 'none') {
-    $('panelMain').innerHTML = '<div class="card"><p>Diamond Amusement isn\'t turned on for you.</p><p><a href="/dashboard.html">Back to Apps Home</a></p></div>';
+    $('panelMain').innerHTML = '<div class="card"><p>Games isn\'t turned on for you.</p><p><a href="/dashboard.html">Back to Apps Home</a></p></div>';
     $('bottomNav').style.display = 'none';
     return;
   }
@@ -230,7 +230,7 @@ async function renderHome() {
   }).join('');
 
   $('panelMain').innerHTML = `
-    ${headHtml('Diamond Amusement', LEVEL === 'owner' ? 'Owner' : 'Collector')}
+    ${headHtml('Games', LEVEL === 'owner' ? 'Diamond Amusement · Owner' : 'Diamond Amusement · Collector')}
     <div class="am-stats">
       <div class="card"><div class="n">${money(last30)}</div><div class="l">Last 30 days</div></div>
       <div class="card"><div class="n">${games}</div><div class="l">Games on route</div></div>
@@ -749,7 +749,7 @@ function gameForm(game) {
     <label for="gfName">Name</label><input id="gfName" value="${escapeHtml(g.name || '')}" placeholder="Pool table 1">
     <div class="am-grid2">
       <div><label for="gfType">Type</label><select id="gfType">${GAME_TYPES.map(([k, l]) => `<option value="${k}" ${g.game_type === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-      ${!g.id ? `<div><label for="gfLoc">Where is it</label><select id="gfLoc">${placeable.map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('')}</select></div>` : '<div></div>'}
+      ${!g.id ? `<div><label for="gfLoc">Where is it</label><select id="gfLoc" style="border-color: var(--accent);">${placeable.map((l) => `<option value="${l.id}" ${l.id === GAMES_FILTER ? 'selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}</select></div>` : '<div></div>'}
     </div>
     <div class="am-grid2">
       <div><label for="gfMake">Make</label><input id="gfMake" value="${escapeHtml(g.make || '')}" placeholder="Valley"></div>
@@ -772,7 +772,7 @@ function gameForm(game) {
     try {
       const r = await withStepUp(() => api(g.id ? `/api/amusement/games/${g.id}/update` : '/api/amusement/games', { method: 'POST', body }));
       box.innerHTML = '';
-      if (g.id) renderGameDetail(g.id); else { showMsg(`${r.game.name} added as ${r.game.tag_code}.`, 'success'); renderGames(); }
+      if (g.id) renderGameDetail(g.id); else { showMsg(`${r.game.name} added as ${r.game.tag_code} at ${r.game.location_name}.`, 'success'); renderGames(); }
     } catch (e) { $('gfStatus').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
   };
 }
@@ -953,7 +953,7 @@ async function renderAdmin() {
     <td class="r">${num(k.scale_check_g)} g</td><td class="r muted">${k.scale_check_expected_g !== null ? num(k.scale_check_expected_g) + ' g' : '—'}</td>
     <td class="r" style="color:${k.scale_check_ok ? '#6be3a4' : '#ff8a9a'};">${k.drift_g === null ? '—' : (k.drift_g > 0 ? '+' : '') + k.drift_g + ' g'}</td></tr>`).join('');
   $('panelMain').innerHTML = `
-    ${headHtml('Admin', 'Diamond Amusement setup')}
+    ${headHtml('Admin', 'Games setup')}
     <div class="card" style="padding:4px 14px;">
       <div class="list-row am-tap" onclick="go('#locations')"><div><div class="name">Locations</div><div class="sub">Which bars have games, collection cadence, POS department</div></div>${ICON_CHEV}</div>
       <div class="list-row am-tap" onclick="window.open('/amusement-tags.html', '_blank')"><div><div class="name">Print QR stickers</div><div class="sub">Avery 6578 sheets · pick which games · one sticker per coin box</div></div>${ICON_CHEV}</div>
