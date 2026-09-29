@@ -65,6 +65,13 @@ function previewQuarters(gross, tare, unit) {
   const coins = Math.round(netG / q);
   return { netG, coins, dollars: coins * 0.25 };
 }
+// What the start-of-visit scale check expects: the calibration weight if
+// the owner has one, else the $10 roll.
+function checkWeightInfo() {
+  const cal = SETTINGS && SETTINGS.calibration_weight_g !== null && SETTINGS.calibration_weight_g !== undefined ? num(SETTINGS.calibration_weight_g) : null;
+  return cal ? { grams: cal, label: `the ${cal} g calibration weight` } : { grams: num(SETTINGS && SETTINGS.scale_check_roll_g, 226.8), label: 'the $10 roll of quarters' };
+}
+
 function defaultTareFor(unit) {
   const g = num(SETTINGS && SETTINGS.default_tare_g);
   return unit === 'lb' ? Number((g / GRAMS_PER_LB).toFixed(3)) : g;
@@ -156,6 +163,7 @@ async function route() {
     else if (view === 'reports') await renderReports(a);
     else if (view === 'settings') await renderSettings();
     else if (view === 'locations') await renderLocations();
+    else if (view === 'admin') await renderAdmin();
     else await renderHome();
   } catch (e) {
     $('panelMain').innerHTML = errorCard(e);
@@ -167,7 +175,8 @@ function renderBottomNav(view) {
   const items = [
     ['home', 'Collect', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z"/></svg>', ['home', 'collect', 'scan', 'weigh', 'review']],
     ['games', 'Games', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="12" rx="3"/><path d="M8 13h.01M12 11h.01M16 13h.01M7 3h10"/></svg>', ['games', 'game', 'locations']],
-    ['reports', 'Reports', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>', ['reports', 'settings']],
+    ['reports', 'Reports', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>', ['reports']],
+    ['admin', 'Admin', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>', ['admin', 'settings', 'locations']],
   ];
   const visible = LEVEL === 'owner' ? items : items.slice(0, 2);
   $('bottomNav').style.gridTemplateColumns = `repeat(${visible.length}, minmax(0, 1fr))`;
@@ -270,10 +279,10 @@ async function renderSheet(id) {
   }).join('');
 
   const check = c.scale_check_g !== null
-    ? `<div class="msg ${c.scale_check_ok ? 'success' : 'error'}" style="margin-bottom:10px;">Scale check: the $10 roll weighed ${num(c.scale_check_g)} g${c.scale_check_ok ? ' — good.' : ` — expected about ${num(SETTINGS.scale_check_roll_g)} g. Check the scale before weighing.`}</div>`
+    ? `<div class="msg ${c.scale_check_ok ? 'success' : 'error'}" style="margin-bottom:10px;">Scale check: read ${num(c.scale_check_g)} g${c.scale_check_ok ? ' — good.' : ` — expected about ${num(c.scale_check_expected_g || checkWeightInfo().grams)} g. Check the scale before weighing.`}</div>`
     : `<div class="card" style="padding:12px 14px; margin-bottom:10px;">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-          <div><div style="font-weight:600; font-size:14px;">Scale check</div><div class="muted">Weigh the $10 roll of quarters first. It should read about ${num(SETTINGS.scale_check_roll_g)} g.</div></div>
+          <div><div style="font-weight:600; font-size:14px;">Scale check</div><div class="muted">Weigh ${checkWeightInfo().label} first. It should read about ${checkWeightInfo().grams} g.</div></div>
           <button class="small secondary" style="margin:0; width:auto;" onclick="scaleCheckPrompt('${c.id}')">Check</button>
         </div></div>`;
 
@@ -311,10 +320,10 @@ async function scaleCheckPrompt(collectionId) {
   box.className = 'card';
   box.innerHTML = `
     <h2>Scale check</h2>
-    <p class="muted" style="margin-top:-6px;">Put the $10 roll of quarters on the scale. Expected about ${num(SETTINGS.scale_check_roll_g)} g (±${num(SETTINGS.scale_check_tolerance_g)} g).</p>
+    <p class="muted" style="margin-top:-6px;">Put ${checkWeightInfo().label} on the scale. Expected about ${checkWeightInfo().grams} g (±${num(SETTINGS.scale_check_tolerance_g)} g).</p>
     ${CAPS.photoReader ? `<button class="am-bigbtn" id="scPhoto">${ICON_CAMERA}<span><span class="t">Photo the scale display</span><br><span class="s">Reads the number for you</span></span></button><div class="am-or">or type what it shows</div>` : ''}
     <label for="scGrams">Grams</label>
-    <input id="scGrams" type="number" inputmode="decimal" step="0.1" class="am-bigin" placeholder="${num(SETTINGS.scale_check_roll_g)}">
+    <input id="scGrams" type="number" inputmode="decimal" step="0.1" class="am-bigin" placeholder="${checkWeightInfo().grams}">
     <div id="scStatus"></div>
     <div class="stack-actions"><button class="secondary" id="scCancel">Skip</button><button class="primary" id="scSave" style="margin-top:10px;">Save check</button></div>`;
   host.prepend(box);
@@ -470,7 +479,9 @@ async function renderWeigh(collectionId, gameId) {
   const idx = sheet.games.findIndex((x) => x.id === gameId);
   const nextGame = sheet.games.slice(idx + 1).find((x) => !x.item_id) || sheet.games.find((x) => !x.item_id && x.id !== gameId);
   const unit = g.item_id ? g.weight_unit : (SETTINGS.weight_unit || 'g');
-  const tare = g.item_id ? num(g.tare_weight) : defaultTareFor(unit);
+  const hasBoxTare = g.tare_g !== null && g.tare_g !== undefined;
+  const boxTare = hasBoxTare ? (unit === 'lb' ? Number((num(g.tare_g) / GRAMS_PER_LB).toFixed(3)) : num(g.tare_g)) : defaultTareFor(unit);
+  const tare = g.item_id ? num(g.tare_weight) : boxTare;
   const state = {
     unit, gross: g.item_id && g.gross_weight !== null ? num(g.gross_weight) : '', tare,
     photoPath: g.weight_photo_path || null, readValue: g.item_id ? g.weight_read_value : null, readUnit: g.item_id ? g.weight_read_unit : null,
@@ -489,10 +500,10 @@ async function renderWeigh(collectionId, gameId) {
       <div id="readBox"></div>
       <div class="am-grid2">
         <div><label for="gross">Gross (<span id="unitLabel1">${unit}</span>)</label><input id="gross" type="number" inputmode="decimal" step="any" class="am-bigin" value="${state.gross}" placeholder="0"></div>
-        <div><label for="tare">Bucket tare (<span id="unitLabel2">${unit}</span>)</label><input id="tare" type="number" inputmode="decimal" step="any" class="am-bigin" value="${tare}"></div>
+        <div><label for="tare">Coin box tare (<span id="unitLabel2">${unit}</span>)</label><input id="tare" type="number" inputmode="decimal" step="any" class="am-bigin" value="${tare}"></div>
       </div>
       <div class="am-conv"><span id="convText">—</span><span class="v" id="convDollars">$0.00</span></div>
-      <div class="muted" style="font-size:11px; margin-top:6px;">1 quarter = ${num(SETTINGS.quarter_weight_g)} g. Rounded to the nearest coin.</div>
+      <div class="muted" style="font-size:11px; margin-top:6px;">${hasBoxTare ? `Tare is ${escapeHtml(g.tag_code)}'s own coin box (${num(g.tare_g)} g).` : `Tare is the default bucket${LEVEL === 'owner' ? ` — weigh this game's empty coin box under Games to set its own` : ''}.`} 1 quarter = ${num(SETTINGS.quarter_weight_g)} g. Rounded to the nearest coin.</div>
     </div>
 
     <div class="card">
@@ -637,6 +648,7 @@ async function renderReview(collectionId) {
       : `<div class="card"><div class="am-kicker" style="margin:0 0 8px;">SpotOn</div>
           <p style="margin:0 0 8px;">Ring <strong>${money(c.total)}</strong> into ${escapeHtml(c.location_name)}'s SpotOn as an <strong>${escapeHtml(c.pos_department || 'Amusement')}</strong> sale, then mark it here.</p>
           <label for="posRef">Ticket / reference (optional)</label><input id="posRef" placeholder="SpotOn ticket #">
+          <button class="secondary" id="posPhotoBtn" style="margin-top:10px;">${ICON_CAMERA} Photo the SpotOn ticket</button><div id="posPhotoStatus" class="muted" style="text-align:center; margin-top:4px;"></div>
           <button class="primary" onclick="markPosted('${c.id}', false)">Mark posted to SpotOn</button></div>`)
     : `<div class="card"><div class="am-kicker" style="margin:0 0 10px;">What happens on finalize</div>
         <div class="am-steps">
@@ -654,12 +666,23 @@ async function renderReview(collectionId) {
     ${missing.length && !isFinal ? `<div class="msg error">Not weighed yet: ${escapeHtml(missing.map((g) => g.name).join(', '))}. Finalize will record them as $0 if you continue.</div>` : ''}
     <div class="card" style="padding:4px 16px;"><table class="am-table"><thead><tr><th>Game</th><th class="r">Weight</th><th class="r">Bills</th><th class="r">Total</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${posBlock}
+    ${isFinal && c.pos_photo_path ? `<div id="posPhotoBox"></div>` : ''}
     ${isFinal ? `<div class="card"><label for="cnote">Collection note</label><input id="cnote" value="${escapeHtml(c.note || '')}" placeholder="Anything to remember about this visit"><button class="secondary" onclick="saveNote('${c.id}')">Save note</button></div>` : ''}
     <div id="reviewStatus"></div>
     ${!isFinal ? `<div class="am-footer"><div class="inner">
       <button class="primary" onclick="finalize('${c.id}', ${missing.length ? 'true' : 'false'})">Finalize · ${money(sheet.totals.total)}</button>
       <div class="am-grid2"><a class="secondary" style="text-align:center; padding:11px; border-radius:10px; border:1px solid var(--card-border); color:var(--muted); font-weight:600; font-size:14px; text-decoration:none;" href="#collect/${c.id}">Back to sheet</a><button class="ghost" style="margin:0; width:100%;" onclick="window.print()">Print / share</button></div>
     </div></div>` : ''}`;
+  window.__posPhoto = null;
+  if ($('posPhotoBtn')) $('posPhotoBtn').onclick = async () => {
+    const file = await pickPhoto();
+    if (!file) return;
+    window.__posPhoto = await shrinkImage(file);
+    $('posPhotoStatus').textContent = 'Ticket photo attached — it saves when you mark posted.';
+  };
+  if (isFinal && c.pos_photo_path) {
+    photoUrlFor(c.pos_photo_path).then((url) => { if (url && $('posPhotoBox')) $('posPhotoBox').innerHTML = `<div class="am-photo"><img src="${url}" alt="SpotOn ticket"><div class="bar"><span>SpotOn ticket photo</span></div></div>`; });
+  }
 }
 
 async function finalize(id, hasMissing) {
@@ -672,7 +695,12 @@ async function finalize(id, hasMissing) {
 }
 async function markPosted(id, undo) {
   try {
-    await api(`/api/amusement/collections/${id}/posted`, { method: 'POST', body: { undo, reference: $('posRef') ? $('posRef').value : null } });
+    const fd = new FormData();
+    fd.append('undo', undo ? '1' : '0');
+    if ($('posRef')) fd.append('reference', $('posRef').value);
+    if (!undo && window.__posPhoto) fd.append('photo', window.__posPhoto, 'ticket.jpg');
+    await apiUpload(`/api/amusement/collections/${id}/posted`, fd);
+    window.__posPhoto = null;
     route();
   } catch (e) { showMsg(e.message, 'error'); }
 }
@@ -709,11 +737,7 @@ async function renderGames() {
     <div class="am-filter">${filters.map(([k, label]) => `<button class="${GAMES_FILTER === k ? 'on' : ''}" onclick="GAMES_FILTER='${k}'; renderGames()">${escapeHtml(label)}</button>`).join('')}</div>
     <div id="gameFormBox"></div>
     ${sections || '<div class="card"><p class="muted">Nothing here yet.</p></div>'}
-    ${isOwner ? `<div class="am-kicker">Admin</div><div class="card" style="padding:4px 14px;">
-      <div class="list-row am-tap" onclick="go('#locations')"><div><div class="name">Locations</div><div class="sub">Which bars have games, collection cadence, POS department</div></div>${ICON_CHEV}</div>
-      <div class="list-row am-tap" onclick="window.open('/amusement-tags.html', '_blank')"><div><div class="name">Print QR stickers</div><div class="sub">One sticker per active game, for scanning at the machine</div></div>${ICON_CHEV}</div>
-      <div class="list-row am-tap" onclick="go('#settings')"><div><div class="name">Settings</div><div class="sub">Quarter weight, bucket tare, scale-check roll</div></div>${ICON_CHEV}</div>
-    </div>` : ''}`;
+    ${isOwner ? `<p class="muted" style="text-align:center;">Locations, stickers, settings and the scale-check history are under <a href="#admin">Admin</a>.</p>` : ''}`;
 }
 
 function gameForm(game) {
@@ -767,6 +791,7 @@ async function renderGameDetail(id) {
     <div id="gameFormBox"></div>
     <div class="card">
       <div class="am-kv">
+        <div><div class="k">Coin box tare</div><div>${g.tare_g !== null && g.tare_g !== undefined ? `${num(g.tare_g)} g <span class="muted" style="font-size:11px;">set ${fmtDay(g.tare_set_at)}</span>` : '<span style="color:#f0c265;">not set — using default</span>'}</div></div>
         <div><div class="k">Make / model</div><div>${escapeHtml([g.make, g.model].filter(Boolean).join(' ') || '—')}</div></div>
         <div><div class="k">Serial</div><div>${escapeHtml(g.serial || '—')}</div></div>
         <div><div class="k">Price per play</div><div>${money(g.price_per_play)} (${Math.round(num(g.price_per_play) * 4)} quarters)</div></div>
@@ -780,10 +805,50 @@ async function renderGameDetail(id) {
         <button class="secondary" onclick="gameForm(${JSON.stringify(g).replace(/"/g, '&quot;')})">Edit</button>
         <button class="ghost" onclick="movePrompt('${g.id}')">Move…</button>
         ${g.status === 'retired' ? `<button class="ghost" onclick="gameStatus('${g.id}', 'reactivate')">Reactivate</button>` : `<button class="ghost" style="color:#ff8a9a;" onclick="gameStatus('${g.id}', 'retire')">Retire</button>`}
-      </div><div id="moveBox"></div>` : ''}
+      </div>
+      <div class="am-actions3" style="grid-template-columns: 1fr 1fr;">
+        <button class="ghost" onclick="tarePrompt('${g.id}')">Weigh empty coin box</button>
+        <button class="ghost" onclick="window.open('/amusement-tags.html?ids=${g.id}', '_blank')">Print sticker</button>
+      </div><div id="moveBox"></div><div id="tareBox"></div>` : ''}
     </div>
     <div class="am-kicker">Earnings history</div>
     <div class="card" style="padding:4px 16px;">${hist ? `<table class="am-table"><thead><tr><th>Collected</th><th class="r">Weight</th><th class="r">Bills</th><th class="r">Total</th></tr></thead><tbody>${hist}</tbody></table>` : '<p class="muted">No collections yet.</p>'}</div>`;
+}
+
+// Set this game's coin-box tare: photo the empty box on the scale (the
+// reader fills the grams) or type it. Saved on confirm, with the photo.
+function tarePrompt(id) {
+  $('tareBox').innerHTML = `<div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--card-border);">
+    <div style="font-weight:600; margin-bottom:6px;">Empty coin box on the scale</div>
+    ${CAPS.photoReader ? `<button class="am-bigbtn" id="tarePhoto">${ICON_CAMERA}<span><span class="t">Photo the scale display</span><br><span class="s">Reads the number for you</span></span></button><div class="am-or">or type what it shows</div>` : ''}
+    <label for="tareGrams">Grams</label><input id="tareGrams" type="number" inputmode="decimal" step="0.1" class="am-bigin" placeholder="0">
+    <div id="tareStatus"></div>
+    <div class="stack-actions"><button class="secondary" onclick="$('tareBox').innerHTML=''">Cancel</button><button class="primary" style="margin-top:10px;" id="tareSave">Save tare</button></div>
+    <button class="ghost small" style="width:100%; margin-top:6px;" id="tareClear">Clear — use the default bucket tare</button></div>`;
+  let photoPath = null;
+  if ($('tarePhoto')) $('tarePhoto').onclick = async () => {
+    const file = await pickPhoto();
+    if (!file) return;
+    $('tareStatus').innerHTML = '<p class="muted">Reading the photo…</p>';
+    const blob = await shrinkImage(file);
+    const fd = new FormData();
+    fd.append('gameId', id);
+    fd.append('photo', blob, 'tare.jpg');
+    try {
+      const r = await apiUpload('/api/amusement/read-scale', fd);
+      photoPath = r.photoPath || null;
+      if (r.value !== null && r.value !== undefined) {
+        $('tareGrams').value = Math.round((r.unit === 'lb' ? r.value * GRAMS_PER_LB : r.value) * 10) / 10;
+        $('tareStatus').innerHTML = `<p class="muted">Read “${escapeHtml(r.raw || '')}” — check it matches the scale, then save.</p>`;
+      } else $('tareStatus').innerHTML = `<p class="msg error">${escapeHtml(r.error || 'Could not read the photo — type the number instead.')}</p>`;
+    } catch (e) { $('tareStatus').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
+  };
+  const save = async (grams) => {
+    try { await withStepUp(() => api(`/api/amusement/games/${id}/tare`, { method: 'POST', body: { grams, photoPath } })); renderGameDetail(id); }
+    catch (e) { $('tareStatus').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
+  };
+  $('tareSave').onclick = () => save($('tareGrams').value);
+  $('tareClear').onclick = () => save(null);
 }
 
 function movePrompt(id) {
@@ -811,7 +876,7 @@ async function renderLocations() {
       <div class="sub">${l.is_storage ? 'Not collected' : `Every ${l.collect_every_days} days · POS dept: ${escapeHtml(l.pos_department)}${l.bar_name ? ' · ' + escapeHtml(l.bar_name) : ''}`} · ${l.game_count} game${l.game_count === 1 ? '' : 's'}</div></div>
     <button class="small ghost" style="margin:0;" onclick='locForm(${JSON.stringify(l).replace(/'/g, '&#39;')})'>Edit</button></div>`).join('');
   $('panelMain').innerHTML = `
-    ${headHtml('Locations', 'Where games live', '#games', `<button class="small" style="margin:0;" onclick="locForm()">+ Add</button>`)}
+    ${headHtml('Locations', 'Where games live', '#admin', `<button class="small" style="margin:0;" onclick="locForm()">+ Add</button>`)}
     <div id="locFormBox"></div>
     <div class="card" style="padding:4px 14px;">${rows}</div>`;
   window.__bars = bars;
@@ -879,13 +944,35 @@ async function renderReports(daysArg) {
 }
 
 // ---------------------------------------------------------------------
+// Admin (owner): locations, stickers, settings, scale-check history
+// ---------------------------------------------------------------------
+async function renderAdmin() {
+  const r = await api('/api/amusement/report?days=365');
+  const checks = r.scaleChecks || [];
+  const rows = checks.slice(0, 20).map((k) => `<tr><td>${fmtDay(k.started_at)}<div class="muted" style="font-size:11px;">${escapeHtml(k.location_name)} · ${escapeHtml(k.by_name || '')}</div></td>
+    <td class="r">${num(k.scale_check_g)} g</td><td class="r muted">${k.scale_check_expected_g !== null ? num(k.scale_check_expected_g) + ' g' : '—'}</td>
+    <td class="r" style="color:${k.scale_check_ok ? '#6be3a4' : '#ff8a9a'};">${k.drift_g === null ? '—' : (k.drift_g > 0 ? '+' : '') + k.drift_g + ' g'}</td></tr>`).join('');
+  $('panelMain').innerHTML = `
+    ${headHtml('Admin', 'Diamond Amusement setup')}
+    <div class="card" style="padding:4px 14px;">
+      <div class="list-row am-tap" onclick="go('#locations')"><div><div class="name">Locations</div><div class="sub">Which bars have games, collection cadence, POS department</div></div>${ICON_CHEV}</div>
+      <div class="list-row am-tap" onclick="window.open('/amusement-tags.html', '_blank')"><div><div class="name">Print QR stickers</div><div class="sub">Avery 6578 sheets · pick which games · one sticker per coin box</div></div>${ICON_CHEV}</div>
+      <div class="list-row am-tap" onclick="go('#settings')"><div><div class="name">Settings</div><div class="sub">Quarter weight, default tare, calibration weight, scale-check tolerance</div></div>${ICON_CHEV}</div>
+      <div class="list-row am-tap" onclick="go('#games')"><div><div class="name">Games</div><div class="sub">Add, move, retire, weigh each coin box</div></div>${ICON_CHEV}</div>
+    </div>
+    <div class="am-kicker">Scale checks · last 12 months</div>
+    <div class="card" style="padding:4px 16px;">${rows ? `<table class="am-table"><thead><tr><th>Visit</th><th class="r">Read</th><th class="r">Expected</th><th class="r">Drift</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">No scale checks yet. Each collection can start with one.</p>'}
+      <p class="muted" style="font-size:11px; margin:8px 0;">Drift creeping in one direction over several visits means the scale needs calibrating (the Polit has a CAL mode that uses the same test weight).</p></div>`;
+}
+
+// ---------------------------------------------------------------------
 // Settings (owner)
 // ---------------------------------------------------------------------
 async function renderSettings() {
   const s = (await api('/api/amusement/settings')).settings;
   SETTINGS = s;
   $('panelMain').innerHTML = `
-    ${headHtml('Settings', 'Weights and the scale check', '#games')}
+    ${headHtml('Settings', 'Weights and the scale check', '#admin')}
     <div class="card am-inline-form">
       <label for="stQ">Weight of one quarter (grams)</label><input id="stQ" type="number" step="0.001" value="${num(s.quarter_weight_g)}">
       <p class="muted" style="margin:6px 0 0;">A US quarter is 5.670 g. Only change this if you weigh a known roll and it's consistently off.</p>
@@ -897,6 +984,8 @@ async function renderSettings() {
         <div><label for="stTol">Tolerance (± grams)</label><input id="stTol" type="number" step="0.1" value="${num(s.scale_check_tolerance_g)}"></div>
       </div>
       <p class="muted" style="margin:6px 0 0;">A $10 roll is 40 quarters = 226.8 g.</p>
+      <label for="stCal">Calibration weight (grams) — optional</label><input id="stCal" type="number" step="0.1" value="${s.calibration_weight_g !== null && s.calibration_weight_g !== undefined ? num(s.calibration_weight_g) : ''}" placeholder="e.g. 500 or 1000">
+      <p class="muted" style="margin:6px 0 0;">A certified test weight kept with the scale. When set, the start-of-visit check uses it instead of the roll (worn quarters run light; a test weight doesn't).</p>
       <div id="stStatus"></div>
       <button class="primary" id="stSave">Save settings</button>
     </div>`;
@@ -904,7 +993,7 @@ async function renderSettings() {
     try {
       await withStepUp(() => api('/api/amusement/settings', { method: 'POST', body: {
         quarter_weight_g: $('stQ').value, default_tare_g: $('stTare').value, weight_unit: $('stUnit').value,
-        scale_check_roll_g: $('stRoll').value, scale_check_tolerance_g: $('stTol').value,
+        scale_check_roll_g: $('stRoll').value, scale_check_tolerance_g: $('stTol').value, calibration_weight_g: $('stCal').value,
       } }));
       $('stStatus').innerHTML = '<p class="msg success">Saved.</p>';
     } catch (e) { $('stStatus').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }

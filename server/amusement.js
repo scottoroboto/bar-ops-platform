@@ -70,13 +70,15 @@ async function getSettings(client) {
 }
 
 async function updateSettings(client, fields, updatedBy) {
-  const settable = ['quarter_weight_g', 'default_tare_g', 'weight_unit', 'scale_check_roll_g', 'scale_check_tolerance_g'];
+  const settable = ['quarter_weight_g', 'default_tare_g', 'weight_unit', 'scale_check_roll_g', 'scale_check_tolerance_g', 'calibration_weight_g'];
   const sets = [];
   const params = [];
   for (const key of settable) {
     if (!Object.prototype.hasOwnProperty.call(fields, key)) continue;
     let v = fields[key];
-    if (key === 'weight_unit') {
+    if (key === 'calibration_weight_g' && (v === null || v === undefined || v === '')) {
+      v = null; // blank = check with the $10 roll instead
+    } else if (key === 'weight_unit') {
       if (!['g', 'lb'].includes(v)) throw httpError('Unit must be g or lb.');
     } else {
       v = num(v, NaN);
@@ -295,6 +297,25 @@ async function setGameStatus(client, id, status, by) {
   return getGame(client, id);
 }
 
+// The weight of this game's empty coin box — what gets subtracted every
+// time the box is weighed with quarters in it. Stored with the photo it
+// was read from, if there was one. Passing grams = null clears it back
+// to the settings default.
+async function setGameTare(client, id, { grams, photoPath, by }) {
+  const game = await getGame(client, id);
+  if (!game) throw httpError('Game not found.', 404);
+  let g = null;
+  if (grams !== null && grams !== undefined && grams !== '') {
+    g = num(grams, NaN);
+    if (!Number.isFinite(g) || g < 0 || g > 20000) throw httpError('Enter the empty coin box weight in grams.');
+  }
+  await client.query(
+    `UPDATE amusement_games SET tare_g = $2::numeric, tare_photo_path = CASE WHEN $2::numeric IS NULL THEN NULL ELSE COALESCE($3::text, tare_photo_path) END,
+       tare_set_by = CASE WHEN $2::numeric IS NULL THEN NULL ELSE $4::uuid END, tare_set_at = CASE WHEN $2::numeric IS NULL THEN NULL ELSE now() END
+     WHERE id = $1`, [id, g, photoPath || null, by]);
+  return getGame(client, id);
+}
+
 async function getGamePlacements(client, id) {
   const { rows } = await client.query(
     `SELECT p.*, al.name AS location_name FROM amusement_game_placements p
@@ -337,7 +358,7 @@ async function getCollectionSheet(client, id) {
   const collection = await getCollection(client, id);
   if (!collection) return null;
   const { rows: games } = await client.query(
-    `SELECT g.id, g.name, g.game_type, g.make, g.model, g.tag_code, g.price_per_play, g.accepts_bills, g.sort_order,
+    `SELECT g.id, g.name, g.game_type, g.make, g.model, g.tag_code, g.price_per_play, g.accepts_bills, g.sort_order, g.tare_g,
             i.id AS item_id, i.gross_weight, i.tare_weight, i.weight_unit, i.net_weight_g, i.quarter_count, i.quarters_amount,
             i.bills_1, i.bills_5, i.bills_10, i.bills_20, i.bills_flat_amount, i.bills_amount, i.total, i.meter_reading,
             i.condition, i.note, i.weight_photo_path, i.weight_read_value, i.weight_read_unit, i.entered_at, i.updated_at,
@@ -381,11 +402,14 @@ async function startOrResumeCollection(client, { locationId, startedBy }) {
 }
 
 // Pure: the money math for one game line.
-function computeItem(input, settings) {
+function computeItem(input, settings, game) {
   const unit = input.weightUnit === 'lb' ? 'lb' : 'g';
   const gross = input.grossWeight === null || input.grossWeight === undefined || input.grossWeight === '' ? null : num(input.grossWeight, NaN);
   if (gross !== null && (!Number.isFinite(gross) || gross < 0)) throw httpError('Enter the weight the scale shows.');
-  const tare = Math.max(0, num(input.tareWeight, unit === 'lb' ? num(settings.default_tare_g) / GRAMS_PER_LB : num(settings.default_tare_g)));
+  // The tare, when not typed: this game's own coin box if it's been
+  // weighed, else the settings default.
+  const defaultTareG = game && game.tare_g !== null && game.tare_g !== undefined ? num(game.tare_g) : num(settings.default_tare_g);
+  const tare = Math.max(0, num(input.tareWeight, unit === 'lb' ? defaultTareG / GRAMS_PER_LB : defaultTareG));
   const quarterG = num(settings.quarter_weight_g, 5.67);
   let netG = null;
   let coins = 0;
@@ -415,7 +439,7 @@ async function upsertItem(client, collectionId, gameId, input, personId) {
   const game = await getGame(client, gameId);
   if (!game || game.status !== 'active') throw httpError('Game not found.', 404);
   const settings = await getSettings(client);
-  const m = computeItem(input, settings);
+  const m = computeItem(input, settings, game);
   const condition = input.condition === 'issue' ? 'issue' : 'ok';
   const meter = input.meterReading === null || input.meterReading === undefined || input.meterReading === '' ? null : Math.max(0, Math.floor(num(input.meterReading)));
   const readValue = input.weightReadValue === null || input.weightReadValue === undefined || input.weightReadValue === '' ? null : num(input.weightReadValue, null);
@@ -466,12 +490,15 @@ async function recordScaleCheck(client, collectionId, { grams, photoPath }) {
   if (collection.status !== 'draft') throw httpError('This collection is finalized.');
   const settings = await getSettings(client);
   const g = num(grams, NaN);
-  if (!Number.isFinite(g) || g <= 0) throw httpError('Enter what the roll weighed, in grams.');
-  const ok = Math.abs(g - num(settings.scale_check_roll_g)) <= num(settings.scale_check_tolerance_g);
+  if (!Number.isFinite(g) || g <= 0) throw httpError('Enter what the check weight read, in grams.');
+  const expected = settings.calibration_weight_g !== null && settings.calibration_weight_g !== undefined
+    ? num(settings.calibration_weight_g) : num(settings.scale_check_roll_g);
+  const ok = Math.abs(g - expected) <= num(settings.scale_check_tolerance_g);
   const { rows } = await client.query(
-    `UPDATE amusement_collections SET scale_check_g = $2, scale_check_ok = $3, scale_check_photo_path = COALESCE($4, scale_check_photo_path)
-     WHERE id = $1 RETURNING *`, [collectionId, g, ok, photoPath || null]);
-  return { collection: rows[0], ok, expected: num(settings.scale_check_roll_g), tolerance: num(settings.scale_check_tolerance_g) };
+    `UPDATE amusement_collections SET scale_check_g = $2, scale_check_ok = $3, scale_check_expected_g = $5,
+       scale_check_photo_path = COALESCE($4, scale_check_photo_path)
+     WHERE id = $1 RETURNING *`, [collectionId, g, ok, photoPath || null, expected]);
+  return { collection: rows[0], ok, expected, tolerance: num(settings.scale_check_tolerance_g) };
 }
 
 async function updateCollectionNote(client, collectionId, note) {
@@ -497,13 +524,14 @@ async function finalizeCollection(client, collectionId, { finalizedBy, allowMiss
   return rows[0];
 }
 
-async function markPosted(client, collectionId, { postedBy, reference, undo = false }) {
+async function markPosted(client, collectionId, { postedBy, reference, photoPath = null, undo = false }) {
   const collection = await getCollection(client, collectionId);
   if (!collection) throw httpError('Collection not found.', 404);
   if (collection.status !== 'final') throw httpError('Finalize the collection first.');
   const { rows } = undo
     ? await client.query(`UPDATE amusement_collections SET pos_status = 'queued', pos_posted_by = NULL, pos_posted_at = NULL, pos_reference = NULL WHERE id = $1 RETURNING *`, [collectionId])
-    : await client.query(`UPDATE amusement_collections SET pos_status = 'posted', pos_posted_by = $2, pos_posted_at = now(), pos_reference = $3 WHERE id = $1 RETURNING *`, [collectionId, postedBy, reference || null]);
+    : await client.query(`UPDATE amusement_collections SET pos_status = 'posted', pos_posted_by = $2, pos_posted_at = now(), pos_reference = $3,
+                            pos_photo_path = COALESCE($4, pos_photo_path) WHERE id = $1 RETURNING *`, [collectionId, postedBy, reference || null, photoPath]);
   return rows[0];
 }
 
@@ -588,7 +616,21 @@ async function report(client, { days = 90 } = {}) {
       per_day: l.collections > 0 ? round2(Number(l.earned) / Math.max(1, Number(l.days_covered))) : null,
     })),
     log: await listCollections(client, { limit: 60, status: 'final' }),
+    scaleChecks: await listScaleChecks(client, 40),
   };
+}
+
+// Every start-of-visit check, newest first — the "is the scale drifting"
+// view on the Admin page.
+async function listScaleChecks(client, limit = 40) {
+  const { rows } = await client.query(
+    `SELECT c.id, c.started_at, c.scale_check_g, c.scale_check_expected_g, c.scale_check_ok, c.scale_check_photo_path,
+            al.name AS location_name, p.name AS by_name
+     FROM amusement_collections c
+     JOIN amusement_locations al ON al.id = c.location_id
+     LEFT JOIN people p ON p.id = c.started_by
+     WHERE c.scale_check_g IS NOT NULL ORDER BY c.started_at DESC LIMIT $1`, [limit]);
+  return rows.map((r) => ({ ...r, drift_g: r.scale_check_expected_g === null ? null : round2(num(r.scale_check_g) - num(r.scale_check_expected_g)) }));
 }
 
 // ---------------------------------------------------------------------
@@ -671,10 +713,10 @@ function normalizeReading(parsed) {
 // ---------------------------------------------------------------------
 // Photos
 // ---------------------------------------------------------------------
-async function storePhoto({ buffer, mimetype, collectionId }) {
+async function storePhoto({ buffer, mimetype, collectionId, folder }) {
   if (!storage.isConfigured()) return null;
   try {
-    return await storage.uploadAmusementPhoto({ buffer, mimetype, collectionId });
+    return await storage.uploadAmusementPhoto({ buffer, mimetype, collectionId: folder || collectionId });
   } catch (e) {
     console.error('[amusement] photo upload failed', e.message);
     return null;
@@ -689,7 +731,7 @@ async function photoUrl(path) {
 module.exports = {
   getAccess, getSettings, updateSettings,
   listLocations, getLocation, createLocation, updateLocation,
-  listGames, getGame, getGameByTag, createGame, updateGame, moveGame, setGameStatus, getGamePlacements, getGameHistory,
+  listGames, getGame, getGameByTag, createGame, updateGame, moveGame, setGameStatus, setGameTare, getGamePlacements, getGameHistory, listScaleChecks,
   getCollection, getCollectionSheet, startOrResumeCollection, computeItem, upsertItem, removeItem, recordScaleCheck,
   updateCollectionNote, finalizeCollection, markPosted, discardDraft, listCollections,
   report, readScalePhoto, readerConfigured, storePhoto, photoUrl, GRAMS_PER_LB,

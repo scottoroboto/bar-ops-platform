@@ -17,10 +17,11 @@
 </div>
 <nav class="am-bottomnav" id="bottomNav"></nav>
 
-<!-- QR decoding for the "scan the game's sticker" step. Loaded from cdnjs;
-     if it fails to load, the scan button still works via the native camera
+<!-- QR decoding for the "scan the game's sticker" step (jsQR 1.4.0,
+     vendored so the bar's network never has to reach a CDN for it). If it
+     somehow fails, the scan step still works via the phone's own camera
      app (the sticker is a URL) and the typed tag-code fallback. -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js" defer></script>
+<script src="/vendor/jsQR.js" defer></script>
 <script src="/common.js"></script>
 <script src="/amusement.js"></script>
 </body>

@@ -4244,9 +4244,38 @@ app.post('/api/amusement/collections/:id/note', auth.requireSession('light'), am
 app.post('/api/amusement/collections/:id/finalize', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
   collection: await amusement.finalizeCollection(client, req.params.id, { finalizedBy: req.person.id, allowMissing: !!req.body.allowMissing }),
 })));
-app.post('/api/amusement/collections/:id/posted', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
-  collection: await amusement.markPosted(client, req.params.id, { postedBy: req.person.id, reference: req.body.reference, undo: !!req.body.undo }),
+// Multipart: an optional photo of the SpotOn ticket rides along with the
+// reference number, so a posted collection has proof at both ends.
+app.post('/api/amusement/collections/:id/posted', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('collector', async (client, req) => {
+  let photoPath = null;
+  if (req.file) {
+    if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+    photoPath = await amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: req.params.id });
+  }
+  const undo = req.body.undo === true || req.body.undo === 'true' || req.body.undo === '1';
+  return { collection: await amusement.markPosted(client, req.params.id, { postedBy: req.person.id, reference: req.body.reference, photoPath, undo }) };
+}));
+
+// Per-game coin-box tare (patch_042). Two steps from the game page:
+// photo the empty box -> /read-scale?gameId= reads it and stores the
+// photo under games/<id>; then this saves the confirmed grams.
+app.post('/api/amusement/games/:id/tare', auth.requireSession('full'), amusementRoute('owner', async (client, req) => ({
+  game: await amusement.setGameTare(client, req.params.id, { grams: req.body.grams, photoPath: req.body.photoPath || null, by: req.person.id }),
 })));
+
+// Read a scale photo outside a collection (setting a game's coin-box
+// tare). Same reader, photo filed under the game.
+app.post('/api/amusement/read-scale', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('owner', async (client, req) => {
+  if (!req.file) return { error: 'No photo received.' };
+  if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+  const gameId = String(req.body.gameId || '');
+  if (!/^[0-9a-f-]{36}$/i.test(gameId)) return { error: 'gameId is required.' };
+  const [photoPath, reading] = await Promise.all([
+    amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, folder: 'games/' + gameId }),
+    amusement.readScalePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype }),
+  ]);
+  return { ...reading, photoPath, photoStored: !!photoPath };
+}));
 app.post('/api/amusement/collections/:id/discard', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
   await amusement.discardDraft(client, req.params.id);
 }));
@@ -4286,13 +4315,31 @@ app.get('/api/amusement/photo', auth.requireSession('light'), amusementRoute('co
   if (!p || p.includes('..')) return { error: 'Bad path.' };
   const { rows } = await client.query(
     `SELECT 1 FROM amusement_collection_items WHERE weight_photo_path = $1
-     UNION ALL SELECT 1 FROM amusement_collections WHERE scale_check_photo_path = $1 LIMIT 1`, [p]);
+     UNION ALL SELECT 1 FROM amusement_collections WHERE scale_check_photo_path = $1 OR pos_photo_path = $1
+     UNION ALL SELECT 1 FROM amusement_games WHERE tare_photo_path = $1 LIMIT 1`, [p]);
   if (!rows.length) return { error: 'Not found.', status: 404 };
   try {
     return { url: await amusement.photoUrl(p) };
   } catch (e) {
     return { error: e.message, status: 500 };
   }
+}));
+
+// QR codes for the sticker sheet, rendered server-side (the `qrcode`
+// package) so the print page needs no CDN. One call for the whole sheet:
+// { svgs: { <gameId>: '<svg…>' } }. Each encodes the app URL with the
+// game's tag, so the phone's camera app opens the right weigh screen.
+app.get('/api/amusement/qr', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  const QRCode = require('qrcode');
+  const ids = String(req.query.ids || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 200);
+  const base = `${(process.env.APP_BASE_URL || (req.headers.origin || `${req.protocol}://${req.get('host')}`)).replace(/\/$/, '')}/amusement.html?tag=`;
+  const svgs = {};
+  const games = ids.length ? await amusement.listGames(client, { includeRetired: true }) : [];
+  for (const g of games) {
+    if (!ids.includes(g.id)) continue;
+    svgs[g.id] = await QRCode.toString(base + encodeURIComponent(g.tag_code), { type: 'svg', errorCorrectionLevel: 'M', margin: 1 });
+  }
+  return { svgs, base };
 }));
 
 // ---- Reports (owner) ----
