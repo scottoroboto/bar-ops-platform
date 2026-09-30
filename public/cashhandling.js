@@ -542,12 +542,39 @@ function manageSourceRowHtml(s, sub) {
       <div style="display:flex; justify-content:space-between; align-items:flex-start;">
         <div>
           <div class="name">${escapeHtml(s.name)}</div>
-          <div class="sub">${escapeHtml(sub || '')}${s.target_amount ? ' · target ' + fmtMoney(s.target_amount) : ''}</div>
+          <div class="sub">${escapeHtml(sub || '')}</div>
         </div>
         <button class="small ghost" onclick="retireManagedSource('${s.id}')">Retire</button>
       </div>
+      ${startAmountHtml(s)}
       ${auditTogglesHtml(s)}
     </div>`;
+}
+
+// The amount a source starts every shift with ($400 for a drawer). The
+// bank bag's changes by night, so it lives in Shifts; the ATM has none.
+function startAmountHtml(s) {
+  if (s.is_atm) return '';
+  if (s.kind === 'backup_bag') return `<div class="sub" style="margin-top:6px;">Nightly amounts: Shifts tab.</div>`;
+  return `
+    <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+      <span class="sub">${s.kind === 'drawer' ? 'Starting amount' : 'Normal balance'}</span>
+      <span class="prefix-sm">$</span>
+      <input type="number" inputmode="decimal" min="0" step="1" id="start-${s.id}" value="${Number(s.target_amount)}" style="max-width:110px; padding:6px 8px;">
+      <button class="small secondary" style="margin-top:0;" onclick="saveStartAmount('${s.id}')">Save</button>
+    </div>`;
+}
+
+async function saveStartAmount(sourceId) {
+  const value = document.getElementById(`start-${sourceId}`).value;
+  if (value === '' || !(Number(value) >= 0)) { showMsg('Enter a dollar amount.', 'error'); return; }
+  try {
+    await withStepUp(() => api(`/api/cashhandling/sources/${sourceId}/update`, { method: 'POST', body: { targetAmount: Number(value) } }));
+    showMsg('Starting amount saved.', 'success');
+    loadManageSources();
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
 }
 
 function manageSourcesHtml(sources) {
@@ -565,6 +592,9 @@ function manageSourcesHtml(sources) {
       const bag = bagById[d.linked_source_id];
       return manageSourceRowHtml(d) + (bag ? manageSourceRowHtml(bag, 'Paired with ' + d.name) : '');
     }).join('') : '<p class="muted">None yet.</p>'
+  }${
+    // The bar's own bag (the Bank Bag), not paired with any drawer.
+    sources.filter(s => s.kind === 'backup_bag' && !drawers.some(d => d.linked_source_id === s.id)).map(b => manageSourceRowHtml(b)).join('')
   }</div>`;
 
   html += `

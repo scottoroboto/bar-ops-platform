@@ -254,6 +254,13 @@ async function employeesReviewCount(person) {
     tiles.push(tileHtml({ icon: ICONS.venue_control, label: 'TV Staff', href: '/tv-staff.html' }));
   }
 
+  // Cash Out (patch_046): the bar iPad's opening/closing count. On the
+  // trusted iPad itself, for the owner (who sets each iPad up once), and
+  // for managers with drawers-and-bags Cash Handling access or above.
+  if (person.role === 'owner' || trustedDevice || ['drawers_bags', 'full_authority'].includes(cashHandlingTier)) {
+    tiles.push(tileHtml({ icon: ICONS.cash_handling, label: 'Cash Out', href: '/cashout.html' }));
+  }
+
   // Employees replaces the old duplicate "Admin" card — it's just another
   // tile now, gated the same way the card used to be (manager/owner only),
   // with a badge for anything waiting on a review.
