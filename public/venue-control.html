@@ -35,6 +35,7 @@
       <button class="vc-tab" data-panel="health" onclick="showVcPanel('health')">Device Health</button>
       <button class="vc-tab" data-panel="schedules" onclick="showVcPanel('schedules')">Events</button>
       <button class="vc-tab" data-panel="layouts" onclick="showVcPanel('layouts')">Scenes</button>
+      <button class="vc-tab" data-panel="lights" onclick="showVcPanel('lights')">Lights</button>
       <button class="vc-tab" data-panel="backups-activity" onclick="showVcPanel('backups-activity')">Backups &amp; Activity</button>
     </nav>
 
@@ -311,6 +312,34 @@
     </div>
     <button class="secondary" onclick="addLayout()">Add scene</button>
     <div id="layoutMsg"></div>
+  </div>
+  </section>
+
+  <section class="vc-panel" data-panel="lights">
+  <div class="vc-split">
+    <div class="card" id="plugsCard">
+      <h2>Plugs</h2>
+      <p class="muted">The Kasa plugs on the signs. The box looks for new ones every 15 minutes, or tap Find plugs. A new plug shows up under <b>New plugs</b>: tap <b>Blink</b> and the sign it runs flashes twice, then name it and pick its group.</p>
+      <button class="secondary" id="plugsScanBtn" onclick="startPlugScan()">Find plugs</button>
+      <div id="plugsStatus"></div>
+      <div id="plugsList" style="margin-top:12px;"><p class="muted">Loading…</p></div>
+      <details style="margin-top:14px;">
+        <summary class="muted" style="cursor:pointer;">Add a plug by its MAC address</summary>
+        <p class="muted" style="font-size:12px;">From the Kasa app: the plug → Settings → Device Info. It gets matched as soon as the box sees it on the bar's network.</p>
+        <input id="plugMac" placeholder="MAC, e.g. A8:42:A1:12:34:56" autocapitalize="characters" autocorrect="off" spellcheck="false">
+        <input id="plugMacName" placeholder="Name, e.g. Bud Light">
+        <input id="plugMacGroup" placeholder="Group, e.g. Front Windows" list="plugGroups">
+        <button class="secondary" onclick="addPlugByMac()">Add plug</button>
+      </details>
+      <datalist id="plugGroups"></datalist>
+    </div>
+
+    <div class="card" id="lightRoutinesCard">
+      <h2>Routines</h2>
+      <p class="muted">When lights come on and go off. Times can be a clock time, or sunrise / sunset / dawn / dusk plus or minus minutes, worked out every day for the bar's location. Days are the day the lights come <b>on</b>; an off time earlier than the on time is the next morning (2:15 AM closing).</p>
+      <div id="lightRoutinesList"><p class="muted">Loading…</p></div>
+      <button class="secondary" onclick="editLightRoutine('new')">Add routine</button>
+    </div>
   </div>
   </section>
 

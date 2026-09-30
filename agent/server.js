@@ -13,6 +13,7 @@ const tvPoller = require('./lib/tv-poller');
 const health = require('./lib/health');
 const speedtest = require('./lib/speedtest');
 const sonos = require('./lib/sonos');
+const lights = require('./lib/lights');
 const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
 const events = require('./lib/events');
@@ -122,6 +123,58 @@ app.use('/api/events', requireStaffPin);
 app.use('/api/scenes', requireStaffPin);
 app.use('/api/attention', requireStaffPin);
 app.use('/api/music', requireStaffPin);
+app.use('/api/lights', requireStaffPin);
+
+// ---------------- Lights (lib/lights.js, cloud patch_049) ----------------
+// The Lights tab: every named plug with live on/off + watts, the routines
+// with tonight's times, and today's sunset/dusk. A tap holds until that
+// plug's next scheduled change.
+app.get('/api/lights', (req, res) => res.json(lights.view()));
+
+app.post('/api/lights/power', async (req, res) => {
+  const b = req.body || {};
+  const on = b.on === true || b.on === 'on';
+  const named = (cache.get('config') || {}).plugs ? (cache.get('config').plugs || []).filter((p) => p.name) : [];
+  let ids;
+  if (b.all) ids = named.map((p) => p.id);
+  else if (b.group) ids = named.filter((p) => (p.group_name || 'Lights') === b.group).map((p) => p.id);
+  else ids = (Array.isArray(b.ids) ? b.ids : []).map(Number).filter((id) => named.some((p) => p.id === id));
+  if (!ids.length) return res.status(400).json({ error: 'No lights picked.' });
+  const r = await lights.setPower(ids, on, { by: req.vcActor });
+  activity.record(`lights.${on ? 'on' : 'off'}`, { actor: req.vcActor, targetType: 'plug', targetId: ids.length === 1 ? ids[0] : null, detail: { count: ids.length, group: b.group || null, all: !!b.all, failed: r.failed }, result: r.ok ? 'ok' : 'partial' });
+  res.json({ ok: r.ok, failed: r.failed, view: lights.view() });
+});
+
+app.post('/api/lights/:id/blink', async (req, res) => {
+  try {
+    await lights.blink(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// "Run ON" / "Run OFF" on a routine card: its lights now, holding until the
+// routine's next time.
+app.post('/api/lights/routines/:id/run', async (req, res) => {
+  const on = !!(req.body && (req.body.on === true || req.body.on === 'on'));
+  const ids = lights.routinePlugIds(Number(req.params.id));
+  if (!ids.length) return res.status(400).json({ error: 'This routine has no lights yet.' });
+  const r = await lights.setPower(ids, on, { by: req.vcActor });
+  activity.record(`lights.routine.run_${on ? 'on' : 'off'}`, { actor: req.vcActor, targetType: 'light_routine', targetId: Number(req.params.id), detail: { count: ids.length, failed: r.failed }, result: r.ok ? 'ok' : 'partial' });
+  res.json({ ok: r.ok, failed: r.failed, view: lights.view() });
+});
+
+// The plug sheet's schedule: follow a routine, its own times, or none.
+// Saved in the cloud (the list lives there) and pulled straight back down.
+app.post('/api/lights/:id/schedule', async (req, res) => {
+  try {
+    await sync.plugScheduleWrite(Number(req.params.id), (req.body || {}).schedule, req.vcActor);
+    res.json({ ok: true, view: lights.view() });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
 // ---------------- Music (lib/sonos.js) ----------------
 // Now playing + the station tiles (Sonos favorites) for the staff Music
@@ -955,6 +1008,7 @@ app.listen(config.PORT, () => {
   health.start();
   speedtest.start();
   sonos.start();
+  lights.start();
   scheduler.start();
   activity.start();
 });

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Venue Control Agent — Power</title>
+<title>Venue Control Agent — Lights</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="staff-theme.css">
@@ -11,7 +11,7 @@
 <body class="staff">
 <div class="wrap" id="pinGate" style="display:none;">
   <div class="card">
-    <h2>Power</h2>
+    <h2>Lights</h2>
     <p class="muted">This screen opens from the Bar Ops app. Tap <strong>TV Staff</strong> there and you'll land back here signed in.</p>
     <a class="primary" id="openFromApp" href="#" style="display:inline-block; text-decoration:none;">Open the Bar Ops app</a>
     <div id="pinMsg"></div>
@@ -19,9 +19,8 @@
 </div>
 
 <div id="app">
-  <!-- Same branded top bar as the other staff pages (staff-theme.css
-       .staff-topbar). ALL TVs ON / ALL TVs OFF (hold) live here too, so the
-       whole-bar buttons are in the same spot on every tab. -->
+  <!-- Same branded top bar as the other staff pages. On this tab the two
+       whole-bar buttons are for the lights: ON (tap) and OFF (hold). -->
   <div class="staff-topbar">
     <div class="staff-topbar-inner">
       <div class="tb-brand">
@@ -30,16 +29,16 @@
         <a href="/" title="Agent status"><span class="tb-conn-dot"></span></a>
       </div>
       <div class="tb-actions">
-        <button class="tva-btn tva-on" onclick="powerTvs('on', allTvIds(), 'All TVs')">ALL TVs ON</button>
-        <button class="tva-btn tva-off hold-danger" data-hold-action="all-off"><span class="hold-fill"></span><span class="hold-label">ALL TVs OFF <span class="hold-chip">HOLD</span></span></button>
+        <button class="tva-btn tva-on" data-act="all-on">ALL LIGHTS ON</button>
+        <button class="tva-btn tva-off hold-danger" data-hold-action="all-off"><span class="hold-fill"></span><span class="hold-label">ALL LIGHTS OFF <span class="hold-chip">HOLD</span></span></button>
       </div>
       <div class="tb-nav">
         <a href="/staff_sources.html">Sources</a>
         <a href="/staff_tvs.html">TVs</a>
         <a href="/staff_layouts.html">Scenes</a>
         <a href="/staff_events.html">Events</a>
-        <a href="/staff_power.html" class="active">Power</a>
-        <a href="/staff_lights.html">Lights</a>
+        <a href="/staff_power.html">Power</a>
+        <a href="/staff_lights.html" class="active">Lights</a>
         <a href="/staff_music.html">Music</a>
         <a id="navCashOut" href="#" style="display:none;">Cash Out</a>
         <div class="tb-divider" style="height:40px; margin:0 6px;"></div>
@@ -52,17 +51,19 @@
     </div>
   </div>
 
-  <!-- Rack (receivers + Rokus) on the left, TVs by zone on the right.
-       Both columns are JS-rendered by renderPage() in staff_power.js. -->
+  <!-- Routines on the left, the lights by group on the right, a sheet for
+       one plug. All rendered by staff_lights.js from GET /api/lights. -->
   <div class="wrap">
-    <div class="tvs-workspace pw-workspace">
-      <div class="tvs-col-source pw-rack" id="pwRack"><p class="muted">Loading…</p></div>
-      <div class="tvs-col-tvs pw-floor" id="pwFloor"></div>
+    <div class="lt-workspace">
+      <div class="lt-box lt-rail" id="ltRail"><p class="muted">Loading…</p></div>
+      <div class="lt-box lt-main" id="ltMain"></div>
     </div>
   </div>
+  <div id="ltToast" class="lt-toast" style="display:none;"></div>
+  <div id="ltSheet"></div>
 </div>
 
-<script src="staff_power.js"></script>
+<script src="staff_lights.js"></script>
 <script src="staff_music_strip.js"></script>
 <script src="/staff_cashout_link.js"></script>
 </body>

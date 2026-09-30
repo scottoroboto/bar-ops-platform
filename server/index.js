@@ -13,6 +13,7 @@ const monitoring = require('./monitoring');
 const scheduling = require('./scheduling');
 const cashhandling = require('./cashhandling');
 const cashout = require('./cashout');
+const vclights = require('./vclights');
 const inventorycontrol = require('./inventorycontrol');
 const amusement = require('./amusement');
 const notify = require('./notify');
@@ -911,8 +912,10 @@ const { rows: musicHidden } = await withServiceClient((client) => client.query(
 'SELECT uri, title, hidden_by, hidden_at FROM vc_music_hidden_stations WHERE site_id = $1 ORDER BY hidden_at DESC',
 [req.vcSite.site_id]
 ));
+// patch_049: Kasa plugs + light routines + the site's lat/long for sun times.
+const lights = await withServiceClient((client) => vclights.configRows(client, req.vcSite.site_id));
 const config = {
-schema_version: 7,
+schema_version: 8,
 site: {
 id: req.vcSite.site_id, // patch_036: the box checks a pass is for this site
 location_id: req.vcSite.location_id,
@@ -963,6 +966,9 @@ id: l.id, name: l.name, stations: l.stations || [], created_by: l.created_by, cr
 deleted_at: l.deleted_at, deleted_by: l.deleted_by,
 })),
 music_hidden: musicHidden,
+plugs: lights.plugs,
+light_routines: lights.light_routines,
+location: lights.location,
 };
 const etag = crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
 if (req.get('if-none-match') === etag) return res.status(304).end();
@@ -1388,6 +1394,84 @@ res.json({ ok: true, ...created });
 res.status(err.status || 400).json({ error: err.message });
 }
 });
+
+// ---- Lights (patch_049): Kasa plugs + light routines -----------------
+// Agent side: what it found on the network, and each plug's live state.
+app.post('/api/venue/agent/plugs/seen', requireAgentAuth(), async (req, res) => {
+const result = await withServiceClient((client) => vclights.recordSeen(client, req.vcSite.site_id, (req.body || {}).plugs));
+res.json({ ok: true, ...result });
+});
+app.post('/api/venue/agent/plugs/status', requireAgentAuth(), async (req, res) => {
+await withServiceClient((client) => vclights.recordStatus(client, req.vcSite.site_id, (req.body || {}).states));
+res.json({ ok: true });
+});
+// A plug's schedule changed from the bar iPad (Lights → tap a plug).
+app.post('/api/venue/agent/plugs/:id/schedule', requireAgentAuth(), async (req, res) => {
+try {
+const plug = await withServiceClient(async (client) => {
+const row = await vclights.updatePlug(client, req.vcSite.site_id, Number(req.params.id), { schedule: (req.body || {}).schedule });
+await recordActivity(client, req.vcSite.site_id, {
+actor: String((req.body || {}).actor || 'staff').slice(0, 80), origin: 'local', action: 'plug_schedule',
+targetType: 'plug', targetId: row.id, detail: { mode: row.schedule_mode, routineId: row.routine_id }, result: 'ok',
+});
+return row;
+});
+res.json({ ok: true, plugId: plug.id });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+// Owner side (TV Admin → Lights).
+async function lightsRoute(req, res, fn) {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try {
+res.json({ ok: true, ...(await withServiceClient((client) => fn(client))) });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+}
+function queueAgentCommand(client, siteId, type, payload, person) {
+return client.query(
+`INSERT INTO vc_agent_commands (site_id, type, payload, created_by) VALUES ($1, $2, $3, $4) RETURNING *`,
+[siteId, type, JSON.stringify(payload || {}), person.name || person.username || null]
+).then((r) => r.rows[0]);
+}
+app.get('/api/venue-control/sites/:locationId/lights', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, (client) => vclights.listForAdmin(client, req.vcSiteId)));
+// Find plugs now (the Pi also looks every 15 minutes on its own).
+app.post('/api/venue-control/sites/:locationId/lights/scan', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => {
+const picked = await scanRangesFor(client, req.vcSiteId, req.body && req.body.ranges);
+const ranges = picked.error ? [] : picked.ranges;
+const cmd = await queueAgentCommand(client, req.vcSiteId, 'kasa_scan', { ranges }, req.person);
+return { commandId: cmd.id, ranges };
+}));
+app.post('/api/venue-control/sites/:locationId/lights/plugs/:plugId/blink', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => {
+const plug = await vclights.plugAt(client, req.vcSiteId, Number(req.params.plugId));
+if (!plug) throw Object.assign(new Error('Not found.'), { status: 404 });
+const cmd = await queueAgentCommand(client, req.vcSiteId, 'kasa_blink', { plugId: Number(plug.id), mac: plug.mac, ip: plug.ip }, req.person);
+return { commandId: cmd.id };
+}));
+app.post('/api/venue-control/sites/:locationId/lights/plugs', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => ({ plug: await vclights.addByMac(client, req.vcSiteId, req.body || {}) })));
+app.post('/api/venue-control/sites/:locationId/lights/plugs/:plugId/update', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => ({ plug: await vclights.updatePlug(client, req.vcSiteId, Number(req.params.plugId), req.body || {}) })));
+app.post('/api/venue-control/sites/:locationId/lights/plugs/:plugId/:op', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => {
+const id = Number(req.params.plugId);
+if (req.params.op === 'archive') return { plug: await vclights.setArchived(client, req.vcSiteId, id, true) };
+if (req.params.op === 'restore') return { plug: await vclights.setArchived(client, req.vcSiteId, id, false) };
+if (req.params.op === 'delete') { await vclights.deletePlug(client, req.vcSiteId, id); return {}; }
+throw Object.assign(new Error('Unknown action.'), { status: 404 });
+}));
+app.post('/api/venue-control/sites/:locationId/lights/routines', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => ({ routine: await vclights.saveRoutine(client, req.vcSiteId, null, req.body || {}) })));
+app.post('/api/venue-control/sites/:locationId/lights/routines/:routineId/update', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => ({ routine: await vclights.saveRoutine(client, req.vcSiteId, Number(req.params.routineId), req.body || {}) })));
+app.post('/api/venue-control/sites/:locationId/lights/routines/:routineId/delete', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => { await vclights.deleteRoutine(client, req.vcSiteId, Number(req.params.routineId)); return {}; }));
 
 // Agent-facing side of vc_agent_commands: the agent's existing 30s poll
 // loop (agent/lib/sync.js) claims any pending command for its own site --

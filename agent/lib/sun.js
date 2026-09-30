@@ -25,14 +25,23 @@ function hourAngle(h, phi, dec) {
   return Math.acos((Math.sin(h) - Math.sin(phi) * Math.sin(dec)) / (Math.cos(phi) * Math.cos(dec)));
 }
 
-// `date` is any instant on the local day wanted; lat/lng in degrees (west
-// negative). Returns Dates: { sunrise, sunset, dawn, dusk, noon }.
+// `date` is the local day wanted: a 'YYYY-MM-DD' string (the bar's own
+// calendar date, whatever timezone the Pi's clock is set to), or a Date
+// read in the machine's local time. lat/lng in degrees (west negative).
+// Returns Dates: { sunrise, sunset, dawn, dusk, noon }.
 function sunTimes(date, lat, lng) {
   const lw = RAD * -lng;
   const phi = RAD * lat;
-  // Anchor on local noon so the cycle picks the right day in the Americas.
-  const noonish = new Date(date);
-  noonish.setHours(12, 0, 0, 0);
+  // Anchor on noon of that day so the solar cycle picks the right one; noon
+  // UTC works for a date string anywhere in the Americas.
+  let noonish;
+  if (typeof date === 'string') {
+    const [y, m, d] = date.split('-').map(Number);
+    noonish = new Date(Date.UTC(y, m - 1, d, 12));
+  } else {
+    noonish = new Date(date);
+    noonish.setHours(12, 0, 0, 0);
+  }
   const d = toDays(noonish);
   const n = julianCycle(d, lw);
   const ds = approxTransit(0, lw, n);

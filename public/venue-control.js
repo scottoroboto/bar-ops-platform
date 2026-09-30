@@ -285,6 +285,8 @@ function onSourcesLocationChange() {
   DISCOVERY_ADOPT_OPEN_ID = null;
   if (DISCOVERY_POLL_TIMER) { clearTimeout(DISCOVERY_POLL_TIMER); DISCOVERY_POLL_TIMER = null; }
   loadDiscoveryAdmin(locationId);
+  LIGHT_EDIT = null;
+  loadLightsAdmin(locationId);
 
   // Several tabs now cross-reference each other's data (Zones shows a TV
   // count, TVs joins in Device Health's live status, Activity resolves
@@ -2044,4 +2046,310 @@ async function submitDiscoveryAdopt(deviceId, as) {
   } catch (e) {
     document.getElementById('discoveryStatus').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Lights (cloud patch_049): the Kasa plugs on the signs and their routines.
+// Find plugs / Blink go to the box as commands (it checks every 5 seconds);
+// everything else is the cloud list the box pulls down.
+// ---------------------------------------------------------------------------
+let LIGHTS = { plugs: [], routines: [] };
+let LIGHT_EDIT = null;          // routine being edited: id, 'new', or null
+let PLUG_EDIT_ID = null;        // named plug whose row is open for editing
+let PLUGS_SHOW_ARCHIVED = false;
+const LIGHT_KINDS = [['time', 'Clock time'], ['sunset', 'Sunset'], ['dusk', 'Dusk'], ['sunrise', 'Sunrise'], ['dawn', 'Dawn'], ['none', 'Never']];
+const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function lightsLocation() { return document.getElementById('sourcesLocationSelect').value; }
+
+async function loadLightsAdmin(locationId) {
+  try {
+    const data = await api(`/api/venue-control/sites/${locationId}/lights`);
+    LIGHTS = { plugs: data.plugs || [], routines: data.routines || [] };
+    renderPlugsList();
+    renderLightRoutines();
+  } catch (e) {
+    document.getElementById('plugsList').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function lightTimeWords(kind, time, offset) {
+  if (kind === 'none') return 'never';
+  if (kind === 'time') {
+    if (!time) return '?';
+    const [h, m] = time.split(':').map(Number);
+    return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+  }
+  const word = kind[0].toUpperCase() + kind.slice(1);
+  return offset ? `${word} ${offset < 0 ? '−' : '+'}${Math.abs(offset)} min` : word;
+}
+function lightDaysWords(days) {
+  const d = (days || []).slice().sort();
+  if (d.length === 7) return 'every day';
+  if (d.join() === '1,2,3,4,5') return 'weekdays';
+  if (d.join() === '0,6') return 'weekends';
+  return d.map((x) => DAY_ABBR[x]).join(', ');
+}
+function plugScheduleWords(p) {
+  if (p.schedule_mode === 'routine') {
+    const r = LIGHTS.routines.find((x) => x.id === p.routine_id);
+    return r ? `Routine: ${r.name}` : 'Routine (deleted)';
+  }
+  if (p.schedule_mode === 'own') return `Own: ${lightTimeWords(p.own.on_kind, p.own.on_time, p.own.on_offset_min)} → ${lightTimeWords(p.own.off_kind, p.own.off_time, p.own.off_offset_min)}, ${lightDaysWords(p.own.days)}`;
+  return 'No schedule';
+}
+function plugLiveWords(p) {
+  if (!p.last_seen_at) return '<span class="badge off">not seen yet</span>';
+  const mins = Math.round((Date.now() - new Date(p.last_seen_at)) / 60000);
+  if (mins > 10) return `<span class="badge off">last seen ${mins < 120 ? `${mins} min` : `${Math.round(mins / 60)} h`} ago</span>`;
+  if (p.last_on && p.last_watts !== null && p.last_watts < 1) return '<span class="badge off">on · 0 W — check sign</span>';
+  return `<span class="badge ${p.last_on ? 'on' : ''}">${p.last_on ? `on${p.last_watts !== null ? ` · ${Math.round(p.last_watts)} W` : ''}` : 'off'}</span>`;
+}
+
+function renderPlugsList() {
+  const el = document.getElementById('plugsList');
+  const groups = [...new Set(LIGHTS.plugs.map((p) => p.group_name).filter(Boolean))].sort();
+  document.getElementById('plugGroups').innerHTML = groups.map((g) => `<option value="${escapeHtml(g)}">`).join('');
+  const fresh = LIGHTS.plugs.filter((p) => !p.name && !p.archived_at);
+  const named = LIGHTS.plugs.filter((p) => p.name && !p.archived_at);
+  const archived = LIGHTS.plugs.filter((p) => p.archived_at);
+  let html = '';
+  if (fresh.length) {
+    html += `<h3 style="margin:6px 0;">New plugs (${fresh.length})</h3>`;
+    html += fresh.map((p) => `
+      <div class="list-row" style="flex-direction:column; align-items:stretch; gap:6px;">
+        <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
+          <div><div class="name">Unnamed plug</div><div class="sub">${escapeHtml(p.mac)}${p.ip ? ` · ${escapeHtml(p.ip)}` : ''}${p.model ? ` · ${escapeHtml(p.model)}` : ''}</div></div>
+          <div style="display:flex; gap:6px; align-items:center;">${plugLiveWords(p)}<button class="small secondary" style="margin:0;" onclick="blinkPlug(${p.id}, this)">Blink</button></div>
+        </div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <input id="plugName-${p.id}" placeholder="Name, e.g. Bud Light" style="flex:2; min-width:140px; margin:0;">
+          <input id="plugGroup-${p.id}" placeholder="Group" list="plugGroups" style="flex:1; min-width:110px; margin:0;">
+          <button class="small primary" style="margin:0;" onclick="nameNewPlug(${p.id})">Save</button>
+          <button class="small ghost" style="margin:0;" onclick="plugOp(${p.id}, 'archive')">Not a sign</button>
+        </div>
+      </div>`).join('');
+  }
+  if (named.length) {
+    html += `<h3 style="margin:14px 0 6px;">Plugs (${named.length})</h3>`;
+    let lastGroup = null;
+    for (const p of named) {
+      if ((p.group_name || '') !== lastGroup) { lastGroup = p.group_name || ''; html += `<div class="muted" style="font-size:12px; font-weight:700; margin:10px 0 4px; text-transform:uppercase;">${escapeHtml(lastGroup || 'No group')}</div>`; }
+      if (PLUG_EDIT_ID === p.id) {
+        html += `
+        <div class="list-row" style="flex-direction:column; align-items:stretch; gap:6px;">
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <input id="plugEditName" value="${escapeHtml(p.name)}" style="flex:2; min-width:140px; margin:0;">
+            <input id="plugEditGroup" value="${escapeHtml(p.group_name || '')}" list="plugGroups" placeholder="Group" style="flex:1; min-width:110px; margin:0;">
+          </div>
+          <select id="plugEditSchedule" style="margin:0;">
+            <option value="none" ${p.schedule_mode === 'none' ? 'selected' : ''}>No schedule</option>
+            ${p.schedule_mode === 'own' ? '<option value="own" selected>Own schedule (set on the iPad)</option>' : ''}
+            ${LIGHTS.routines.map((r) => `<option value="r${r.id}" ${p.schedule_mode === 'routine' && p.routine_id === r.id ? 'selected' : ''}>Routine: ${escapeHtml(r.name)}</option>`).join('')}
+          </select>
+          <div style="display:flex; gap:6px;">
+            <button class="small primary" style="margin:0;" onclick="savePlugEdit(${p.id})">Save</button>
+            <button class="small secondary" style="margin:0;" onclick="PLUG_EDIT_ID=null; renderPlugsList();">Cancel</button>
+            <button class="small ghost" style="margin:0 0 0 auto;" onclick="plugOp(${p.id}, 'archive')">Archive</button>
+          </div>
+        </div>`;
+      } else {
+        html += `
+        <div class="list-row">
+          <div><div class="name">${escapeHtml(p.name)}</div><div class="sub">${escapeHtml(plugScheduleWords(p))}${p.ip ? ` · ${escapeHtml(p.ip)}` : ''}</div></div>
+          <div style="display:flex; gap:6px; align-items:center;">${plugLiveWords(p)}
+            <button class="small secondary" style="margin:0;" onclick="blinkPlug(${p.id}, this)">Blink</button>
+            <button class="small ghost" style="margin:0;" onclick="PLUG_EDIT_ID=${p.id}; renderPlugsList();">Edit</button></div>
+        </div>`;
+      }
+    }
+  }
+  if (!fresh.length && !named.length) html += '<p class="muted">No plugs yet. Plug them in on the bar’s Wi-Fi, set them up in the Kasa app, then tap Find plugs.</p>';
+  if (archived.length) {
+    html += `<p style="margin-top:12px;"><a href="#" class="muted" onclick="PLUGS_SHOW_ARCHIVED=!PLUGS_SHOW_ARCHIVED; renderPlugsList(); return false;">${PLUGS_SHOW_ARCHIVED ? 'Hide' : 'Show'} archived (${archived.length})</a></p>`;
+    if (PLUGS_SHOW_ARCHIVED) {
+      html += archived.map((p) => `
+        <div class="list-row">
+          <div><div class="name">${escapeHtml(p.name || 'Unnamed plug')}</div><div class="sub">${escapeHtml(p.mac)}</div></div>
+          <div style="display:flex; gap:6px;"><button class="small secondary" style="margin:0;" onclick="plugOp(${p.id}, 'restore')">Restore</button>
+          <button class="small ghost" style="margin:0;" onclick="if (confirm('Delete this plug for good? If it’s still plugged in, the box will find it again as a new plug.')) plugOp(${p.id}, 'delete')">Delete</button></div>
+        </div>`).join('');
+    }
+  }
+  el.innerHTML = html;
+}
+
+async function pollLightsCommand(commandId, onDone, onFail) {
+  const started = Date.now();
+  const tick = async () => {
+    try {
+      const res = await api(`/api/venue-control/sites/${lightsLocation()}/discovery/commands/${commandId}`);
+      const cmd = res.command;
+      if (cmd.status === 'done') return onDone(cmd.result || {});
+      if (cmd.status === 'error') return onFail(cmd.error || 'The box couldn’t do that.');
+      if (Date.now() - started > 90000) return onFail('The box hasn’t answered. Is it online?');
+    } catch (e) { return onFail(e.message); }
+    setTimeout(tick, 1500);
+    return null;
+  };
+  setTimeout(tick, 1500);
+}
+
+async function startPlugScan() {
+  const btn = document.getElementById('plugsScanBtn');
+  const status = document.getElementById('plugsStatus');
+  btn.disabled = true;
+  status.innerHTML = '<p class="msg info">Asking the box to look for plugs…</p>';
+  try {
+    const r = await api(`/api/venue-control/sites/${lightsLocation()}/lights/scan`, { method: 'POST', body: {} });
+    pollLightsCommand(r.commandId, async (res) => {
+      status.innerHTML = `<p class="msg success">Found ${res.found || 0} plug${res.found === 1 ? '' : 's'}${res.added ? ` · ${res.added} new` : ''}.</p>`;
+      btn.disabled = false;
+      await loadLightsAdmin(lightsLocation());
+    }, (err) => { status.innerHTML = `<p class="msg error">${escapeHtml(err)}</p>`; btn.disabled = false; });
+  } catch (e) {
+    status.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+    btn.disabled = false;
+  }
+}
+
+async function blinkPlug(plugId, btn) {
+  const was = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Blinking…';
+  const reset = (text) => { btn.textContent = text; setTimeout(() => { btn.textContent = was; btn.disabled = false; }, 2500); };
+  try {
+    const r = await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/blink`, { method: 'POST', body: {} });
+    pollLightsCommand(r.commandId, () => reset('Blinked'), (err) => { reset('Failed'); showMsg(err, 'error'); });
+  } catch (e) { reset('Failed'); showMsg(e.message, 'error'); }
+}
+
+async function nameNewPlug(plugId) {
+  const name = document.getElementById(`plugName-${plugId}`).value.trim();
+  const group = document.getElementById(`plugGroup-${plugId}`).value.trim();
+  if (!name) { showMsg('Give the plug a name.', 'error'); return; }
+  try {
+    await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/update`, { method: 'POST', body: { name, group } });
+    showMsg(`Saved “${name}”.`, 'success');
+    await loadLightsAdmin(lightsLocation());
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+async function savePlugEdit(plugId) {
+  const sched = document.getElementById('plugEditSchedule').value;
+  const body = { name: document.getElementById('plugEditName').value, group: document.getElementById('plugEditGroup').value };
+  if (sched === 'none') body.schedule = { mode: 'none' };
+  else if (sched.startsWith('r')) body.schedule = { mode: 'routine', routineId: Number(sched.slice(1)) };
+  try {
+    await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/update`, { method: 'POST', body });
+    PLUG_EDIT_ID = null;
+    await loadLightsAdmin(lightsLocation());
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+async function plugOp(plugId, op) {
+  try {
+    await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/${op}`, { method: 'POST', body: {} });
+    PLUG_EDIT_ID = null;
+    await loadLightsAdmin(lightsLocation());
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+async function addPlugByMac() {
+  const body = {
+    mac: document.getElementById('plugMac').value, name: document.getElementById('plugMacName').value,
+    group: document.getElementById('plugMacGroup').value,
+  };
+  try {
+    await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs`, { method: 'POST', body });
+    ['plugMac', 'plugMacName', 'plugMacGroup'].forEach((id) => { document.getElementById(id).value = ''; });
+    showMsg('Plug added. It’s matched as soon as the box sees it.', 'success');
+    await loadLightsAdmin(lightsLocation());
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+// ---- routines -----------------------------------------------------------------
+function renderLightRoutines() {
+  const el = document.getElementById('lightRoutinesList');
+  const named = LIGHTS.plugs.filter((p) => p.name && !p.archived_at);
+  let html = LIGHTS.routines.map((r) => {
+    if (LIGHT_EDIT === r.id) return lightRoutineForm(r, named);
+    const count = named.filter((p) => p.schedule_mode === 'routine' && p.routine_id === r.id).length;
+    return `<div class="list-row">
+      <div><div class="name">${escapeHtml(r.name)}${r.enabled ? '' : ' <span class="badge off">paused</span>'}</div>
+        <div class="sub">On ${escapeHtml(lightTimeWords(r.on_kind, r.on_time, r.on_offset_min))} → off ${escapeHtml(lightTimeWords(r.off_kind, r.off_time, r.off_offset_min))} · ${escapeHtml(lightDaysWords(r.days))} · ${count} light${count === 1 ? '' : 's'}</div></div>
+      <button class="small ghost" style="margin:0;" onclick="editLightRoutine(${r.id})">Edit</button>
+    </div>`;
+  }).join('');
+  if (LIGHT_EDIT === 'new') html += lightRoutineForm(null, named);
+  if (!LIGHTS.routines.length && LIGHT_EDIT !== 'new') html = '<p class="muted">No routines yet.</p>';
+  el.innerHTML = html;
+}
+
+function editLightRoutine(id) { LIGHT_EDIT = id; renderLightRoutines(); }
+
+function lightWhenFields(which, kind, time, offset) {
+  return `<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+    <b style="width:36px;">${which.toUpperCase()}</b>
+    <select id="lr-${which}-kind" onchange="document.getElementById('lr-${which}-timebox').style.display=this.value==='time'?'':'none'; document.getElementById('lr-${which}-offbox').style.display=(this.value==='time'||this.value==='none')?'none':'';" style="width:auto; margin:0;">
+      ${LIGHT_KINDS.map(([v, l]) => `<option value="${v}" ${v === kind ? 'selected' : ''}>${l}</option>`).join('')}
+    </select>
+    <span id="lr-${which}-timebox" style="${kind === 'time' ? '' : 'display:none;'}"><input type="time" id="lr-${which}-time" value="${escapeHtml(time || (which === 'on' ? '18:00' : '02:15'))}" style="width:auto; margin:0;"></span>
+    <span id="lr-${which}-offbox" style="${kind === 'time' || kind === 'none' ? 'display:none;' : ''}"><input type="number" id="lr-${which}-offset" value="${Number(offset) || 0}" step="5" min="-240" max="240" style="width:80px; margin:0;"> min (− before, + after)</span>
+  </div>`;
+}
+
+function lightRoutineForm(r, named) {
+  const x = r || { name: '', days: [0, 1, 2, 3, 4, 5, 6], on_kind: 'dusk', on_offset_min: 0, off_kind: 'time', off_time: '02:15', off_offset_min: 0, enabled: true };
+  const id = r ? r.id : 'new';
+  return `<div class="card" style="margin:10px 0; background:var(--bg);">
+    <label>Name</label><input id="lr-name" value="${escapeHtml(x.name)}" placeholder="e.g. Signage">
+    <label>Days (the day the lights come on)</label>
+    <div style="display:flex; gap:6px; flex-wrap:wrap;">${DAY_ABBR.map((d, i) => `<label style="display:flex; gap:4px; align-items:center; margin:0;"><input type="checkbox" class="lr-day" value="${i}" ${x.days.includes(i) ? 'checked' : ''} style="width:auto; margin:0;">${d}</label>`).join('')}</div>
+    <label>Times</label>
+    ${lightWhenFields('on', x.on_kind, x.on_time, x.on_offset_min)}
+    <div style="height:6px;"></div>
+    ${lightWhenFields('off', x.off_kind, x.off_time, x.off_offset_min)}
+    <label style="display:flex; gap:6px; align-items:center; margin-top:10px;"><input type="checkbox" id="lr-enabled" ${x.enabled ? 'checked' : ''} style="width:auto; margin:0;"> Running (untick to pause)</label>
+    <label>Lights in this routine</label>
+    <div style="max-height:220px; overflow:auto; border:1px solid var(--card-border); border-radius:8px; padding:6px 10px;">
+      ${named.length ? named.map((p) => {
+        const inThis = r && p.schedule_mode === 'routine' && p.routine_id === r.id;
+        const elsewhere = p.schedule_mode === 'routine' && (!r || p.routine_id !== r.id) ? LIGHTS.routines.find((q) => q.id === p.routine_id) : null;
+        return `<label style="display:flex; gap:6px; align-items:center; margin:4px 0;"><input type="checkbox" class="lr-plug" value="${p.id}" ${inThis ? 'checked' : ''} style="width:auto; margin:0;">${escapeHtml(p.name)}<span class="muted" style="font-size:12px;">${escapeHtml(p.group_name || '')}${elsewhere ? ` · now in ${escapeHtml(elsewhere.name)}` : p.schedule_mode === 'own' ? ' · own schedule' : ''}</span></label>`;
+      }).join('') : '<p class="muted">Name some plugs first.</p>'}
+    </div>
+    <p class="muted" style="font-size:12px;">A light follows one routine. Ticking one that’s in another routine moves it here.</p>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <button class="primary" style="margin:0;" onclick="saveLightRoutine('${id}')">Save routine</button>
+      <button class="secondary" style="margin:0;" onclick="LIGHT_EDIT=null; renderLightRoutines();">Cancel</button>
+      ${r ? `<button class="ghost" style="margin:0 0 0 auto;" onclick="if (confirm('Delete this routine? Its lights keep their names but lose this schedule.')) deleteLightRoutine(${r.id})">Delete</button>` : ''}
+    </div>
+  </div>`;
+}
+
+async function saveLightRoutine(id) {
+  const body = {
+    name: document.getElementById('lr-name').value,
+    days: [...document.querySelectorAll('.lr-day:checked')].map((c) => Number(c.value)),
+    onKind: document.getElementById('lr-on-kind').value, onTime: document.getElementById('lr-on-time').value, onOffset: Number(document.getElementById('lr-on-offset').value) || 0,
+    offKind: document.getElementById('lr-off-kind').value, offTime: document.getElementById('lr-off-time').value, offOffset: Number(document.getElementById('lr-off-offset').value) || 0,
+    enabled: document.getElementById('lr-enabled').checked,
+    plugIds: [...document.querySelectorAll('.lr-plug:checked')].map((c) => Number(c.value)),
+  };
+  try {
+    await api(`/api/venue-control/sites/${lightsLocation()}/lights/routines${id === 'new' ? '' : `/${id}/update`}`, { method: 'POST', body });
+    LIGHT_EDIT = null;
+    showMsg('Routine saved. The box picks it up within 30 seconds.', 'success');
+    await loadLightsAdmin(lightsLocation());
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+async function deleteLightRoutine(id) {
+  try {
+    await api(`/api/venue-control/sites/${lightsLocation()}/lights/routines/${id}/delete`, { method: 'POST', body: {} });
+    LIGHT_EDIT = null;
+    await loadLightsAdmin(lightsLocation());
+  } catch (e) { showMsg(e.message, 'error'); }
 }

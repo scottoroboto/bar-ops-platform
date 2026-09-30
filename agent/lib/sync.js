@@ -107,6 +107,34 @@ async function musicWrite(path, body) {
   return data;
 }
 
+// Lights (cloud patch_049): plugs found on the network (new ones arrive
+// unnamed; known ones get their current address), each plug's live state
+// once a minute, and a schedule change made on the iPad.
+async function pushPlugsSeen(plugs) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/plugs/seen`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ plugs }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `plugs push failed: ${res.status}`);
+  if (data.added) { try { await pullConfig(); } catch (e) { /* next pull */ } }
+  return data;
+}
+async function pushPlugStatus(states) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/plugs/status`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ states }),
+  });
+  if (!res.ok) throw new Error(`plug status push failed: ${res.status}`);
+}
+async function plugScheduleWrite(plugId, schedule, actor) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/plugs/${plugId}/schedule`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ schedule, actor }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `plug schedule write failed: ${res.status}`);
+  try { await pullConfig(); } catch (e) { /* next pull */ }
+  return data;
+}
+
 // WAN port link states off the gateway (lib/unifi-local.js wanLinks) --
 // the cloud lights the board's CABLE WAN / CELL WAN tiles from these.
 async function pushWans(wans) {
@@ -260,6 +288,15 @@ async function pushActivity(entries) {
 // reports back as an error rather than being silently skipped, so a future
 // command type added cloud-side-only-so-far fails loudly instead of just
 // sitting there forever looking "picked up" with nothing happening.
+// Checked every 5 seconds as well as on the 30s heartbeat, so a Blink or a
+// scan from TV Admin starts within a few seconds. One poll at a time.
+let commandsBusy = false;
+async function pollCommandsOnce() {
+  if (commandsBusy) return;
+  commandsBusy = true;
+  try { await pollCommands(); } finally { commandsBusy = false; }
+}
+
 async function pollCommands() {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/commands`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`commands poll failed: ${res.status} ${await res.text()}`);
@@ -315,6 +352,19 @@ async function runCommand(cmd) {
       } else {
         throw new Error(`"${tv.name}" has no control method the box can nudge (${tv.control_method || 'none'}).`);
       }
+    } else if (cmd.type === 'kasa_scan') {
+      // "Find plugs" in TV Admin → Lights (cloud patch_049).
+      const r = await require('./lights').discover((cmd.payload || {}).ranges || []);
+      if (r.error) throw new Error(`Found ${r.found} plug(s) but couldn't report them: ${r.error}`);
+      result = { found: r.found, added: r.added };
+    } else if (cmd.type === 'kasa_blink') {
+      // "Blink" next to a plug in TV Admin: flash that sign twice.
+      const payload = cmd.payload || {};
+      const lights = require('./lights');
+      if (lights.plugById(payload.plugId)) await lights.blink(payload.plugId);
+      else if (payload.ip) await require('./drivers/kasa').blink({ ip: payload.ip });
+      else throw new Error('This plug hasn’t been found on the network yet.');
+      result = { ok: true };
     } else if (cmd.type === 'speedtest') {
       // "Test now" from Systems Monitoring. Same run-and-report as the
       // scheduled test; the cloud files the numbers on the bar's line.
@@ -362,6 +412,8 @@ async function maybeTakeNightlyBackup() {
 }
 
 let timer = null;
+let commandTimer = null;
+const COMMAND_POLL_MS = 5 * 1000;
 
 function start() {
   if (!AGENT_TOKEN) {
@@ -384,22 +436,26 @@ function start() {
     try {
       await pullConfig();
       await heartbeat();
-      await pollCommands();
+      await pollCommandsOnce();
       await maybeTakeNightlyBackup();
     } catch (err) {
       console.error('[sync] poll failed:', err.message);
       cache.set('lastHeartbeatOk', false);
     }
   }, POLL_MS);
+  commandTimer = setInterval(() => { pollCommandsOnce().catch(() => {}); }, COMMAND_POLL_MS);
 }
 
 function stop() {
   if (timer) clearInterval(timer);
+  if (commandTimer) clearInterval(commandTimer);
   timer = null;
+  commandTimer = null;
 }
 
 module.exports = {
   musicWrite,
+  pushPlugsSeen, pushPlugStatus, plugScheduleWrite,
   pushWans,
   pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
