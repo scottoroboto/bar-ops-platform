@@ -99,7 +99,7 @@ async function getDashboard(client, { locationId, tierScope } = {}) {
   );
   // Where each source stands now (last count plus/minus everything
   // since, e.g. a closing drop or a manager's top-up) and what it should
-  // hold today: $400 for a drawer, tonight's amount for the change bag.
+  // hold today: $400 for a drawer, tonight's amount for the bank bag.
   const businessDate = await currentBusinessDate(client);
   for (const row of rows) {
     if (row.is_atm) continue;
@@ -119,7 +119,7 @@ async function currentBusinessDate(client) {
   return rows[0].d;
 }
 
-// The change bag's amount for a business date: a special-event amount if
+// The bank bag's amount for a business date: a special-event amount if
 // one is set, else that weekday's amount, else its plain target. 0 means
 // no amount set yet.
 async function bagTargetFor(client, source, businessDate) {

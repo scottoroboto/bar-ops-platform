@@ -54,7 +54,7 @@ function sourceStatus(s) {
   return { dot: '#e0a83e', label: `${fmtMoney(v)} over` };
 }
 
-// How far a drawer or the change bag is under what it should start the
+// How far a drawer or the bank bag is under what it should start the
 // next shift with (a short closing station, a light bag). 0 when it's fine.
 function sourceShortBy(s) {
   if (s.balance === undefined || s.balance === null || !(Number(s.current_target) > 0)) return 0;
@@ -1124,10 +1124,10 @@ function renderReveal(count, returnTo) {
 // ---------------------------------------------------------------------
 // Shifts — what bartenders logged on the bar iPad's Cash Out (opening
 // and closing counts, closing drops), plus the settings behind it: the
-// alert amount (owner) and the change bag's amount by weekday and for
+// alert amount (owner) and the bank bag's amount by weekday and for
 // special events (full authority).
 // ---------------------------------------------------------------------
-const SHIFT_ROLE_LABELS = { opening: 'Opening', pre_close: 'Pre-close', bag: 'Change bag', closing_station: 'Closing station' };
+const SHIFT_ROLE_LABELS = { opening: 'Opening', pre_close: 'Pre-close', bag: 'Bank bag', closing_station: 'Closing station' };
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 let SHIFT_SETTINGS = null;
 
@@ -1178,7 +1178,7 @@ function shiftSettingsHtml(st) {
             <div style="flex:1; min-width:140px;"><label>Event</label><input id="bagEventLabel" placeholder="e.g. UFC night"></div>
             <button class="small primary" onclick="addBagEvent('${bag.id}')">Add</button>
           </div>` : ''}
-      ` : '<p class="muted">This bar has no change bag.</p>'}
+      ` : '<p class="muted">This bar has no bank bag.</p>'}
     </div>`;
 }
 
