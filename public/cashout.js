@@ -13,6 +13,26 @@ const S = {
   setupToken: null, setupLocations: [],
 };
 
+// Opened from Venue Control's Cash Out tab: ?back= is the TV Staff page
+// on the bar's Pi. Only a plain http(s) address on the bar's own network
+// (private IP or .local) is accepted, so the link can't be pointed at
+// some other site. Kept for the session so it survives the whole count.
+const BACK_KEY = 'co_back';
+function backUrl() {
+  const fromQuery = new URLSearchParams(location.search).get('back');
+  const candidate = fromQuery || (() => { try { return sessionStorage.getItem(BACK_KEY); } catch (e) { return null; } })();
+  if (!candidate) return null;
+  let u;
+  try { u = new URL(candidate); } catch (e) { return null; }
+  const host = u.hostname;
+  const local = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) || host.endsWith('.local') || host === 'localhost';
+  if (!/^https?:$/.test(u.protocol) || !local) return null;
+  try { sessionStorage.setItem(BACK_KEY, u.href); } catch (e) { /* private mode */ }
+  return u.href;
+}
+const BACK = backUrl();
+if (BACK && location.search) history.replaceState(null, '', location.pathname);
+
 function money(n) { return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function main() { return document.getElementById('coMain'); }
 function errHtml() { return S.error ? `<div class="co-err">${escapeHtml(S.error)}</div>` : ''; }
@@ -35,7 +55,7 @@ async function load() {
   if (!token) return renderSetup();
   try {
     S.ctx = await call('GET', '/api/cashout/kiosk?deviceToken=' + encodeURIComponent(token));
-    document.getElementById('coBar').innerHTML = `Cash Out<b>${escapeHtml(S.ctx.location.name)}</b>`;
+    document.getElementById('coBar').innerHTML = `Cash Out<b>${escapeHtml(S.ctx.location.name)}</b>${BACK ? '<a href="#" data-act="back-vc" style="display:block; margin-top:4px; color:var(--accent); font-size:15px;">‹ Back to TVs</a>' : ''}`;
     reset();
   } catch (e) {
     if (e.status === 403) return renderSetup();
@@ -181,9 +201,9 @@ function renderResult(r) {
     body = `<div class="ok">✓</div><p>Closing count saved. Nothing to drop. Leave everything in ${escapeHtml(r.closingName)}.</p>`;
   }
   main().innerHTML = `<div class="co-result">${body}</div>
-    <div class="co-actions"><button class="co-btn primary" data-act="home">Done</button></div>`;
+    <div class="co-actions"><button class="co-btn primary" data-act="${BACK ? 'back-vc' : 'home'}">Done</button></div>`;
   clearTimeout(S.resultTimer);
-  S.resultTimer = setTimeout(() => { if (S.screen === 'result') reset(); }, RESULT_MS);
+  S.resultTimer = setTimeout(() => { if (S.screen === 'result') { if (BACK) goBack(); else reset(); } }, RESULT_MS);
 }
 
 // ---- Actions -----------------------------------------------------------
@@ -252,7 +272,7 @@ async function submit() {
   }
 }
 
-main().addEventListener('click', (ev) => {
+document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-act]');
   if (!el || el.disabled) return;
   const act = el.dataset.act;
@@ -260,6 +280,7 @@ main().addEventListener('click', (ev) => {
   switch (act) {
     case 'retry': return load();
     case 'home': return reset();
+    case 'back-vc': ev.preventDefault(); return goBack();
     case 'person':
       S.person = S.ctx.bartenders.find(p => p.id === id) || null;
       S.pin = ''; S.error = '';
@@ -288,6 +309,12 @@ main().addEventListener('click', (ev) => {
     default: return undefined;
   }
 });
+
+function goBack() {
+  if (!BACK) return reset();
+  reset();
+  location.href = BACK;
+}
 
 // Any touch keeps the screen alive; 90s idle mid-count goes back to the
 // name list and drops the pass, so nobody walks up to someone else's count.
