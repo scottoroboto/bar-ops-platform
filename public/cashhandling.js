@@ -241,8 +241,21 @@ function historyHtml(counts) {
       <div style="text-align:right;">
         <div class="ch-amt">${fmtMoney(c.counted_amount)}</div>
         <span class="badge ${Number(c.variance) === 0 ? 'on' : 'danger'}">${Number(c.variance) === 0 ? 'Matched' : (Number(c.variance) < 0 ? fmtMoney(Math.abs(c.variance)) + ' short' : fmtMoney(c.variance) + ' over')}</span>
+        ${c.receipt_path ? `<div><a href="#" onclick="viewCountReceipt('${c.id}'); return false;" class="muted" style="font-size:12px;">ATM receipt</a></div>` : ''}
       </div>
     </div>`).join('')}</div>`;
+}
+
+async function viewCountReceipt(countId) {
+  // Open the tab first (Safari blocks window.open after an await), then point it at the signed URL.
+  const w = window.open('', '_blank');
+  try {
+    const { url } = await api(`/api/cashhandling/counts/${countId}/receipt`);
+    if (w) w.location = url; else location.href = url;
+  } catch (e) {
+    if (w) w.close();
+    showMsg(e.message, 'error');
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -470,7 +483,11 @@ function auditTogglesHtml(s) {
     <label class="toggle-row" style="gap:8px;">
       <span class="label" style="font-size:12px;">Random Audit pool</span>
       <span class="switch"><input type="checkbox" ${s.include_random_audit ? 'checked' : ''} onchange="toggleSourceAuditFlag('${s.id}', 'includeRandomAudit', this.checked)"><span class="slider"></span></span>
-    </label>`;
+    </label>${s.kind === 'fixed_point' ? `
+    <label class="toggle-row" style="gap:8px;">
+      <span class="label" style="font-size:12px;">ATM ($20s only, receipt photo at every count)</span>
+      <span class="switch"><input type="checkbox" ${s.is_atm ? 'checked' : ''} onchange="toggleSourceAuditFlag('${s.id}', 'isAtm', this.checked)"><span class="slider"></span></span>
+    </label>` : ''}`;
 }
 
 function manageSourceRowHtml(s, sub) {
@@ -737,7 +754,7 @@ function openAuditItemEntry(kind, sourceId, sourceName) {
     <div class="card">
       <h2>Count ${escapeHtml(sourceName)}</h2>
       <p class="blind-note">Blind — count it now, then enter how many of each. No target is shown.</p>
-      ${denomCalcHtml(`auditItemAmount-${kind}`)}
+      ${denomCalcHtml(`auditItemAmount-${kind}`, denomsForSourceId(sourceId))}
       <label>Note (optional)</label>
       <textarea id="auditItemNote-${kind}" rows="2"></textarea>
       <div style="display:flex; gap:10px;">
@@ -829,7 +846,7 @@ function openRandomAuditEntry() {
     <div class="card" id="randomAuditEntryCard">
       <h2>Count ${escapeHtml(RANDOM_ASSIGNMENT.source_name)}</h2>
       <p class="blind-note">Blind — count it now, then enter how many of each. No target is shown.</p>
-      ${denomCalcHtml('randomAuditAmount')}
+      ${denomCalcHtml('randomAuditAmount', denomsForSourceId(RANDOM_ASSIGNMENT.source_id))}
       <label>Note (optional)</label>
       <textarea id="randomAuditNote" rows="2"></textarea>
       <div style="display:flex; gap:10px;">
@@ -900,22 +917,26 @@ async function renderOwnDrawerFlow() {
 // ---------------------------------------------------------------------
 const DENOMINATIONS = [100, 50, 20, 10, 5, 2, 1, 0.25];
 
-function denomCalcHtml(idPrefix) {
+// ATMs (patch_044) only hold $20s: their counter is one row, no Other.
+function denomsFor(source) { return source && source.is_atm ? [20] : DENOMINATIONS; }
+function denomsForSourceId(sourceId) { return denomsFor(DASHBOARD_SOURCES.find(s => s.id === sourceId)); }
+function denomCalcHtml(idPrefix, denoms = DENOMINATIONS) {
+  const onlyBills = denoms !== DENOMINATIONS;
   return `
     <div class="denom-calc" id="${idPrefix}-denomcalc">
-      ${DENOMINATIONS.map(d => `
+      ${denoms.map(d => `
         <div class="denom-row">
           <span class="denom-label">${d >= 1 ? '$' + d : '25¢'}</span>
           <input type="number" inputmode="numeric" min="0" step="1" class="denom-qty" data-value="${d}" placeholder="0" oninput="updateDenomTotal('${idPrefix}')">
           <span class="denom-line">$0.00</span>
         </div>`).join('')}
-      <div class="denom-row denom-other-row">
+      ${onlyBills ? '' : `<div class="denom-row denom-other-row">
         <span class="denom-label">Other</span>
         <div class="denom-other-input">
           <span class="prefix-sm">$</span>
           <input type="number" inputmode="decimal" min="0" step="0.01" class="denom-other" placeholder="0.00" oninput="updateDenomTotal('${idPrefix}')">
         </div>
-      </div>
+      </div>`}
       <div class="denom-total-row">
         <span class="denom-total-label">Total counted</span>
         <span class="denom-total-value" id="${idPrefix}-totaldisplay">$0.00</span>
@@ -937,7 +958,7 @@ function updateDenomTotal(idPrefix) {
     row.querySelector('.denom-line').textContent = fmtMoney(line);
   });
   const otherEl = wrap.querySelector('.denom-other');
-  total += Math.max(0, Number(otherEl.value) || 0);
+  if (otherEl) total += Math.max(0, Number(otherEl.value) || 0);
   document.getElementById(idPrefix).value = total.toFixed(2);
   const totalDisplay = document.getElementById(`${idPrefix}-totaldisplay`);
   if (totalDisplay) totalDisplay.textContent = fmtMoney(total);
@@ -975,13 +996,25 @@ function renderCountEntry(source, opts) {
       <h2>Cash out ${escapeHtml(source.name)}</h2>
       ${onBehalf ? `<p class="muted">On behalf of <b style="color:var(--text);">${escapeHtml(onBehalf)}</b>.</p>` : ''}
       <p class="blind-note">Count it now, then enter how many of each below. This is blind — no target amount is shown, so what you type is never just a copy of a number on screen. It's checked against the ledger only after you submit.</p>
-      ${denomCalcHtml('countAmount')}
+      ${source.is_atm ? '<p class="muted" style="margin:0 0 8px;">This ATM only holds $20 bills. Enter how many.</p>' : ''}
+      ${denomCalcHtml('countAmount', denomsFor(source))}
+      ${source.is_atm ? `
+      <label for="countReceipt">Photo of the ATM balance receipt (required)</label>
+      <input type="file" id="countReceipt" accept="image/*" capture="environment" onchange="previewCountReceipt(this)">
+      <div id="countReceiptPreview"></div>` : ''}
       <label>Note (optional)</label>
       <textarea id="countNote" rows="2" placeholder="Anything worth flagging about this count"></textarea>
       <button class="primary" onclick="submitCount('${source.id}', ${onBehalf ? `'${source.assigned_person_id}'` : 'null'}, '${opts.returnTo}')">Log this count</button>
     </div>
   `;
   focusDenomCalc('countAmount');
+}
+
+function previewCountReceipt(input) {
+  const box = document.getElementById('countReceiptPreview');
+  if (!box) return;
+  const f = input.files && input.files[0];
+  box.innerHTML = f ? `<img src="${URL.createObjectURL(f)}" alt="Receipt photo" style="max-width:220px; max-height:220px; border-radius:8px; margin:8px 0; display:block;">` : '';
 }
 
 function backFromCountEntry(returnTo) {
@@ -997,11 +1030,23 @@ async function submitCount(sourceId, onBehalfOf, returnTo) {
     return;
   }
   const note = document.getElementById('countNote').value.trim();
+  const receiptEl = document.getElementById('countReceipt');
+  if (receiptEl && !receiptEl.files.length) { showMsg('Take a photo of the ATM balance receipt first.', 'error'); return; }
   try {
-    const result = await api(`/api/cashhandling/sources/${sourceId}/count`, {
-      method: 'POST',
-      body: { countedAmount: amount, note: note || undefined, onBehalfOf: onBehalfOf || undefined },
-    });
+    let result;
+    if (receiptEl) {
+      const form = new FormData();
+      form.append('countedAmount', String(amount));
+      if (note) form.append('note', note);
+      if (onBehalfOf) form.append('onBehalfOf', onBehalfOf);
+      form.append('receipt', receiptEl.files[0]);
+      result = await apiUpload(`/api/cashhandling/sources/${sourceId}/count`, form);
+    } else {
+      result = await api(`/api/cashhandling/sources/${sourceId}/count`, {
+        method: 'POST',
+        body: { countedAmount: amount, note: note || undefined, onBehalfOf: onBehalfOf || undefined },
+      });
+    }
     renderReveal(result.count, returnTo);
   } catch (e) {
     showMsg(e.message, 'error');
@@ -1009,6 +1054,16 @@ async function submitCount(sourceId, onBehalfOf, returnTo) {
 }
 
 function renderReveal(count, returnTo) {
+  if (count.opening) {
+    document.getElementById('panelMain').innerHTML = `
+    <h1 class="page-title">Logged</h1>
+    <div class="reveal-tiles">
+      <div class="card"><div class="l">Opening balance</div><div class="n">${fmtMoney(count.counted_amount)}</div></div>
+    </div>
+    <p class="muted">First count for this source, so this is its starting balance. Every count from here is checked against it plus any transactions.</p>
+    <button class="primary" onclick="${returnTo === 'own' ? 'renderOwnDrawerFlow()' : 'renderManagerShell()'}">Done</button>`;
+    return;
+  }
   const v = Number(count.variance);
   const varClass = v === 0 ? 'match' : (v < 0 ? 'short' : 'over');
   const varLabel = v === 0 ? 'Matched — no variance' : (v < 0 ? `${fmtMoney(Math.abs(v))} short` : `${fmtMoney(v)} over`);

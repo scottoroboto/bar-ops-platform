@@ -3381,7 +3381,15 @@ app.get('/api/cashhandling/sources/:id', auth.requireSession('light'), async (re
 // route above) ever includes expected_amount/variance ahead of this
 // INSERT — this is the one and only place that reveal happens, and only
 // after the count is already logged.
-app.post('/api/cashhandling/sources/:id/count', auth.requireSession('light'), async (req, res) => {
+// ATM counts carry a photo of the machine's balance receipt (patch_044),
+// so this route also takes multipart; a plain JSON count still works.
+const countReceiptUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } }).single('receipt');
+app.post('/api/cashhandling/sources/:id/count', auth.requireSession('light'), (req, res, next) => {
+  countReceiptUpload(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Could not read the photo.' });
+    next();
+  });
+}, async (req, res) => {
   const result = await withServiceClient(async (client) => {
     const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
     if (tier === 'no_access') return { error: 'Cash Handling isn’t turned on for your account yet — ask your manager.' };
@@ -3396,11 +3404,16 @@ app.post('/api/cashhandling/sources/:id/count', auth.requireSession('light'), as
     if (!canCount) return { error: 'You don’t have access to count this source.' };
     const amount = Number(req.body.countedAmount);
     if (!Number.isFinite(amount) || amount < 0) return { error: 'Enter a valid amount.' };
-    const count = await cashhandling.submitCount(client, {
-      sourceId: source.id, countedBy: req.person.id, onBehalfOf, countedAmount: amount,
-      note: req.body.note || null, context: 'cash_out',
-    });
-    return { count };
+    if (source.is_atm && !req.file) return { error: 'Take a photo of the ATM balance receipt first.', status: 400 };
+    try {
+      const count = await cashhandling.submitCount(client, {
+        sourceId: source.id, countedBy: req.person.id, onBehalfOf: onBehalfOf, countedAmount: amount,
+        note: req.body.note || null, context: 'cash_out', receiptFile: req.file || null, locationId: source.location_id,
+      });
+      return { count };
+    } catch (e) {
+      return { error: e.message, status: e.statusCode || 500 };
+    }
   });
   if (result && result.error) return res.status(result.status || 403).json(result);
   res.json(result);
@@ -3496,6 +3509,24 @@ app.get('/api/cashhandling/transactions', auth.requireSession('light'), async (r
 // Never hands back the raw bucket path — always a freshly minted,
 // short-lived signed URL (server/storage.js), so a stale/shared link
 // can't be replayed indefinitely against a private bucket.
+// The ATM balance receipt photographed with a count (patch_044). Same
+// short-lived signed URL as transaction receipts; the count's bar has to
+// be one of the viewer's.
+app.get('/api/cashhandling/counts/:id/receipt', auth.requireSession('light'), async (req, res) => {
+  const result = await withServiceClient(async (client) => {
+    const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+    if (!cashhandling.tierAtLeast(tier, 'drawers_bags')) return { error: 'Not available at your Cash Handling access.' };
+    if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return { error: 'Not found.', status: 404 };
+    const row = await cashhandling.getCountReceiptUrl(client, req.params.id);
+    if (!row || !atMyLocation(req.person, row.location_id)) return { error: 'Not found.', status: 404 };
+    if (!row.receipt_path) return { error: 'No receipt on this count.', status: 404 };
+    try { return { url: await storage.getSignedReceiptUrl(row.receipt_path) }; }
+    catch (e) { return { error: e.message, status: 500 }; }
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+});
+
 app.get('/api/cashhandling/transactions/:id/receipt', auth.requireSession('light'), async (req, res) => {
   const result = await withServiceClient(async (client) => {
     const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
@@ -3617,6 +3648,7 @@ app.post('/api/cashhandling/sources/:id/update', auth.requireSession('full'), as
   if (req.body.assignedPersonId !== undefined) fields.assigned_person_id = req.body.assignedPersonId || null;
   if (req.body.includeWeeklyAudit !== undefined) fields.include_weekly_audit = !!req.body.includeWeeklyAudit;
   if (req.body.includeRandomAudit !== undefined) fields.include_random_audit = !!req.body.includeRandomAudit;
+  if (req.body.isAtm !== undefined) fields.is_atm = !!req.body.isAtm;
   const source = await withServiceClient((client) => cashhandling.updateSource(client, req.params.id, fields));
   if (!source) return res.status(404).json({ error: 'Not found.' });
   res.json({ source });

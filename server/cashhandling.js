@@ -164,20 +164,55 @@ async function computeExpectedAmount(client, sourceId) {
 // The three audit FK params (Phase 4) are how a count row says which
 // checklist/assignment produced it; all three stay null for an ordinary
 // cash_out.
+// Opening count (patch_044): a source that has never been counted, has
+// no target baseline and has no transactions yet has no honest "expected"
+// — the first count IS the starting balance. Without this, the first
+// count of a $280 ATM read as "$280 over" against an expected $0.
+async function isOpeningCount(client, sourceId) {
+  const { rows } = await client.query(
+    `SELECT
+       (SELECT count(*) FROM cash_counts WHERE source_id = $1) AS counts,
+       (SELECT count(*) FROM cash_transactions WHERE to_source_id = $1 OR from_source_id = $1) AS txns,
+       (SELECT target_amount FROM cash_sources WHERE id = $1) AS target`,
+    [sourceId]
+  );
+  const r = rows[0] || {};
+  return Number(r.counts) === 0 && Number(r.txns) === 0 && Number(r.target || 0) === 0;
+}
+
 async function submitCount(client, {
   sourceId, countedBy, onBehalfOf, countedAmount, note, context,
-  weeklyAuditId, manualAuditId, randomAssignmentId,
+  weeklyAuditId, manualAuditId, randomAssignmentId, receiptFile, locationId,
 }) {
-  const expected = await computeExpectedAmount(client, sourceId);
+  const opening = await isOpeningCount(client, sourceId);
+  const expected = opening ? Number(countedAmount) : await computeExpectedAmount(client, sourceId);
+  // Same id-first shape as transactions: mint the id, upload the receipt
+  // under it, then one INSERT with receipt_path already set.
+  const id = crypto.randomUUID();
+  let receiptPath = null;
+  if (receiptFile) {
+    if (!/^image\//.test(receiptFile.mimetype || '')) throw Object.assign(new Error('The receipt has to be a photo.'), { statusCode: 400 });
+    receiptPath = await storage.uploadReceipt({
+      buffer: receiptFile.buffer, mimetype: receiptFile.mimetype, transactionId: id, locationId,
+    });
+  }
   const { rows } = await client.query(
     `INSERT INTO cash_counts
-       (source_id, counted_by, on_behalf_of, context, counted_amount, expected_amount, note,
-        weekly_audit_id, manual_audit_id, random_assignment_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-    [sourceId, countedBy, onBehalfOf || null, context || 'cash_out', countedAmount, expected, note || null,
-      weeklyAuditId || null, manualAuditId || null, randomAssignmentId || null]
+       (id, source_id, counted_by, on_behalf_of, context, counted_amount, expected_amount, note,
+        weekly_audit_id, manual_audit_id, random_assignment_id, receipt_path)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    [id, sourceId, countedBy, onBehalfOf || null, context || 'cash_out', countedAmount, expected, note || null,
+      weeklyAuditId || null, manualAuditId || null, randomAssignmentId || null, receiptPath]
   );
-  return rows[0];
+  return { ...rows[0], opening };
+}
+
+async function getCountReceiptUrl(client, countId) {
+  const { rows } = await client.query(
+    `SELECT cc.receipt_path, cs.location_id FROM cash_counts cc JOIN cash_sources cs ON cs.id = cc.source_id WHERE cc.id = $1`,
+    [countId]
+  );
+  return rows[0] || null;
 }
 
 // Count history for review screens — kept separate from anything a
@@ -566,7 +601,7 @@ async function reactivateSource(client, sourceId) {
 }
 
 async function updateSource(client, sourceId, fields) {
-  const settable = ['name', 'target_amount', 'assigned_person_id', 'include_weekly_audit', 'include_random_audit'];
+  const settable = ['name', 'target_amount', 'assigned_person_id', 'include_weekly_audit', 'include_random_audit', 'is_atm'];
   const sets = [];
   const params = [];
   for (const key of settable) {
@@ -927,6 +962,7 @@ module.exports = {
   listRetiredSources,  
   reactivateSource,
   updateSource,
+  getCountReceiptUrl,
   startAudit,
   getAudit,
   getAuditChecklist,
