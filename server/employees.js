@@ -263,7 +263,7 @@ async function activateEmployee({ personId, appAccess, networkAccess, activatedB
       username = base;
       let n = 1;
       while (true) {
-        const { rows: clash } = await client.query('SELECT 1 FROM people WHERE username = $1', [username]);
+        const { rows: clash } = await client.query('SELECT 1 FROM people WHERE lower(username) = lower($1)', [username]);
         if (clash.length === 0) break;
         n += 1;
         username = `${base}${n}`;

@@ -110,7 +110,7 @@ return !['off', 'false', '0', 'no'].includes(String(process.env.FIRST_LOGIN_CODE
 async function loginWithPassword({ username, password, ip }) {
 await throttleIp(ip);
 return withServiceClient(async (client) => {
-const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.username = $1', [username]);
+const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE lower(p.username) = lower($1)', [String(username || '').trim()]);
 const person = rows[0];
 if (!person || person.status !== 'active' || !person.password_hash) {
 noteIpMiss(ip);
@@ -197,7 +197,7 @@ return { ok: true, token, person: publicPerson(person) };
 async function loginWithPin({ username, pin, deviceToken, ip }) {
 await throttleIp(ip);
 return withServiceClient(async (client) => {
-const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE p.username = $1', [username]);
+const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE lower(p.username) = lower($1)', [String(username || '').trim()]);
 const person = rows[0];
 if (!person || person.status !== 'active' || !person.pin_hash) {
 noteIpMiss(ip);

@@ -25,7 +25,7 @@
     <h2>Sign in with your PIN</h2>
     <p class="muted">For day-to-day use — including the shared iPad behind the bar.</p>
     <label for="pinUsername">Username</label>
-    <input id="pinUsername" autocomplete="username" placeholder="e.g. jamie.test">
+    <input id="pinUsername" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="e.g. jamie.test">
     <label for="pinPin">PIN</label>
     <input id="pinPin" type="password" inputmode="numeric" maxlength="8" placeholder="••••">
     <button class="primary" onclick="doPinLogin()">Sign in</button>
@@ -37,7 +37,7 @@
     <p class="muted">Use this the first time you ever log in, or whenever a sensitive action asks you to re-verify.</p>
     <div id="passwordStep">
       <label for="fullUsername">Username</label>
-      <input id="fullUsername" autocomplete="username" placeholder="e.g. jamie.test">
+      <input id="fullUsername" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="e.g. jamie.test">
       <label for="fullPassword">Password</label>
       <input id="fullPassword" type="password" autocomplete="current-password">
       <button class="primary" onclick="doPasswordLogin()">Continue</button>
@@ -61,7 +61,7 @@
     <div id="forgotResult"></div>
     <div id="forgotForm">
       <label for="forgotUsername">Username</label>
-      <input id="forgotUsername" autocomplete="username" placeholder="e.g. jamie.test">
+      <input id="forgotUsername" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="e.g. jamie.test">
       <label for="forgotType">What did you forget?</label>
       <select id="forgotType">
         <option value="both">Both my password and PIN</option>

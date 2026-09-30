@@ -34,7 +34,7 @@ async function requestReset({ username, requestType, note }) {
 
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, name, email FROM people WHERE username = $1 AND status = 'active'`,
+      `SELECT id, name, email FROM people WHERE lower(username) = lower($1) AND status = 'active'`,
       [(username || '').trim()]
     );
     const person = rows[0];
