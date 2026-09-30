@@ -269,6 +269,45 @@ async function blink(plug) {
   return before;
 }
 
+// ---- Wi-Fi setup for a brand-new plug ---------------------------------------
+// A factory-new (or reset) plug makes its own setup network and sits at
+// 192.168.0.1 on it. From a laptop joined to that network, these list the
+// networks the plug can see and hand it the bar's Wi-Fi. No Kasa account
+// involved, so the plug stays unlinked (blank login) like the others.
+// Same commands python-kasa uses: netif, falling back to the soft-AP
+// onboarding module some models use instead.
+async function wifiCommand(plug, method, params) {
+  let lastErr = null;
+  for (const mod of ['netif', 'smartlife.iot.common.softaponboarding']) {
+    try {
+      const { out } = await request(plug, { [mod]: { [method]: params } });
+      const r = out && out[mod] && out[mod][method];
+      if (r && (r.err_code === 0 || r.err_code === undefined)) return r;
+      lastErr = new Error(`Plug said no (${r ? r.err_code : 'no answer'})`);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
+async function wifiScan(plug = { ip: '192.168.0.1' }) {
+  const r = await wifiCommand(plug, 'get_scaninfo', { refresh: 1 });
+  return (r.ap_list || []).map((a) => ({ ssid: a.ssid, keyType: a.key_type, signal: a.rssi !== undefined ? a.rssi : null }));
+}
+
+// Once the plug accepts this it drops its setup network and goes to join
+// the bar's Wi-Fi, so the reply sometimes never arrives -- that's normal.
+async function wifiJoin(plug = { ip: '192.168.0.1' }, ssid, password, keyType = 3) {
+  try {
+    await wifiCommand(plug, 'set_stainfo', { ssid, password, key_type: Number(keyType) });
+    return { sent: true, confirmed: true };
+  } catch (e) {
+    if (e.code === 'TIMEOUT' || /timeout|aborted|ECONNRESET|socket hang up|fetch failed/i.test(String(e.message))) return { sent: true, confirmed: false };
+    throw e;
+  }
+}
+
 // ---- Discovery ------------------------------------------------------------
 // UDP, answered by the plugs themselves: the XOR sysinfo query on 9999 and
 // the fixed probe on 20002. Broadcast only reaches the Pi's own subnet, and
@@ -357,7 +396,7 @@ function discover({ ranges = [], timeoutMs = 3500, xorPort = XOR_PORT, port2 = D
 }
 
 module.exports = {
-  getInfo, setPower, blink, discover, setAccount, normalizeMac, hostsIn,
+  getInfo, setPower, blink, discover, setAccount, normalizeMac, hostsIn, wifiScan, wifiJoin,
   // exported for tests
   _internal: { crc32, rsaDiscoveryQuery, xorEncrypt, xorDecrypt, authHash, KlapSession, KASA_SETUP_CREDS },
 };

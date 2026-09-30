@@ -30,4 +30,9 @@ if (!AGENT_TOKEN) {
   );
 }
 
-module.exports = { CLOUD_URL, AGENT_TOKEN, ADMIN_PIN, STAFF_PIN, SMARTTHINGS_TOKEN, PORT, UNIFI_URL, UNIFI_USER, UNIFI_PASS, UNIFI_SITE, SPEEDTEST_EVERY_HOURS, SONOS_IP, SONOS_PORT };
+// Only for Kasa plugs that were set up with the Kasa app (linked to a
+// TP-Link account). Plugs never linked to an account don't need it.
+const KASA_USER = process.env.KASA_USER || '';
+const KASA_PASS = process.env.KASA_PASS || '';
+
+module.exports = { KASA_USER, KASA_PASS, CLOUD_URL, AGENT_TOKEN, ADMIN_PIN, STAFF_PIN, SMARTTHINGS_TOKEN, PORT, UNIFI_URL, UNIFI_USER, UNIFI_PASS, UNIFI_SITE, SPEEDTEST_EVERY_HOURS, SONOS_IP, SONOS_PORT };

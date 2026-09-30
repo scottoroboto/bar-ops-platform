@@ -318,6 +318,8 @@ function routinePlugIds(routineId) {
 }
 
 function start() {
+  const { KASA_USER, KASA_PASS } = require('../config');
+  if (KASA_USER) kasa.setAccount({ username: KASA_USER, password: KASA_PASS });
   const safe = (fn) => () => fn().catch((e) => console.error('[lights]', e.message));
   timers.push(setInterval(safe(pollAll), POLL_MS));
   timers.push(setInterval(safe(tick), TICK_MS));
