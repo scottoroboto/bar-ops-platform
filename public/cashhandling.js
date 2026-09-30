@@ -111,6 +111,7 @@ function setTab(which) {
 
 function onLocationChange() {
   SELECTED_LOCATION_ID = document.getElementById('locSelect').value;
+  rememberLocationId(SELECTED_LOCATION_ID);
   loadDashboard();
   loadHistory();
   if (TIER === 'full_authority') loadTransactions();
@@ -1094,7 +1095,7 @@ function renderReveal(count, returnTo) {
       return;
     }
     LOCATIONS = await api('/api/locations');
-    SELECTED_LOCATION_ID = myLocationIds(ME)[0] || (LOCATIONS[0] && LOCATIONS[0].id) || null;
+    SELECTED_LOCATION_ID = initialLocationId(ME, LOCATIONS);
     if (TIER === 'own_drawer') {
       renderOwnDrawerFlow();
     } else {

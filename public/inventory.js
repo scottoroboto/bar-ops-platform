@@ -107,6 +107,7 @@ function setInvTab(which) {
 
 function onLocationChange() {
   SELECTED_LOCATION_ID = document.getElementById('locSelect').value;
+  rememberLocationId(SELECTED_LOCATION_ID);
   AREAS_CACHE = [];
   setInvTab('counts');
 }
@@ -989,7 +990,7 @@ async function retireAreaAdmin(areaId) {
       return;
     }
     LOCATIONS = await api('/api/locations');
-    SELECTED_LOCATION_ID = myLocationIds(ME)[0] || (LOCATIONS[0] && LOCATIONS[0].id) || null;
+    SELECTED_LOCATION_ID = initialLocationId(ME, LOCATIONS);
     if (tierAtLeast(TIER, 'lead')) renderManagerShell();
     else renderCounterFlow();
   } catch (e) {

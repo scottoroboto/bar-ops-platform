@@ -82,6 +82,24 @@ function myLocationIds(person) {
   return p.locationId ? [String(p.locationId)] : [];
 }
 
+// The bar a location dropdown opens on: whichever one this browser last
+// picked (shared by Cash Handling and Inventory, since whoever's at T2 is
+// at T2 for both), if this person can still pick it; otherwise their
+// first bar. Browser-only convenience, so storage failures just fall back.
+const LAST_LOCATION_KEY = 'bp_last_location';
+function initialLocationId(person, locations) {
+  const allowed = person && person.role === 'owner' ? null : myLocationIds(person);
+  try {
+    const saved = localStorage.getItem(LAST_LOCATION_KEY);
+    const match = saved && locations.find(l => String(l.id) === saved);
+    if (match && (!allowed || allowed.includes(saved))) return match.id;
+  } catch (e) { /* storage blocked: fall through */ }
+  return myLocationIds(person)[0] || (locations[0] && locations[0].id) || null;
+}
+function rememberLocationId(id) {
+  try { localStorage.setItem(LAST_LOCATION_KEY, String(id)); } catch (e) { /* storage blocked */ }
+}
+
 // "Ticket 1" -> "T1": the short location tag used on chips across the
 // app (Employees roster, Scheduling shift chips, dashboard). Anything
 // without a trailing number falls back to its first two letters.
