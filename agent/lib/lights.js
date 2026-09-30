@@ -164,6 +164,10 @@ async function pollOne(p) {
     // One miss can be Wi-Fi noise; two in a row and it shows as NO ANSWER.
     live.set(p.id, { ...st, fails, reachable: fails < 2 ? !!st.reachable : false, error: e.message });
     if (e.code === 'MOVED') scheduleDiscover(5000);
+    // Gone quiet (unplugged from the setup table and moved to its sign):
+    // look again soon rather than waiting for the 15-minute sweep, in case
+    // it came back on a new address.
+    else if (fails === 2) scheduleDiscover(45000);
   }
 }
 
