@@ -64,14 +64,19 @@ async function getDashboard(client, { locationId, tierScope } = {}) {
   const params = [];
   if (locationId) { params.push(locationId); clauses.push(`cs.location_id = $${params.length}`); }
   // drawers_bags tier never sees Fixed Cash Points (no access to them at all)
-  if (tierScope === 'drawers_bags') clauses.push(`cs.kind != 'fixed_point'`);
+  // (except the ATM, which staff load and check too — patch_045).
+  if (tierScope === 'drawers_bags') clauses.push(`(cs.kind != 'fixed_point' OR cs.is_atm)`);
   const { rows } = await client.query(
     `SELECT cs.*, l.name AS location_name,
             ap.name AS assigned_person_name,
             lc.counted_amount AS last_counted_amount,
             lc.variance AS last_variance,
             lc.counted_at AS last_counted_at,
-            cp.name AS last_counted_by_name
+            cp.name AS last_counted_by_name,
+            ab.balance_after AS atm_balance,
+            ab.entered_at AS atm_balance_at,
+            al.amount_added AS atm_last_load_amount,
+            al.entered_at AS atm_last_load_at
      FROM cash_sources cs
      JOIN locations l ON l.id = cs.location_id
      LEFT JOIN people ap ON ap.id = cs.assigned_person_id
@@ -80,6 +85,14 @@ async function getDashboard(client, { locationId, tierScope } = {}) {
        FROM cash_counts WHERE source_id = cs.id ORDER BY counted_at DESC LIMIT 1
      ) lc ON true
      LEFT JOIN people cp ON cp.id = lc.counted_by
+     LEFT JOIN LATERAL (
+       SELECT balance_after, entered_at FROM cash_atm_entries
+       WHERE source_id = cs.id AND kind IN ('load', 'balance') ORDER BY entered_at DESC LIMIT 1
+     ) ab ON cs.is_atm
+     LEFT JOIN LATERAL (
+       SELECT amount_added, entered_at FROM cash_atm_entries
+       WHERE source_id = cs.id AND kind = 'load' ORDER BY entered_at DESC LIMIT 1
+     ) al ON cs.is_atm
      WHERE ${clauses.join(' AND ')}
      ORDER BY l.name, cs.sort_order, cs.name`,
     params
@@ -180,12 +193,38 @@ async function isOpeningCount(client, sourceId) {
   return Number(r.counts) === 0 && Number(r.txns) === 0 && Number(r.target || 0) === 0;
 }
 
+// ATMs (patch_045) are never cashed out: loads and balance receipts go
+// through the ATM ledger below. The only ATM count is a cassette audit,
+// checked against the balance on a receipt printed at that moment (the
+// app never sees customer withdrawals, so nothing else is honest).
 async function submitCount(client, {
   sourceId, countedBy, onBehalfOf, countedAmount, note, context,
-  weeklyAuditId, manualAuditId, randomAssignmentId, receiptFile, locationId,
+  weeklyAuditId, manualAuditId, randomAssignmentId, receiptFile, receiptBalance,
 }) {
-  const opening = await isOpeningCount(client, sourceId);
-  const expected = opening ? Number(countedAmount) : await computeExpectedAmount(client, sourceId);
+  const source = await getSource(client, sourceId);
+  if (!source) throw Object.assign(new Error('Not found.'), { statusCode: 404 });
+  let opening = false;
+  let expected;
+  if (source.is_atm) {
+    if (!context || context === 'cash_out') {
+      throw Object.assign(new Error('ATMs are logged with Load or Balance check, not a cash-out count.'), { statusCode: 400 });
+    }
+    const rb = Number(receiptBalance);
+    if (receiptBalance === undefined || receiptBalance === null || receiptBalance === '' || !Number.isFinite(rb) || rb < 0) {
+      throw Object.assign(new Error('Enter the balance printed on the ATM receipt.'), { statusCode: 400 });
+    }
+    if (!receiptFile) throw Object.assign(new Error('Take a photo of the ATM balance receipt first.'), { statusCode: 400 });
+    expected = rb;
+    // Counting your own load checks nothing, so say so on the record.
+    const { rows: lastLoad } = await client.query(
+      `SELECT entered_by FROM cash_atm_entries WHERE source_id = $1 AND kind = 'load' ORDER BY entered_at DESC LIMIT 1`,
+      [source.id]
+    );
+    if (lastLoad[0] && lastLoad[0].entered_by === countedBy) note = (note ? note + ' · ' : '') + 'Auditor did the last load';
+  } else {
+    opening = await isOpeningCount(client, sourceId);
+    expected = opening ? Number(countedAmount) : await computeExpectedAmount(client, sourceId);
+  }
   // Same id-first shape as transactions: mint the id, upload the receipt
   // under it, then one INSERT with receipt_path already set.
   const id = crypto.randomUUID();
@@ -193,7 +232,7 @@ async function submitCount(client, {
   if (receiptFile) {
     if (!/^image\//.test(receiptFile.mimetype || '')) throw Object.assign(new Error('The receipt has to be a photo.'), { statusCode: 400 });
     receiptPath = await storage.uploadReceipt({
-      buffer: receiptFile.buffer, mimetype: receiptFile.mimetype, transactionId: id, locationId,
+      buffer: receiptFile.buffer, mimetype: receiptFile.mimetype, transactionId: id, locationId: source.location_id,
     });
   }
   const { rows } = await client.query(
@@ -204,6 +243,14 @@ async function submitCount(client, {
     [id, sourceId, countedBy, onBehalfOf || null, context || 'cash_out', countedAmount, expected, note || null,
       weeklyAuditId || null, manualAuditId || null, randomAssignmentId || null, receiptPath]
   );
+  if (source.is_atm) {
+    // The audit's receipt is also the ATM's newest balance reading.
+    await client.query(
+      `INSERT INTO cash_atm_entries (source_id, location_id, kind, balance_after, photo_path, note, count_id, entered_by)
+       VALUES ($1, $2, 'balance', $3, $4, 'Cassette audit', $5, $6)`,
+      [source.id, source.location_id, expected, receiptPath, id, countedBy]
+    );
+  }
   return { ...rows[0], opening };
 }
 
@@ -697,7 +744,7 @@ async function getAuditChecklist(kind, client, auditId) {
 // list, a source already counted this session, and anything once the
 // audit itself has been submitted (no re-opening a revealed audit to
 // sneak in a late count).
-async function submitAuditItem(kind, client, { auditId, sourceId, countedAmount, note, countedBy }) {
+async function submitAuditItem(kind, client, { auditId, sourceId, countedAmount, note, countedBy, receiptFile, receiptBalance }) {
   const kindDef = AUDIT_KINDS[kind];
   const audit = await getAudit(kind, client, auditId);
   if (!audit) throw Object.assign(new Error('Audit not found.'), { statusCode: 404 });
@@ -712,7 +759,7 @@ async function submitAuditItem(kind, client, { auditId, sourceId, countedAmount,
   );
   if (existing[0]) throw Object.assign(new Error('That source is already counted for this audit.'), { statusCode: 400 });
   const count = await submitCount(client, {
-    sourceId, countedBy, countedAmount, note, context: kindDef.context,
+    sourceId, countedBy, countedAmount, note, context: kindDef.context, receiptFile, receiptBalance,
     [kind === 'weekly' ? 'weeklyAuditId' : 'manualAuditId']: auditId,
   });
   return { counted: true, sourceId: count.source_id };
@@ -878,7 +925,7 @@ async function markMissedAssignments(client) {
 
 async function getMySystemAuditAssignment(client, personId) {
   const { rows } = await client.query(
-    `SELECT a.*, cs.name AS source_name, cs.kind AS source_kind, l.name AS location_name
+    `SELECT a.*, cs.name AS source_name, cs.kind AS source_kind, cs.is_atm AS source_is_atm, l.name AS location_name
      FROM system_random_audit_assignments a
      JOIN cash_sources cs ON cs.id = a.source_id
      JOIN locations l ON l.id = a.location_id
@@ -915,7 +962,7 @@ async function listSystemAuditAssignments(client, { locationId, limit } = {}) {
 // immediately revealed in the response (same single-shot pattern as
 // the original blind cash-out), since there's no multi-item checklist
 // to hold the reveal back for.
-async function submitSystemAuditCount(client, { assignmentId, countedBy, countedAmount, note }) {
+async function submitSystemAuditCount(client, { assignmentId, countedBy, countedAmount, note, receiptFile, receiptBalance }) {
   const { rows } = await client.query('SELECT * FROM system_random_audit_assignments WHERE id = $1', [assignmentId]);
   const assignment = rows[0];
   if (!assignment) throw Object.assign(new Error('Assignment not found.'), { statusCode: 404 });
@@ -923,7 +970,7 @@ async function submitSystemAuditCount(client, { assignmentId, countedBy, counted
   if (assignment.assigned_person_id !== countedBy) throw Object.assign(new Error("This isn't your assignment to count."), { statusCode: 403 });
   const count = await submitCount(client, {
     sourceId: assignment.source_id, countedBy, countedAmount, note,
-    context: 'system_random_audit', randomAssignmentId: assignmentId,
+    context: 'system_random_audit', randomAssignmentId: assignmentId, receiptFile, receiptBalance,
   });
   const { rows: updatedRows } = await client.query(
     `UPDATE system_random_audit_assignments SET status = 'completed', completed_at = now() WHERE id = $1 RETURNING *`,
@@ -932,7 +979,177 @@ async function submitSystemAuditCount(client, { assignmentId, countedBy, counted
   return { count, assignment: updatedRows[0] };
 }
 
+// ---------------------------------------------------------------------
+// ATM ledger (patch_045)
+// ---------------------------------------------------------------------
+// Everything here comes off the machine's own receipts: a load is the
+// receipt before, the amount keyed in and the receipt after; a balance
+// check is one receipt; the owner's monthly statement gives the total
+// customers withdrew. Photos go in the cash-receipts bucket under the
+// bar's folder, like transaction receipts.
+const BUSINESS_TZ = 'America/Chicago'; // same as server/scheduling.js
+const RECONCILE_WINDOW_HOURS = 36;     // how far a receipt may sit from a statement's period edge
+
+function atmError(message, statusCode = 400) { return Object.assign(new Error(message), { statusCode }); }
+function cents(n) { return Math.round(Number(n) * 100); }
+function fmtUsd(n) { return '$' + Number(n).toFixed(2); }
+function atmAmount(value, label, { positive } = {}) {
+  const n = Number(value);
+  if (value === undefined || value === null || value === '' || !Number.isFinite(n) || n < 0 || (positive && n <= 0)) {
+    throw atmError(`Enter ${label}.`);
+  }
+  return Math.round(n * 100) / 100;
+}
+
+async function uploadAtmPhoto(file, { id, suffix, locationId, allowPdf, what }) {
+  if (!file) throw atmError(`Add a photo of ${what}.`);
+  const ok = /^image\//.test(file.mimetype || '') || (allowPdf && file.mimetype === 'application/pdf');
+  if (!ok) throw atmError(allowPdf ? 'The statement has to be a photo or a PDF.' : 'The receipt has to be a photo.');
+  return storage.uploadReceipt({ buffer: file.buffer, mimetype: file.mimetype, transactionId: `${id}-${suffix}`, locationId });
+}
+
+async function insertAtmEntry(client, fields) {
+  const cols = Object.keys(fields);
+  const { rows } = await client.query(
+    `INSERT INTO cash_atm_entries (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING *`,
+    cols.map((c) => fields[c])
+  );
+  return rows[0];
+}
+
+async function addAtmLoad(client, { source, personId, balanceBefore, amountAdded, balanceAfter, note, photoBefore, photoAfter }) {
+  const before = atmAmount(balanceBefore, 'the starting balance from the first receipt');
+  const added = atmAmount(amountAdded, 'how much you added', { positive: true });
+  const after = atmAmount(balanceAfter, 'the new balance from the second receipt');
+  if (cents(added) % 2000 !== 0) throw atmError('The ATM only takes $20s, so the amount added has to be a multiple of $20.');
+  if (cents(before) + cents(added) !== cents(after) && !note) {
+    throw atmError(`${fmtUsd(before)} + ${fmtUsd(added)} = ${fmtUsd(before + added)}, but the second receipt says ${fmtUsd(after)}. Check the numbers, or add a note explaining the difference.`);
+  }
+  const id = crypto.randomUUID();
+  const photo_path = await uploadAtmPhoto(photoBefore, { id, suffix: 'before', locationId: source.location_id, what: 'the receipt before loading' });
+  const photo2_path = await uploadAtmPhoto(photoAfter, { id, suffix: 'after', locationId: source.location_id, what: 'the receipt after loading' });
+  return insertAtmEntry(client, {
+    id, source_id: source.id, location_id: source.location_id, kind: 'load',
+    balance_before: before, amount_added: added, balance_after: after,
+    photo_path, photo2_path, note: note || null, entered_by: personId,
+  });
+}
+
+async function addAtmBalance(client, { source, personId, balance, note, photo }) {
+  const value = atmAmount(balance, 'the balance printed on the receipt');
+  const id = crypto.randomUUID();
+  const photo_path = await uploadAtmPhoto(photo, { id, suffix: 'balance', locationId: source.location_id, what: 'the balance receipt' });
+  return insertAtmEntry(client, {
+    id, source_id: source.id, location_id: source.location_id, kind: 'balance',
+    balance_after: value, photo_path, note: note || null, entered_by: personId,
+  });
+}
+
+async function addAtmStatement(client, { source, personId, periodStart, periodEnd, withdrawn, note, photo }) {
+  const isDate = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d);
+  if (!isDate(periodStart) || !isDate(periodEnd)) throw atmError('Enter the statement’s start and end dates.');
+  if (periodEnd < periodStart) throw atmError('The end date is before the start date.');
+  const total = atmAmount(withdrawn, 'the total withdrawn');
+  const id = crypto.randomUUID();
+  const photo_path = await uploadAtmPhoto(photo, { id, suffix: 'statement', locationId: source.location_id, allowPdf: true, what: 'the statement' });
+  const entry = await insertAtmEntry(client, {
+    id, source_id: source.id, location_id: source.location_id, kind: 'statement',
+    period_start: periodStart, period_end: periodEnd, withdrawn: total,
+    photo_path, note: note || null, entered_by: personId,
+  });
+  entry.reconcile = await reconcileAtmStatement(client, entry);
+  return entry;
+}
+
+// The monthly check: the receipt nearest the start of the period, plus
+// every load logged between it and the receipt nearest the end, minus
+// what the statement says customers withdrew, should equal that end
+// receipt. It catches a load keyed into the machine but never logged
+// here (or logged wrong). A short load, where less cash went in than was
+// keyed, only shows up in a cassette audit.
+async function reconcileAtmStatement(client, st) {
+  const { rows: [edges] } = await client.query(
+    `SELECT ($1::date)::timestamp AT TIME ZONE $3 AS start_at,
+            ($2::date + 1)::timestamp AT TIME ZONE $3 AS end_at`,
+    [st.period_start, st.period_end, BUSINESS_TZ]
+  );
+  const nearest = async (at) => {
+    const { rows } = await client.query(
+      `SELECT id, kind, balance_before, balance_after, entered_at FROM cash_atm_entries
+       WHERE source_id = $1 AND kind IN ('load', 'balance')
+         AND entered_at BETWEEN $2::timestamptz - make_interval(hours => $3) AND $2::timestamptz + make_interval(hours => $3)
+       ORDER BY abs(extract(epoch FROM entered_at - $2::timestamptz)), entered_at LIMIT 1`,
+      [st.source_id, at, RECONCILE_WINDOW_HOURS]
+    );
+    return rows[0] || null;
+  };
+  const { rows: [period] } = await client.query(
+    `SELECT COALESCE(sum(amount_added), 0) AS total, count(*) AS n FROM cash_atm_entries
+     WHERE source_id = $1 AND kind = 'load' AND entered_at >= $2 AND entered_at < $3`,
+    [st.source_id, edges.start_at, edges.end_at]
+  );
+  const out = {
+    period_start_at: edges.start_at, period_end_at: edges.end_at,
+    loads_in_period: Number(period.total), load_count: Number(period.n),
+  };
+  const start = await nearest(edges.start_at);
+  const end = await nearest(edges.end_at);
+  if (!start || !end || String(start.id) === String(end.id)) {
+    out.missing = !start && !end ? 'both' : (!start ? 'start' : 'end');
+    if (start && end) out.missing = 'end';
+    return out;
+  }
+  // A load right at an edge: at the start, the balance after it counts;
+  // at the end, the balance before it (that load belongs to next month).
+  const startValue = Number(start.balance_after);
+  const endValue = Number(end.kind === 'load' ? end.balance_before : end.balance_after);
+  const { rows: [between] } = await client.query(
+    `SELECT COALESCE(sum(amount_added), 0) AS total FROM cash_atm_entries
+     WHERE source_id = $1 AND kind = 'load'
+       AND entered_at > (SELECT entered_at FROM cash_atm_entries WHERE id = $2)
+       AND entered_at < (SELECT entered_at FROM cash_atm_entries WHERE id = $3)`,
+    [st.source_id, start.id, end.id]
+  );
+  const expected = startValue + Number(between.total) - Number(st.withdrawn);
+  Object.assign(out, {
+    start_at: start.entered_at, start_balance: startValue,
+    end_at: end.entered_at, end_balance: endValue,
+    loads_between: Number(between.total),
+    expected_end: Math.round(expected * 100) / 100,
+    difference: (cents(endValue) - cents(expected)) / 100,
+  });
+  return out;
+}
+
+async function getAtmLedger(client, sourceId, { includeStatements } = {}) {
+  const { rows: entries } = await client.query(
+    `SELECT e.*, p.name AS entered_by_name FROM cash_atm_entries e JOIN people p ON p.id = e.entered_by
+     WHERE e.source_id = $1 AND e.kind <> 'statement' ORDER BY e.entered_at DESC LIMIT 60`,
+    [sourceId]
+  );
+  let statements = [];
+  if (includeStatements) {
+    ({ rows: statements } = await client.query(
+      `SELECT e.*, p.name AS entered_by_name FROM cash_atm_entries e JOIN people p ON p.id = e.entered_by
+       WHERE e.source_id = $1 AND e.kind = 'statement' ORDER BY e.period_end DESC, e.entered_at DESC LIMIT 24`,
+      [sourceId]
+    ));
+    for (const st of statements) st.reconcile = await reconcileAtmStatement(client, st);
+  }
+  return { entries, statements };
+}
+
+async function getAtmEntry(client, entryId) {
+  const { rows } = await client.query('SELECT * FROM cash_atm_entries WHERE id = $1', [entryId]);
+  return rows[0] || null;
+}
+
 module.exports = {
+  addAtmLoad,
+  addAtmBalance,
+  addAtmStatement,
+  getAtmLedger,
+  getAtmEntry,
   TIERS,
   TIER_RANK,
   tierAtLeast,

@@ -40,6 +40,7 @@ function showMsg(text, kind) {
 // statusMeta() shape (dot color + label), driven off the source's last
 // logged count rather than a live poll.
 function sourceStatus(s) {
+  if (s.is_atm) return atmStatus(s);
   if (!s.last_counted_at) return { dot: '#9aa3b2', label: 'Not counted yet' };
   const v = Number(s.last_variance);
   if (v === 0) return { dot: '#3fbf7f', label: 'OK' };
@@ -139,7 +140,7 @@ function dashboardHtml(sources, tier) {
 
   const registerTotal = drawers.reduce((sum, d) => sum + Number(d.last_counted_amount ?? d.target_amount ?? 0), 0)
     + sources.filter(s => s.kind === 'backup_bag').reduce((sum, b) => sum + Number(b.last_counted_amount ?? b.target_amount ?? 0), 0);
-  const fixedTotal = fixedPoints.reduce((sum, f) => sum + Number(f.last_counted_amount ?? f.target_amount ?? 0), 0);
+  const fixedTotal = fixedPoints.reduce((sum, f) => sum + Number((f.is_atm ? f.atm_balance : f.last_counted_amount) ?? f.target_amount ?? 0), 0);
   const varianceCount = sources.filter(s => s.last_counted_at && Number(s.last_variance) !== 0).length;
 
   let html = `
@@ -183,7 +184,7 @@ function dashboardHtml(sources, tier) {
 function sourceTileHtml(s) {
   const m = sourceStatus(s);
   return `<div class="sys-tile" style="border-left-color:${m.dot}">
-    <div class="sys-tile-head" onclick="openCountEntryFromDashboard('${s.id}')">
+    <div class="sys-tile-head" onclick="${s.is_atm ? `openAtm('${s.id}')` : `openCountEntryFromDashboard('${s.id}')`}">
       <div class="top-row">
         <div class="sys-icon">${sourceIcon(s)}</div>
         <div><div class="sys-name">${escapeHtml(s.name)}</div><div class="sys-sub">${escapeHtml(s.location_name || '')}</div></div>
@@ -486,7 +487,7 @@ function auditTogglesHtml(s) {
       <span class="switch"><input type="checkbox" ${s.include_random_audit ? 'checked' : ''} onchange="toggleSourceAuditFlag('${s.id}', 'includeRandomAudit', this.checked)"><span class="slider"></span></span>
     </label>${s.kind === 'fixed_point' ? `
     <label class="toggle-row" style="gap:8px;">
-      <span class="label" style="font-size:12px;">ATM ($20s only, receipt photo at every count)</span>
+      <span class="label" style="font-size:12px;">ATM (loads, balance receipts and statements instead of counts)</span>
       <span class="switch"><input type="checkbox" ${s.is_atm ? 'checked' : ''} onchange="toggleSourceAuditFlag('${s.id}', 'isAtm', this.checked)"><span class="slider"></span></span>
     </label>` : ''}`;
 }
@@ -751,11 +752,14 @@ function auditChecklistHtml(kind, checklist) {
 
 function openAuditItemEntry(kind, sourceId, sourceName) {
   const formEl = document.getElementById(`auditItemForm-${kind}`);
+  const item = (AUDIT_STATE[kind].items || []).find(i => i.source.id === sourceId);
+  const isAtm = !!(item && item.source.is_atm);
   formEl.innerHTML = `
     <div class="card">
       <h2>Count ${escapeHtml(sourceName)}</h2>
-      <p class="blind-note">Blind — count it now, then enter how many of each. No target is shown.</p>
-      ${denomCalcHtml(`auditItemAmount-${kind}`, denomsForSourceId(sourceId))}
+      ${isAtm ? atmAuditIntroHtml() : `<p class="blind-note">Blind — count it now, then enter how many of each. No target is shown.</p>`}
+      ${denomCalcHtml(`auditItemAmount-${kind}`, isAtm ? ATM_DENOMS : DENOMINATIONS)}
+      ${isAtm ? atmAuditReceiptHtml(`auditItem-${kind}`) : ''}
       <label>Note (optional)</label>
       <textarea id="auditItemNote-${kind}" rows="2"></textarea>
       <div style="display:flex; gap:10px;">
@@ -773,8 +777,11 @@ async function submitAuditItemAmount(kind, sourceId) {
   if (!Number.isFinite(amount) || amount < 0 || !denomCalcTouched(`auditItemAmount-${kind}`)) { showMsg('Enter the count.', 'error'); return; }
   const note = document.getElementById(`auditItemNote-${kind}`).value.trim();
   const auditId = AUDIT_STATE[kind].audit.id;
+  const atmForm = atmAuditFormData(`auditItem-${kind}`, { sourceId, countedAmount: amount, note });
+  if (atmForm === false) return;
   try {
-    await api(`${meta.base}/${auditId}/items`, { method: 'POST', body: { sourceId, countedAmount: amount, note: note || undefined } });
+    if (atmForm) await apiUpload(`${meta.base}/${auditId}/items`, atmForm);
+    else await api(`${meta.base}/${auditId}/items`, { method: 'POST', body: { sourceId, countedAmount: amount, note: note || undefined } });
     const checklist = await api(`${meta.base}/${auditId}`);
     AUDIT_STATE[kind] = checklist;
     document.getElementById(meta.panel).innerHTML = auditChecklistHtml(kind, checklist);
@@ -846,8 +853,9 @@ function openRandomAuditEntry() {
   document.getElementById('panelMain').insertAdjacentHTML('afterbegin', `
     <div class="card" id="randomAuditEntryCard">
       <h2>Count ${escapeHtml(RANDOM_ASSIGNMENT.source_name)}</h2>
-      <p class="blind-note">Blind — count it now, then enter how many of each. No target is shown.</p>
-      ${denomCalcHtml('randomAuditAmount', denomsForSourceId(RANDOM_ASSIGNMENT.source_id))}
+      ${RANDOM_ASSIGNMENT.source_is_atm ? atmAuditIntroHtml() : `<p class="blind-note">Blind — count it now, then enter how many of each. No target is shown.</p>`}
+      ${denomCalcHtml('randomAuditAmount', RANDOM_ASSIGNMENT.source_is_atm ? ATM_DENOMS : DENOMINATIONS)}
+      ${RANDOM_ASSIGNMENT.source_is_atm ? atmAuditReceiptHtml('randomAudit') : ''}
       <label>Note (optional)</label>
       <textarea id="randomAuditNote" rows="2"></textarea>
       <div style="display:flex; gap:10px;">
@@ -863,10 +871,13 @@ async function submitRandomAuditAmount() {
   const amount = Number(amountEl.value);
   if (!Number.isFinite(amount) || amount < 0 || !denomCalcTouched('randomAuditAmount')) { showMsg('Enter the count.', 'error'); return; }
   const note = document.getElementById('randomAuditNote').value.trim();
+  const atmForm = RANDOM_ASSIGNMENT.source_is_atm ? atmAuditFormData('randomAudit', { countedAmount: amount, note }) : null;
+  if (atmForm === false) return;
   try {
-    const result = await api(`/api/cashhandling/random-audit/${RANDOM_ASSIGNMENT.id}/count`, {
-      method: 'POST', body: { countedAmount: amount, note: note || undefined },
-    });
+    const path = `/api/cashhandling/random-audit/${RANDOM_ASSIGNMENT.id}/count`;
+    const result = atmForm
+      ? await apiUpload(path, atmForm)
+      : await api(path, { method: 'POST', body: { countedAmount: amount, note: note || undefined } });
     const card = document.getElementById('randomAuditEntryCard');
     if (card) card.remove();
     RANDOM_ASSIGNMENT = null;
@@ -918,10 +929,9 @@ async function renderOwnDrawerFlow() {
 // ---------------------------------------------------------------------
 const DENOMINATIONS = [100, 50, 20, 10, 5, 2, 1, 0.25];
 
-// ATMs (patch_044) only hold $20s: their counter is one row, no Other.
-function denomsFor(source) { return source && source.is_atm ? [20] : DENOMINATIONS; }
-function denomsForSourceId(sourceId) { return denomsFor(DASHBOARD_SOURCES.find(s => s.id === sourceId)); }
-function denomCalcHtml(idPrefix, denoms = DENOMINATIONS) {
+// ATMs only hold $20s: their counter is one row, no Other.
+const ATM_DENOMS = [20];
+function denomCalcHtml(idPrefix, denoms = DENOMINATIONS, totalLabel = 'Total counted') {
   const onlyBills = denoms !== DENOMINATIONS;
   return `
     <div class="denom-calc" id="${idPrefix}-denomcalc">
@@ -939,7 +949,7 @@ function denomCalcHtml(idPrefix, denoms = DENOMINATIONS) {
         </div>
       </div>`}
       <div class="denom-total-row">
-        <span class="denom-total-label">Total counted</span>
+        <span class="denom-total-label">${totalLabel}</span>
         <span class="denom-total-value" id="${idPrefix}-totaldisplay">$0.00</span>
       </div>
     </div>
@@ -997,12 +1007,7 @@ function renderCountEntry(source, opts) {
       <h2>Cash out ${escapeHtml(source.name)}</h2>
       ${onBehalf ? `<p class="muted">On behalf of <b style="color:var(--text);">${escapeHtml(onBehalf)}</b>.</p>` : ''}
       <p class="blind-note">Count it now, then enter how many of each below. This is blind — no target amount is shown, so what you type is never just a copy of a number on screen. It's checked against the ledger only after you submit.</p>
-      ${source.is_atm ? '<p class="muted" style="margin:0 0 8px;">This ATM only holds $20 bills. Enter how many.</p>' : ''}
-      ${denomCalcHtml('countAmount', denomsFor(source))}
-      ${source.is_atm ? `
-      <label for="countReceipt">Photo of the ATM balance receipt (required)</label>
-      <input type="file" id="countReceipt" accept="image/*" capture="environment" onchange="previewCountReceipt(this)">
-      <div id="countReceiptPreview"></div>` : ''}
+      ${denomCalcHtml('countAmount')}
       <label>Note (optional)</label>
       <textarea id="countNote" rows="2" placeholder="Anything worth flagging about this count"></textarea>
       <button class="primary" onclick="submitCount('${source.id}', ${onBehalf ? `'${source.assigned_person_id}'` : 'null'}, '${opts.returnTo}')">Log this count</button>
@@ -1011,11 +1016,16 @@ function renderCountEntry(source, opts) {
   focusDenomCalc('countAmount');
 }
 
-function previewCountReceipt(input) {
-  const box = document.getElementById('countReceiptPreview');
+// Thumbnail under a photo input (ATM receipts, statements). A PDF just
+// shows its name.
+function previewPhoto(input, boxId) {
+  const box = document.getElementById(boxId);
   if (!box) return;
   const f = input.files && input.files[0];
-  box.innerHTML = f ? `<img src="${URL.createObjectURL(f)}" alt="Receipt photo" style="max-width:220px; max-height:220px; border-radius:8px; margin:8px 0; display:block;">` : '';
+  if (!f) { box.innerHTML = ''; return; }
+  box.innerHTML = /^image\//.test(f.type)
+    ? `<img src="${URL.createObjectURL(f)}" alt="Photo" style="max-width:220px; max-height:220px; border-radius:8px; margin:8px 0; display:block;">`
+    : `<p class="muted" style="margin:6px 0;">${escapeHtml(f.name)}</p>`;
 }
 
 function backFromCountEntry(returnTo) {
@@ -1031,23 +1041,11 @@ async function submitCount(sourceId, onBehalfOf, returnTo) {
     return;
   }
   const note = document.getElementById('countNote').value.trim();
-  const receiptEl = document.getElementById('countReceipt');
-  if (receiptEl && !receiptEl.files.length) { showMsg('Take a photo of the ATM balance receipt first.', 'error'); return; }
   try {
-    let result;
-    if (receiptEl) {
-      const form = new FormData();
-      form.append('countedAmount', String(amount));
-      if (note) form.append('note', note);
-      if (onBehalfOf) form.append('onBehalfOf', onBehalfOf);
-      form.append('receipt', receiptEl.files[0]);
-      result = await apiUpload(`/api/cashhandling/sources/${sourceId}/count`, form);
-    } else {
-      result = await api(`/api/cashhandling/sources/${sourceId}/count`, {
-        method: 'POST',
-        body: { countedAmount: amount, note: note || undefined, onBehalfOf: onBehalfOf || undefined },
-      });
-    }
+    const result = await api(`/api/cashhandling/sources/${sourceId}/count`, {
+      method: 'POST',
+      body: { countedAmount: amount, note: note || undefined, onBehalfOf: onBehalfOf || undefined },
+    });
     renderReveal(result.count, returnTo);
   } catch (e) {
     showMsg(e.message, 'error');
@@ -1077,6 +1075,325 @@ function renderReveal(count, returnTo) {
     <div class="reveal-variance ${varClass}">${varLabel}</div>
     <button class="primary" onclick="${returnTo === 'own' ? 'renderOwnDrawerFlow()' : 'renderManagerShell()'}">Done</button>
   `;
+}
+
+// ---------------------------------------------------------------------
+// ATM (patch_045). Customers take cash out that the app never sees, so
+// the ATM is never counted against an expected amount. Its balance is
+// whatever its last receipt said: a load (receipt before, $20s added,
+// receipt after) or a balance check (one receipt). The owner enters the
+// monthly statement, which is checked against the receipts nearest the
+// start and end of its period. Only a cassette audit (weekly or random
+// audit) can come out over or short.
+// ---------------------------------------------------------------------
+let ATM_VIEW = null; // { source, entries, statements } for the open ATM
+
+// The last day of the month is when the month-end receipt is due; it
+// stays due until the 2nd of the next month.
+function atmMonthEndDue(s) {
+  const now = new Date();
+  const lastOfThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  let dueDay = null;
+  if (now.getDate() === lastOfThisMonth.getDate()) dueDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  else if (now.getDate() <= 2) dueDay = new Date(now.getFullYear(), now.getMonth(), 0);
+  if (!dueDay) return false;
+  return !s.atm_balance_at || new Date(s.atm_balance_at) < dueDay;
+}
+
+function atmStatus(s) {
+  const v = Number(s.last_variance);
+  if (s.last_counted_at && v !== 0) {
+    const bal = s.atm_balance_at ? `${fmtMoney(s.atm_balance)} · ` : '';
+    return { dot: '#e5566d', label: `${bal}audit ${fmtMoney(Math.abs(v))} ${v < 0 ? 'short' : 'over'}` };
+  }
+  if (!s.atm_balance_at) return { dot: '#9aa3b2', label: 'No receipt yet' };
+  if (atmMonthEndDue(s)) return { dot: '#e0a83e', label: `${fmtMoney(s.atm_balance)} · month-end receipt due` };
+  return { dot: '#3fbf7f', label: `Balance ${fmtMoney(s.atm_balance)}` };
+}
+
+function atmPhotoInputHtml(id, label, { pdf } = {}) {
+  return `
+    <label for="${id}">${label}</label>
+    <input type="file" id="${id}" accept="${pdf ? 'image/*,application/pdf' : 'image/*'}" ${pdf ? '' : 'capture="environment"'} onchange="previewPhoto(this, '${id}-preview')">
+    <div id="${id}-preview"></div>`;
+}
+
+function atmMoneyInputHtml(id, label, oninput) {
+  return `
+    <label for="${id}">${label}</label>
+    <input type="number" id="${id}" inputmode="decimal" min="0" step="0.01" placeholder="0.00" ${oninput ? `oninput="${oninput}"` : ''}>`;
+}
+
+async function openAtm(sourceId) {
+  showMsg('');
+  const main = document.getElementById('panelMain');
+  main.innerHTML = '<div class="card"><p class="muted">Loading…</p></div>';
+  try {
+    ATM_VIEW = await api(`/api/cashhandling/atm/${sourceId}`);
+    renderAtm();
+  } catch (e) {
+    main.innerHTML = `<a href="#" onclick="renderManagerShell(); return false;" class="muted">‹ Back</a>
+      <div class="card" style="margin-top:12px;"><p class="msg error">${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderAtm() {
+  const { source, entries, statements } = ATM_VIEW;
+  const isOwner = ME.role === 'owner';
+  const latest = entries.find(e => e.kind === 'load' || e.kind === 'balance');
+  const lastLoad = entries.find(e => e.kind === 'load');
+  document.getElementById('panelMain').innerHTML = `
+    <a href="#" onclick="renderManagerShell(); return false;" class="muted">‹ Back</a>
+    <div class="detail-head" style="margin-top:10px;">
+      <div class="detail-icon">${sourceIcon(source)}</div>
+      <div><div class="detail-title">${escapeHtml(source.name)}</div><div class="detail-loc">${escapeHtml(source.location_name || '')}</div></div>
+    </div>
+    <div class="reveal-tiles" style="margin-top:16px;">
+      <div class="card"><div class="l">Balance</div><div class="n">${latest ? fmtMoney(latest.balance_after) : '—'}</div>
+        <div class="muted" style="font-size:12px;">${latest ? `Receipt ${fmtDateTime(latest.entered_at)} · ${escapeHtml(latest.entered_by_name)}` : 'No receipt logged yet'}</div></div>
+      <div class="card"><div class="l">Last load</div><div class="n">${lastLoad ? fmtMoney(lastLoad.amount_added) : '—'}</div>
+        <div class="muted" style="font-size:12px;">${lastLoad ? `${fmtDateTime(lastLoad.entered_at)} · ${escapeHtml(lastLoad.entered_by_name)}` : 'None yet'}</div></div>
+    </div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="primary" onclick="openAtmLoadForm()">Load ATM</button>
+      <button class="secondary" onclick="openAtmBalanceForm()">Balance check</button>
+      ${isOwner ? `<button class="secondary" onclick="openAtmStatementForm()">Monthly statement</button>` : ''}
+    </div>
+    <div id="atmForm"></div>
+    ${isOwner ? `<h2 style="margin-top:22px;">Monthly statements</h2>${atmStatementsHtml(statements)}` : ''}
+    <h2 style="margin-top:22px;">Activity</h2>
+    ${atmEntriesHtml(entries)}`;
+}
+
+function atmEntriesHtml(entries) {
+  if (!entries.length) return `<div class="card"><p class="muted">Nothing logged yet.</p></div>`;
+  return `<div class="card" style="padding:0;">${entries.map(e => {
+    const photos = [
+      e.photo_path ? `<a href="#" onclick="viewAtmPhoto('${e.id}', 1); return false;">${e.kind === 'load' ? 'Receipt before' : 'Receipt'}</a>` : '',
+      e.photo2_path ? `<a href="#" onclick="viewAtmPhoto('${e.id}', 2); return false;">Receipt after</a>` : '',
+    ].filter(Boolean).join(' · ');
+    const off = e.kind === 'load' && Math.round((Number(e.balance_before) + Number(e.amount_added)) * 100) !== Math.round(Number(e.balance_after) * 100);
+    return `<div class="list-row">
+      <div>
+        <div class="name">${e.kind === 'load' ? `Loaded ${fmtMoney(e.amount_added)}` : (e.count_id ? 'Cassette audit receipt' : 'Balance check')}</div>
+        <div class="sub">${fmtDateTime(e.entered_at)} · ${escapeHtml(e.entered_by_name)}${e.note ? ' · “' + escapeHtml(e.note) + '”' : ''}</div>
+        ${photos ? `<div class="sub">${photos}</div>` : ''}
+      </div>
+      <div style="text-align:right;">
+        <div class="ch-amt">${fmtMoney(e.balance_after)}</div>
+        ${e.kind === 'load' ? `<div class="sub">${fmtMoney(e.balance_before)} before</div>` : ''}
+        ${off ? `<span class="badge danger">Receipts don’t add up</span>` : ''}
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function atmStatementsHtml(statements) {
+  if (!statements.length) return `<div class="card"><p class="muted">No statements entered yet.</p></div>`;
+  return `<div class="card" style="padding:0;">${statements.map(st => {
+    const r = st.reconcile || {};
+    let badge;
+    let detail;
+    if (r.missing) {
+      const which = r.missing === 'both' ? 'the start and end' : `the ${r.missing}`;
+      badge = `<span class="badge">Can’t check yet</span>`;
+      detail = `No balance receipt within a day and a half of ${which} of this period. Log a balance check close to those dates to check it.`;
+    } else {
+      const d = Number(r.difference);
+      badge = d === 0 ? `<span class="badge on">Matches</span>` : `<span class="badge danger">${fmtMoney(Math.abs(d))} ${d < 0 ? 'short' : 'over'}</span>`;
+      detail = `Receipt ${fmtDateTime(r.start_at)}: ${fmtMoney(r.start_balance)} + loads ${fmtMoney(r.loads_between)} − withdrawn ${fmtMoney(st.withdrawn)} = ${fmtMoney(r.expected_end)}. Receipt ${fmtDateTime(r.end_at)}: ${fmtMoney(r.end_balance)}.`;
+    }
+    return `<div class="list-row">
+      <div>
+        <div class="name">${fmtDate(st.period_start)} – ${fmtDate(st.period_end)}</div>
+        <div class="sub">Withdrawn ${fmtMoney(st.withdrawn)} · loaded ${fmtMoney(r.loads_in_period || 0)} in ${r.load_count || 0} load${r.load_count === 1 ? '' : 's'} (compare with the bank)</div>
+        <div class="sub">${escapeHtml(detail)}</div>
+        <div class="sub">${st.photo_path ? `<a href="#" onclick="viewAtmPhoto('${st.id}', 1); return false;">Statement</a>` : ''}${st.note ? ' · “' + escapeHtml(st.note) + '”' : ''}</div>
+      </div>
+      <div style="text-align:right;">${badge}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function closeAtmForm() { document.getElementById('atmForm').innerHTML = ''; }
+
+function openAtmLoadForm() {
+  document.getElementById('atmForm').innerHTML = `
+    <div class="card" style="margin-top:14px;">
+      <h2>Load ATM</h2>
+      <p class="muted">1. Print a balance receipt before you add anything.</p>
+      ${atmPhotoInputHtml('atmLoadPhotoBefore', 'Photo of the receipt before loading')}
+      ${atmMoneyInputHtml('atmLoadBefore', 'Balance on that receipt', 'updateAtmLoadCheck()')}
+      <p class="muted" style="margin-top:14px;">2. How many $20s did you add?</p>
+      ${denomCalcHtml('atmLoadAdded', ATM_DENOMS, 'Total added')}
+      <p class="muted" style="margin-top:14px;">3. Key it in, then print a new balance receipt.</p>
+      ${atmPhotoInputHtml('atmLoadPhotoAfter', 'Photo of the receipt after loading')}
+      ${atmMoneyInputHtml('atmLoadAfter', 'New balance on that receipt', 'updateAtmLoadCheck()')}
+      <div id="atmLoadCheck" style="margin:10px 0;"></div>
+      <label>Note (optional, required if the receipts don’t add up)</label>
+      <textarea id="atmLoadNote" rows="2"></textarea>
+      <div style="display:flex; gap:10px;">
+        <button class="secondary" onclick="closeAtmForm()">Cancel</button>
+        <button class="primary" onclick="submitAtmLoad()">Log this load</button>
+      </div>
+    </div>`;
+  document.querySelector('#atmLoadAdded-denomcalc .denom-qty').addEventListener('input', updateAtmLoadCheck);
+}
+
+function updateAtmLoadCheck() {
+  const box = document.getElementById('atmLoadCheck');
+  if (!box) return;
+  const beforeRaw = document.getElementById('atmLoadBefore').value;
+  const afterRaw = document.getElementById('atmLoadAfter').value;
+  const added = Number(document.getElementById('atmLoadAdded').value) || 0;
+  if (beforeRaw === '' || afterRaw === '' || !added) { box.innerHTML = ''; return; }
+  const sum = Number(beforeRaw) + added;
+  const ok = Math.round(sum * 100) === Math.round(Number(afterRaw) * 100);
+  box.innerHTML = ok
+    ? `<span class="badge on">${fmtMoney(beforeRaw)} + ${fmtMoney(added)} = ${fmtMoney(afterRaw)} ✓</span>`
+    : `<span class="badge danger">${fmtMoney(beforeRaw)} + ${fmtMoney(added)} = ${fmtMoney(sum)}, but the receipt says ${fmtMoney(afterRaw)}</span>`;
+}
+
+async function submitAtmLoad() {
+  const photoBefore = document.getElementById('atmLoadPhotoBefore').files[0];
+  const photoAfter = document.getElementById('atmLoadPhotoAfter').files[0];
+  const before = document.getElementById('atmLoadBefore').value;
+  const after = document.getElementById('atmLoadAfter').value;
+  const added = Number(document.getElementById('atmLoadAdded').value) || 0;
+  if (!photoBefore) { showMsg('Take a photo of the receipt before loading.', 'error'); return; }
+  if (before === '') { showMsg('Enter the balance on the first receipt.', 'error'); return; }
+  if (!added) { showMsg('Enter how many $20s you added.', 'error'); return; }
+  if (!photoAfter) { showMsg('Take a photo of the receipt after loading.', 'error'); return; }
+  if (after === '') { showMsg('Enter the balance on the second receipt.', 'error'); return; }
+  const form = new FormData();
+  form.append('balanceBefore', before);
+  form.append('amountAdded', String(added));
+  form.append('balanceAfter', after);
+  const note = document.getElementById('atmLoadNote').value.trim();
+  if (note) form.append('note', note);
+  form.append('photo', photoBefore);
+  form.append('photo2', photoAfter);
+  await submitAtmForm('load', form, 'Load logged.');
+}
+
+function openAtmBalanceForm() {
+  document.getElementById('atmForm').innerHTML = `
+    <div class="card" style="margin-top:14px;">
+      <h2>Balance check</h2>
+      <p class="muted">Print a balance receipt. No counting — just the receipt. Do one on the last day of every month so the statement can be checked.</p>
+      ${atmPhotoInputHtml('atmBalancePhoto', 'Photo of the balance receipt')}
+      ${atmMoneyInputHtml('atmBalanceAmount', 'Balance on the receipt')}
+      <label>Note (optional)</label>
+      <textarea id="atmBalanceNote" rows="2"></textarea>
+      <div style="display:flex; gap:10px;">
+        <button class="secondary" onclick="closeAtmForm()">Cancel</button>
+        <button class="primary" onclick="submitAtmBalance()">Log balance</button>
+      </div>
+    </div>`;
+}
+
+async function submitAtmBalance() {
+  const photo = document.getElementById('atmBalancePhoto').files[0];
+  const balance = document.getElementById('atmBalanceAmount').value;
+  if (!photo) { showMsg('Take a photo of the balance receipt first.', 'error'); return; }
+  if (balance === '') { showMsg('Enter the balance on the receipt.', 'error'); return; }
+  const form = new FormData();
+  form.append('balance', balance);
+  const note = document.getElementById('atmBalanceNote').value.trim();
+  if (note) form.append('note', note);
+  form.append('photo', photo);
+  await submitAtmForm('balance', form, 'Balance logged.');
+}
+
+function openAtmStatementForm() {
+  // Default to last calendar month, the usual statement period.
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const last = new Date(now.getFullYear(), now.getMonth(), 0);
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  document.getElementById('atmForm').innerHTML = `
+    <div class="card" style="margin-top:14px;">
+      <h2>Monthly statement</h2>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <div><label for="atmStmtStart">Period start</label><input type="date" id="atmStmtStart" value="${iso(first)}"></div>
+        <div><label for="atmStmtEnd">Period end</label><input type="date" id="atmStmtEnd" value="${iso(last)}"></div>
+      </div>
+      ${atmMoneyInputHtml('atmStmtWithdrawn', 'Total withdrawn')}
+      ${atmPhotoInputHtml('atmStmtPhoto', 'Photo or PDF of the statement', { pdf: true })}
+      <label>Note (optional)</label>
+      <textarea id="atmStmtNote" rows="2"></textarea>
+      <div style="display:flex; gap:10px;">
+        <button class="secondary" onclick="closeAtmForm()">Cancel</button>
+        <button class="primary" onclick="submitAtmStatement()">Save statement</button>
+      </div>
+    </div>`;
+}
+
+async function submitAtmStatement() {
+  const photo = document.getElementById('atmStmtPhoto').files[0];
+  const withdrawn = document.getElementById('atmStmtWithdrawn').value;
+  if (withdrawn === '') { showMsg('Enter the total withdrawn.', 'error'); return; }
+  if (!photo) { showMsg('Add a photo or PDF of the statement.', 'error'); return; }
+  const form = new FormData();
+  form.append('periodStart', document.getElementById('atmStmtStart').value);
+  form.append('periodEnd', document.getElementById('atmStmtEnd').value);
+  form.append('withdrawn', withdrawn);
+  const note = document.getElementById('atmStmtNote').value.trim();
+  if (note) form.append('note', note);
+  form.append('photo', photo);
+  await submitAtmForm('statement', form, 'Statement saved.');
+}
+
+async function submitAtmForm(kind, form, doneText) {
+  const sourceId = ATM_VIEW.source.id;
+  try {
+    await apiUpload(`/api/cashhandling/atm/${sourceId}/${kind}`, form);
+    await openAtm(sourceId);
+    showMsg(doneText, 'success');
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
+}
+
+async function viewAtmPhoto(entryId, n) {
+  // Open the tab first (Safari blocks window.open after an await).
+  const w = window.open('', '_blank');
+  try {
+    const { url } = await api(`/api/cashhandling/atm/entries/${entryId}/photo${n === 2 ? '?n=2' : ''}`);
+    if (w) w.location = url; else location.href = url;
+  } catch (e) {
+    if (w) w.close();
+    showMsg(e.message, 'error');
+  }
+}
+
+// Cassette audit: count the $20s, print a receipt, and the count is
+// checked against that receipt's balance.
+function atmAuditIntroHtml() {
+  return `<p class="blind-note">Cassette audit: pull the cassette and count the $20s, then print a balance receipt. Your count is checked against the receipt.</p>`;
+}
+
+function atmAuditReceiptHtml(prefix) {
+  return `
+    ${atmPhotoInputHtml(`${prefix}-receipt`, 'Photo of the balance receipt')}
+    ${atmMoneyInputHtml(`${prefix}-receiptBalance`, 'Balance on the receipt')}`;
+}
+
+// null when this isn't an ATM form, false when a required field is
+// missing (message already shown), else the multipart body.
+function atmAuditFormData(prefix, { sourceId, countedAmount, note }) {
+  const photoEl = document.getElementById(`${prefix}-receipt`);
+  if (!photoEl) return null;
+  const balance = document.getElementById(`${prefix}-receiptBalance`).value;
+  if (!photoEl.files.length) { showMsg('Take a photo of the balance receipt first.', 'error'); return false; }
+  if (balance === '') { showMsg('Enter the balance on the receipt.', 'error'); return false; }
+  const form = new FormData();
+  if (sourceId) form.append('sourceId', sourceId);
+  form.append('countedAmount', String(countedAmount));
+  form.append('receiptBalance', balance);
+  if (note) form.append('note', note);
+  form.append('receipt', photoEl.files[0]);
+  return form;
 }
 
 // ---------------------------------------------------------------------

@@ -3381,15 +3381,8 @@ app.get('/api/cashhandling/sources/:id', auth.requireSession('light'), async (re
 // route above) ever includes expected_amount/variance ahead of this
 // INSERT — this is the one and only place that reveal happens, and only
 // after the count is already logged.
-// ATM counts carry a photo of the machine's balance receipt (patch_044),
-// so this route also takes multipart; a plain JSON count still works.
-const countReceiptUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } }).single('receipt');
-app.post('/api/cashhandling/sources/:id/count', auth.requireSession('light'), (req, res, next) => {
-  countReceiptUpload(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message || 'Could not read the photo.' });
-    next();
-  });
-}, async (req, res) => {
+// ATMs are never cashed out here (patch_045): see the ATM ledger routes.
+app.post('/api/cashhandling/sources/:id/count', auth.requireSession('light'), async (req, res) => {
   const result = await withServiceClient(async (client) => {
     const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
     if (tier === 'no_access') return { error: 'Cash Handling isn’t turned on for your account yet — ask your manager.' };
@@ -3404,11 +3397,10 @@ app.post('/api/cashhandling/sources/:id/count', auth.requireSession('light'), (r
     if (!canCount) return { error: 'You don’t have access to count this source.' };
     const amount = Number(req.body.countedAmount);
     if (!Number.isFinite(amount) || amount < 0) return { error: 'Enter a valid amount.' };
-    if (source.is_atm && !req.file) return { error: 'Take a photo of the ATM balance receipt first.', status: 400 };
     try {
       const count = await cashhandling.submitCount(client, {
         sourceId: source.id, countedBy: req.person.id, onBehalfOf: onBehalfOf, countedAmount: amount,
-        note: req.body.note || null, context: 'cash_out', receiptFile: req.file || null, locationId: source.location_id,
+        note: req.body.note || null, context: 'cash_out',
       });
       return { count };
     } catch (e) {
@@ -3509,7 +3501,7 @@ app.get('/api/cashhandling/transactions', auth.requireSession('light'), async (r
 // Never hands back the raw bucket path — always a freshly minted,
 // short-lived signed URL (server/storage.js), so a stale/shared link
 // can't be replayed indefinitely against a private bucket.
-// The ATM balance receipt photographed with a count (patch_044). Same
+// The ATM balance receipt photographed with a cassette audit. Same
 // short-lived signed URL as transaction receipts; the count's bar has to
 // be one of the viewer's.
 app.get('/api/cashhandling/counts/:id/receipt', auth.requireSession('light'), async (req, res) => {
@@ -3664,6 +3656,98 @@ app.post('/api/cashhandling/sources/:id/update', auth.requireSession('full'), as
 // 'manual') and target-source flag they use differs, so the shared
 // logic lives once in cashhandling.js and these routes stay a thin,
 // explicit pair rather than one clever generic route.
+// ---- ATM ledger (patch_045) ------------------------------------------
+// Loads and balance checks: drawers_bags and up at the ATM's bar (the
+// manager and the staff who load it). Monthly statements: owner only.
+// A cassette audit (ATM on a weekly/random audit) sends its receipt
+// photo + printed balance through withAtmAuditReceipt; a plain JSON
+// audit count still works for every other source.
+const withAtmAuditReceipt = (req, res, next) => {
+  multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } }).single('receipt')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Could not read the photo.' });
+    next();
+  });
+};
+const withAtmPhotos = (req, res, next) => {
+  multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 2 } })
+    .fields([{ name: 'photo', maxCount: 1 }, { name: 'photo2', maxCount: 1 }])(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Could not read the photo.' });
+      next();
+    });
+};
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function atmForRequest(client, req, sourceId) {
+  const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+  if (!cashhandling.tierAtLeast(tier, 'drawers_bags')) return { error: 'The ATM needs drawers-and-bags Cash Handling access or above — ask your manager.' };
+  if (!UUID_RE.test(String(sourceId))) return { error: 'Not found.', status: 404 };
+  const source = await cashhandling.getSource(client, sourceId);
+  if (!source || !source.is_atm || !source.active || !atMyLocation(req.person, source.location_id)) return { error: 'Not found.', status: 404 };
+  return { tier, source };
+}
+function atmPhoto(req, name) { return req.files && req.files[name] ? req.files[name][0] : null; }
+async function atmRoute(res, fn) {
+  const result = await withServiceClient(async (client) => {
+    try { return await fn(client); } catch (e) { return { error: e.message, status: e.statusCode || 500 }; }
+  });
+  if (result && result.error) return res.status(result.status || 403).json(result);
+  res.json(result);
+}
+
+app.get('/api/cashhandling/atm/:id', auth.requireSession('light'), (req, res) => atmRoute(res, async (client) => {
+  const atm = await atmForRequest(client, req, req.params.id);
+  if (atm.error) return atm;
+  const ledger = await cashhandling.getAtmLedger(client, atm.source.id, { includeStatements: req.person.role === 'owner' });
+  return { source: atm.source, ...ledger };
+}));
+
+app.post('/api/cashhandling/atm/:id/load', auth.requireSession('light'), withAtmPhotos, (req, res) => atmRoute(res, async (client) => {
+  const atm = await atmForRequest(client, req, req.params.id);
+  if (atm.error) return atm;
+  const entry = await cashhandling.addAtmLoad(client, {
+    source: atm.source, personId: req.person.id,
+    balanceBefore: req.body.balanceBefore, amountAdded: req.body.amountAdded, balanceAfter: req.body.balanceAfter,
+    note: (req.body.note || '').trim() || null, photoBefore: atmPhoto(req, 'photo'), photoAfter: atmPhoto(req, 'photo2'),
+  });
+  return { entry };
+}));
+
+app.post('/api/cashhandling/atm/:id/balance', auth.requireSession('light'), withAtmPhotos, (req, res) => atmRoute(res, async (client) => {
+  const atm = await atmForRequest(client, req, req.params.id);
+  if (atm.error) return atm;
+  const entry = await cashhandling.addAtmBalance(client, {
+    source: atm.source, personId: req.person.id, balance: req.body.balance,
+    note: (req.body.note || '').trim() || null, photo: atmPhoto(req, 'photo'),
+  });
+  return { entry };
+}));
+
+app.post('/api/cashhandling/atm/:id/statement', auth.requireSession('light'), withAtmPhotos, (req, res) => atmRoute(res, async (client) => {
+  if (req.person.role !== 'owner') return { error: 'Only the owner enters ATM statements.' };
+  const atm = await atmForRequest(client, req, req.params.id);
+  if (atm.error) return atm;
+  const entry = await cashhandling.addAtmStatement(client, {
+    source: atm.source, personId: req.person.id,
+    periodStart: req.body.periodStart, periodEnd: req.body.periodEnd, withdrawn: req.body.withdrawn,
+    note: (req.body.note || '').trim() || null, photo: atmPhoto(req, 'photo'),
+  });
+  return { entry };
+}));
+
+// ?n=2 for a load's second (after) receipt. Statement photos are the
+// owner's only.
+app.get('/api/cashhandling/atm/entries/:entryId/photo', auth.requireSession('light'), (req, res) => atmRoute(res, async (client) => {
+  if (!UUID_RE.test(req.params.entryId)) return { error: 'Not found.', status: 404 };
+  const entry = await cashhandling.getAtmEntry(client, req.params.entryId);
+  if (!entry) return { error: 'Not found.', status: 404 };
+  const atm = await atmForRequest(client, req, entry.source_id);
+  if (atm.error) return atm;
+  if (entry.kind === 'statement' && req.person.role !== 'owner') return { error: 'Not found.', status: 404 };
+  const path = req.query.n === '2' ? entry.photo2_path : entry.photo_path;
+  if (!path) return { error: 'No photo on this entry.', status: 404 };
+  return { url: await storage.getSignedReceiptUrl(path) };
+}));
+
 async function requireAuditAccess(client, req) {
   const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
   if (!cashhandling.tierAtLeast(tier, 'drawers_bags')) {
@@ -3710,7 +3794,7 @@ for (const kind of ['weekly', 'manual']) {
     res.json(result);
   });
 
-  app.post(`${base}/:id/items`, auth.requireSession('light'), async (req, res) => {
+  app.post(`${base}/:id/items`, auth.requireSession('light'), withAtmAuditReceipt, async (req, res) => {
     const result = await withServiceClient(async (client) => {
       const access = await requireAuditAccess(client, req);
       if (access.error) return access;
@@ -3720,6 +3804,7 @@ for (const kind of ['weekly', 'manual']) {
         return await cashhandling.submitAuditItem(kind, client, {
           auditId: req.params.id, sourceId: req.body.sourceId, countedAmount: amount,
           note: req.body.note || null, countedBy: req.person.id,
+          receiptFile: req.file || null, receiptBalance: req.body.receiptBalance,
         });
       } catch (e) {
         return { error: e.message, status: e.statusCode || 400 };
@@ -3767,13 +3852,14 @@ app.get('/api/cashhandling/random-audit/mine', auth.requireSession('light'), asy
   res.json({ assignment });
 });
 
-app.post('/api/cashhandling/random-audit/:id/count', auth.requireSession('light'), async (req, res) => {
+app.post('/api/cashhandling/random-audit/:id/count', auth.requireSession('light'), withAtmAuditReceipt, async (req, res) => {
   const result = await withServiceClient(async (client) => {
     const amount = Number(req.body.countedAmount);
     if (!Number.isFinite(amount) || amount < 0) return { error: 'Enter a valid amount.', status: 400 };
     try {
       return await cashhandling.submitSystemAuditCount(client, {
         assignmentId: req.params.id, countedBy: req.person.id, countedAmount: amount, note: req.body.note || null,
+        receiptFile: req.file || null, receiptBalance: req.body.receiptBalance,
       });
     } catch (e) {
       return { error: e.message, status: e.statusCode || 400 };
