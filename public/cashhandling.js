@@ -41,11 +41,47 @@ function showMsg(text, kind) {
 // logged count rather than a live poll.
 function sourceStatus(s) {
   if (s.is_atm) return atmStatus(s);
-  if (!s.last_counted_at) return { dot: '#9aa3b2', label: 'Not counted yet' };
+  if (!s.last_counted_at) {
+    // Never counted but money has moved in (the Drop Safe's closing drops).
+    const bal = Number(s.balance || 0);
+    return { dot: '#9aa3b2', label: bal > 0 ? `${fmtMoney(bal)} · not counted yet` : 'Not counted yet' };
+  }
   const v = Number(s.last_variance);
+  const need = sourceShortBy(s);
+  if (v === 0 && need > 0) return { dot: '#e0a83e', label: `At ${fmtMoney(s.balance)} · needs ${fmtMoney(need)}` };
   if (v === 0) return { dot: '#3fbf7f', label: 'OK' };
   if (v < 0) return { dot: '#e5566d', label: `${fmtMoney(Math.abs(v))} short` };
   return { dot: '#e0a83e', label: `${fmtMoney(v)} over` };
+}
+
+// How far a drawer or the change bag is under what it should start the
+// next shift with (a short closing station, a light bag). 0 when it's fine.
+function sourceShortBy(s) {
+  if (s.balance === undefined || s.balance === null || !(Number(s.current_target) > 0)) return 0;
+  const need = Math.round((Number(s.current_target) - Number(s.balance)) * 100) / 100;
+  return need > 0 ? need : 0;
+}
+
+// Managers with transaction rights get a one-tap top-up on a short tile:
+// a transfer into it, from the Safe by default.
+function topUpHtml(s) {
+  const need = sourceShortBy(s);
+  if (!need || TIER !== 'full_authority') return '';
+  return `<button class="small secondary" style="margin:0 12px 12px;" onclick="openTopUp('${s.id}')">Top up ${fmtMoney(need)}</button>`;
+}
+
+async function openTopUp(sourceId) {
+  const s = DASHBOARD_SOURCES.find(x => x.id === sourceId);
+  if (!s) return;
+  const need = sourceShortBy(s);
+  await setTab('transactions'); // let the list finish loading first, or it would replace the form
+  await openNewTransactionForm();
+  document.getElementById('txnType').value = 'transfer';
+  onTransactionTypeChange();
+  const safe = DASHBOARD_SOURCES.find(x => x.name === 'Safe' && x.id !== sourceId);
+  if (safe) document.getElementById('txnFromSource').value = safe.id;
+  document.getElementById('txnToSource').value = sourceId;
+  document.getElementById('txnAmount').value = need.toFixed(2);
 }
 
 function locationName(id) { const l = LOCATIONS.find(l => l.id === id); return l ? l.name : '—'; }
@@ -73,6 +109,7 @@ function renderManagerShell() {
     <div class="tabs" id="tabs">
       <button data-tab="dashboard" onclick="setTab('dashboard')">Dashboard</button>
       <button data-tab="history" onclick="setTab('history')">History</button>
+      <button data-tab="shifts" onclick="setTab('shifts')">Shifts</button>
       ${TIER === 'full_authority' ? `<button data-tab="transactions" onclick="setTab('transactions')">Transactions</button>` : ''}
       <button data-tab="weekly" onclick="setTab('weekly')">Weekly Audit</button>
       <button data-tab="manual" onclick="setTab('manual')">Random Audit</button>
@@ -80,6 +117,7 @@ function renderManagerShell() {
     </div>
     <div id="panelDashboard"></div>
     <div id="panelHistory" style="display:none;"></div>
+    <div id="panelShifts" style="display:none;"></div>
     ${TIER === 'full_authority' ? `<div id="panelTransactions" style="display:none;"></div>` : ''}
     <div id="panelWeekly" style="display:none;"></div>
     <div id="panelManual" style="display:none;"></div>
@@ -95,6 +133,7 @@ function renderManagerShell() {
 function setTab(which) {
   document.getElementById('panelDashboard').style.display = which === 'dashboard' ? '' : 'none';
   document.getElementById('panelHistory').style.display = which === 'history' ? '' : 'none';
+  document.getElementById('panelShifts').style.display = which === 'shifts' ? '' : 'none';
   const txnPanel = document.getElementById('panelTransactions');
   if (txnPanel) txnPanel.style.display = which === 'transactions' ? '' : 'none';
   document.getElementById('panelWeekly').style.display = which === 'weekly' ? '' : 'none';
@@ -104,7 +143,8 @@ function setTab(which) {
   Array.from(document.querySelectorAll('#tabs button')).forEach(b => b.classList.toggle('active', b.dataset.tab === which));
   if (which === 'dashboard') loadDashboard();
   if (which === 'history') loadHistory();
-  if (which === 'transactions') loadTransactions();
+  if (which === 'shifts') loadShifts();
+  if (which === 'transactions') return loadTransactions();
   if (which === 'weekly') loadAuditLanding('weekly');
   if (which === 'manual') loadAuditLanding('manual');
   if (which === 'sources') loadManageSources();
@@ -115,6 +155,7 @@ function onLocationChange() {
   rememberLocationId(SELECTED_LOCATION_ID);
   loadDashboard();
   loadHistory();
+  loadShifts();
   if (TIER === 'full_authority') loadTransactions();
   if (ME.role === 'owner') loadManageSources();
 }
@@ -138,9 +179,10 @@ function dashboardHtml(sources, tier) {
   const orphanBags = sources.filter(s => s.kind === 'backup_bag' && !drawers.some(d => d.linked_source_id === s.id));
   const fixedPoints = sources.filter(s => s.kind === 'fixed_point');
 
-  const registerTotal = drawers.reduce((sum, d) => sum + Number(d.last_counted_amount ?? d.target_amount ?? 0), 0)
-    + sources.filter(s => s.kind === 'backup_bag').reduce((sum, b) => sum + Number(b.last_counted_amount ?? b.target_amount ?? 0), 0);
-  const fixedTotal = fixedPoints.reduce((sum, f) => sum + Number((f.is_atm ? f.atm_balance : f.last_counted_amount) ?? f.target_amount ?? 0), 0);
+  const amountOf = (s) => Number((s.is_atm ? s.atm_balance : (s.balance ?? s.last_counted_amount)) ?? s.target_amount ?? 0);
+  const registerTotal = drawers.reduce((sum, d) => sum + amountOf(d), 0)
+    + sources.filter(s => s.kind === 'backup_bag').reduce((sum, b) => sum + amountOf(b), 0);
+  const fixedTotal = fixedPoints.reduce((sum, f) => sum + amountOf(f), 0);
   const varianceCount = sources.filter(s => s.last_counted_at && Number(s.last_variance) !== 0).length;
 
   let html = `
@@ -191,6 +233,7 @@ function sourceTileHtml(s) {
       </div>
       <div class="status-row"><span class="dot" style="background:${m.dot}"></span><span class="label" style="color:${m.dot}">${m.label}</span></div>
     </div>
+    ${topUpHtml(s)}
   </div>`;
 }
 
@@ -206,6 +249,7 @@ function drawerTileHtml(d, bag) {
       <div class="status-row"><span class="dot" style="background:${m.dot}"></span><span class="label" style="color:${m.dot}">${m.label}</span></div>
       ${bag ? `<div class="bag-chip"><span class="dot" style="background:${bagMeta.dot}"></span>${escapeHtml(bag.name)} · ${bagMeta.label}</div>` : ''}
     </div>
+    ${topUpHtml(d)}
   </div>`;
 }
 
@@ -1075,6 +1119,129 @@ function renderReveal(count, returnTo) {
     <div class="reveal-variance ${varClass}">${varLabel}</div>
     <button class="primary" onclick="${returnTo === 'own' ? 'renderOwnDrawerFlow()' : 'renderManagerShell()'}">Done</button>
   `;
+}
+
+// ---------------------------------------------------------------------
+// Shifts — what bartenders logged on the bar iPad's Cash Out (opening
+// and closing counts, closing drops), plus the settings behind it: the
+// alert amount (owner) and the change bag's amount by weekday and for
+// special events (full authority).
+// ---------------------------------------------------------------------
+const SHIFT_ROLE_LABELS = { opening: 'Opening', pre_close: 'Pre-close', bag: 'Change bag', closing_station: 'Closing station' };
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+let SHIFT_SETTINGS = null;
+
+async function loadShifts() {
+  const el = document.getElementById('panelShifts');
+  if (!el) return;
+  el.innerHTML = '<div class="card"><p class="muted">Loading…</p></div>';
+  const q = SELECTED_LOCATION_ID ? `?locationId=${SELECTED_LOCATION_ID}` : '';
+  try {
+    const [settings, list] = await Promise.all([api('/api/cashhandling/shift-settings' + q), api('/api/cashhandling/shifts' + q)]);
+    SHIFT_SETTINGS = settings;
+    el.innerHTML = shiftSettingsHtml(settings) + shiftListHtml(list.shifts || [], settings.threshold);
+  } catch (e) {
+    el.innerHTML = `<div class="card"><p class="msg error">${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+function shiftSettingsHtml(st) {
+  const canEditBag = TIER === 'full_authority';
+  const isOwner = ME.role === 'owner';
+  const bag = st.bag;
+  return `
+    <div class="card">
+      <h2>Cash Out settings</h2>
+      <p class="muted">Bartenders log opening and closing counts on the bar iPad at <b>${escapeHtml(location.origin)}/cashout.html</b>. A count off by more than the alert amount emails and texts this bar’s managers and the owner.</p>
+      <label>Alert when a count is off by more than</label>
+      ${isOwner
+        ? `<div style="display:flex; gap:10px; align-items:center;"><input type="number" inputmode="decimal" min="0" step="1" id="shiftThreshold" value="${Number(st.threshold)}" style="max-width:140px;"><button class="small primary" style="margin-top:0;" onclick="saveShiftThreshold()">Save</button></div>`
+        : `<p><b>${fmtMoney(st.threshold)}</b></p>`}
+      ${bag ? `
+        <label style="margin-top:16px;">${escapeHtml(bag.name)} amount by night</label>
+        <div style="display:grid; grid-template-columns:repeat(7, 1fr); gap:6px;">
+          ${WEEKDAYS.map((d, i) => `<div><div class="muted" style="font-size:12px; text-align:center;">${d}</div>
+            <input type="number" inputmode="decimal" min="0" step="1" class="bag-day" data-day="${i}" value="${bag.dayTargets[i] ? Number(bag.dayTargets[i]) : ''}" placeholder="0" ${canEditBag ? '' : 'disabled'} style="padding:8px 4px; text-align:center;"></div>`).join('')}
+        </div>
+        ${canEditBag ? `<button class="small primary" onclick="saveBagDays('${bag.id}')">Save bag amounts</button>` : ''}
+        <label style="margin-top:16px;">Special events</label>
+        ${st.events.length ? st.events.map(ev => `
+          <div class="list-row">
+            <div><div class="name">${fmtDate(ev.business_date)}${ev.label ? ' · ' + escapeHtml(ev.label) : ''}</div></div>
+            <div style="display:flex; gap:10px; align-items:center;"><b>${fmtMoney(ev.amount)}</b>
+              ${canEditBag ? `<button class="small secondary" style="margin-top:0;" onclick="deleteBagEvent('${ev.id}')">Remove</button>` : ''}</div>
+          </div>`).join('') : '<p class="muted">None coming up.</p>'}
+        ${canEditBag ? `
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+            <div><label>Night of</label><input type="date" id="bagEventDate"></div>
+            <div><label>Amount</label><input type="number" inputmode="decimal" min="0" step="1" id="bagEventAmount" style="max-width:120px;"></div>
+            <div style="flex:1; min-width:140px;"><label>Event</label><input id="bagEventLabel" placeholder="e.g. UFC night"></div>
+            <button class="small primary" onclick="addBagEvent('${bag.id}')">Add</button>
+          </div>` : ''}
+      ` : '<p class="muted">This bar has no change bag.</p>'}
+    </div>`;
+}
+
+function shiftListHtml(shifts, threshold) {
+  if (!shifts.length) return `<div class="card"><p class="muted">No opening or closing counts from the iPad yet.</p></div>`;
+  return shifts.map(s => {
+    const head = `${s.kind === 'opening' ? 'Opening' : 'Closing'} · ${fmtDateTime(s.created_at)} · ${escapeHtml(s.person_name)}`;
+    const sub = s.kind === 'closing'
+      ? `Closing station: ${escapeHtml(s.closing_name || '—')}${Number(s.drop_amount) > 0 ? ` · dropped ${fmtMoney(s.drop_amount)}` : ' · no drop'}`
+      : 'Every drawer counted';
+    return `<div class="card" style="padding:0;">
+      <div class="list-row" style="border-bottom:1px solid var(--card-border);">
+        <div><div class="name">${head}</div><div class="sub">${sub}</div></div>
+        ${s.flagged_count ? `<span class="badge danger">${s.flagged_count} off</span>` : '<span class="badge on">OK</span>'}
+      </div>
+      ${s.counts.map(c => {
+        const v = Number(c.variance);
+        const off = Math.abs(v) > Number(threshold);
+        const note = c.shift_role === 'closing_station'
+          ? '<span class="muted" style="font-size:12px;">checked against the POS report</span>'
+          : (v === 0 ? '<span class="badge on">Matched</span>'
+            : `<span class="badge ${off ? 'danger' : ''}">${fmtMoney(Math.abs(v))} ${v < 0 ? 'short' : 'over'}</span>`);
+        return `<div class="list-row">
+          <div><div class="name">${escapeHtml(c.source_name)}</div><div class="sub">${SHIFT_ROLE_LABELS[c.shift_role] || ''}${c.shift_role !== 'closing_station' ? ' · should be ' + fmtMoney(c.expected_amount) : ''}</div></div>
+          <div style="text-align:right;"><div class="ch-amt">${fmtMoney(c.counted_amount)}</div>${note}</div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+}
+
+async function saveShiftThreshold() {
+  try {
+    await api('/api/cashhandling/shift-settings/threshold', { method: 'POST', body: { amount: document.getElementById('shiftThreshold').value } });
+    showMsg('Alert amount saved.', 'success');
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+async function saveBagDays(bagId) {
+  const dayTargets = Array.from(document.querySelectorAll('.bag-day')).sort((a, b) => a.dataset.day - b.dataset.day).map(i => i.value);
+  try {
+    await api(`/api/cashhandling/bags/${bagId}/day-targets`, { method: 'POST', body: { dayTargets } });
+    showMsg('Bag amounts saved.', 'success');
+    loadShifts();
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+async function addBagEvent(bagId) {
+  try {
+    await api(`/api/cashhandling/bags/${bagId}/events`, { method: 'POST', body: {
+      date: document.getElementById('bagEventDate').value,
+      amount: document.getElementById('bagEventAmount').value,
+      label: document.getElementById('bagEventLabel').value,
+    } });
+    loadShifts();
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+async function deleteBagEvent(eventId) {
+  try {
+    await api(`/api/cashhandling/bag-events/${eventId}/delete`, { method: 'POST' });
+    loadShifts();
+  } catch (e) { showMsg(e.message, 'error'); }
 }
 
 // ---------------------------------------------------------------------

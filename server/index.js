@@ -12,6 +12,7 @@ const servicecalls = require('./servicecalls');
 const monitoring = require('./monitoring');
 const scheduling = require('./scheduling');
 const cashhandling = require('./cashhandling');
+const cashout = require('./cashout');
 const inventorycontrol = require('./inventorycontrol');
 const amusement = require('./amusement');
 const notify = require('./notify');
@@ -3746,6 +3747,89 @@ app.get('/api/cashhandling/atm/entries/:entryId/photo', auth.requireSession('lig
   const path = req.query.n === '2' ? entry.photo2_path : entry.photo_path;
   if (!path) return { error: 'No photo on this entry.', status: 404 };
   return { url: await storage.getSignedReceiptUrl(path) };
+}));
+
+// ---- Cash Out: shift counts from the bar iPad (patch_046) -------------
+// The iPad proves itself with its device token; the bartender with their
+// PIN, which buys a 10-minute Cash Out pass, never an app session. See
+// server/cashout.js.
+async function cashoutRoute(res, fn) {
+  try { res.json(await fn()); } catch (e) {
+    if (!e.statusCode) console.error('[cashout]', e);
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'Something went wrong. Try again.' });
+  }
+}
+app.get('/api/cashout/kiosk', (req, res) => cashoutRoute(res, () => cashout.kioskContext({ deviceToken: req.query.deviceToken })));
+app.post('/api/cashout/sign-in', (req, res) => cashoutRoute(res, () => cashout.signIn({
+  deviceToken: req.body.deviceToken, personId: req.body.personId, pin: req.body.pin, ip: clientPublicIp(req),
+})));
+app.post('/api/cashout/submit', (req, res) => cashoutRoute(res, () => cashout.submitShift({
+  deviceToken: req.body.deviceToken, pass: req.body.pass, kind: req.body.kind,
+  counts: req.body.counts, closingSourceId: req.body.closingSourceId,
+})));
+// Owner only: trust this iPad for Cash Out at one bar.
+app.post('/api/cashout/setup', auth.requireSession('full'), async (req, res) => {
+  if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can set up a Cash Out iPad.' });
+  const { locationId } = req.body;
+  if (!UUID_RE.test(String(locationId || ''))) return res.status(400).json({ error: 'Pick the bar.' });
+  const label = String(req.body.label || 'Cash Out iPad').slice(0, 80);
+  const token = crypto.randomBytes(24).toString('base64url');
+  await withServiceClient((client) => client.query(
+    'INSERT INTO devices (location_id, label, device_token, trusted_by) VALUES ($1,$2,$3,$4)',
+    [locationId, label, token, req.person.id]
+  ));
+  res.json({ ok: true, deviceToken: token });
+});
+
+// Cash Handling → Shifts: what the iPad logged, and the settings behind it.
+async function shiftAccess(client, req, minTier, locationId) {
+  const tier = await cashhandling.getEffectiveCashTier(client, req.person.id);
+  if (!cashhandling.tierAtLeast(tier, minTier)) return { error: 'Not available at your Cash Handling access.' };
+  if (!locationId || !atMyLocation(req.person, locationId)) return { error: 'Pick a bar.', status: 400 };
+  return { tier };
+}
+app.get('/api/cashhandling/shifts', auth.requireSession('light'), (req, res) => atmRoute(res, async (client) => {
+  const locationId = pickLocation(req.person, req.query.locationId);
+  const access = await shiftAccess(client, req, 'drawers_bags', locationId);
+  if (access.error) return access;
+  return { shifts: await cashout.listShifts(client, { locationId }) };
+}));
+app.get('/api/cashhandling/shift-settings', auth.requireSession('light'), (req, res) => atmRoute(res, async (client) => {
+  const locationId = pickLocation(req.person, req.query.locationId);
+  const access = await shiftAccess(client, req, 'drawers_bags', locationId);
+  if (access.error) return access;
+  return cashout.getSettings(client, { locationId });
+}));
+app.post('/api/cashhandling/shift-settings/threshold', auth.requireSession('light'), (req, res) => atmRoute(res, async (client) => {
+  if (req.person.role !== 'owner') return { error: 'Only the owner sets the alert amount.' };
+  return cashout.setThreshold(client, { amount: req.body.amount, personId: req.person.id });
+}));
+async function bagForRequest(client, req, bagId) {
+  if (!UUID_RE.test(String(bagId || ''))) return { error: 'Not found.', status: 404 };
+  const bag = await cashout.bagAt(client, bagId);
+  if (!bag) return { error: 'Not found.', status: 404 };
+  const access = await shiftAccess(client, req, 'full_authority', bag.location_id);
+  if (access.error) return access;
+  return { bag };
+}
+app.post('/api/cashhandling/bags/:id/day-targets', auth.requireSession('light'), (req, res) => atmRoute(res, async (client) => {
+  const found = await bagForRequest(client, req, req.params.id);
+  if (found.error) return found;
+  return cashout.setBagDayTargets(client, { bag: found.bag, dayTargets: req.body.dayTargets });
+}));
+app.post('/api/cashhandling/bags/:id/events', auth.requireSession('light'), (req, res) => atmRoute(res, async (client) => {
+  const found = await bagForRequest(client, req, req.params.id);
+  if (found.error) return found;
+  return { event: await cashout.addBagEvent(client, { bag: found.bag, date: req.body.date, amount: req.body.amount, label: req.body.label, personId: req.person.id }) };
+}));
+app.post('/api/cashhandling/bag-events/:id/delete', auth.requireSession('light'), (req, res) => atmRoute(res, async (client) => {
+  if (!UUID_RE.test(req.params.id)) return { error: 'Not found.', status: 404 };
+  const locationId = await cashout.bagEventLocation(client, req.params.id);
+  if (!locationId) return { error: 'Not found.', status: 404 };
+  const access = await shiftAccess(client, req, 'full_authority', locationId);
+  if (access.error) return access;
+  await cashout.deleteBagEvent(client, { eventId: req.params.id });
+  return { ok: true };
 }));
 
 async function requireAuditAccess(client, req) {

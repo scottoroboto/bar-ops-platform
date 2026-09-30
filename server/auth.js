@@ -194,15 +194,11 @@ return { ok: true, token, person: publicPerson(person) };
 // trusted once by a manager/owner (see devices table); after that, whoever's
 // on shift just identifies themselves here.
 // ---------------------------------------------------------------------
-async function loginWithPin({ username, pin, deviceToken, ip }) {
-await throttleIp(ip);
-return withServiceClient(async (client) => {
-const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE lower(p.username) = lower($1)', [String(username || '').trim()]);
-const person = rows[0];
-if (!person || person.status !== 'active' || !person.pin_hash) {
-noteIpMiss(ip);
-return { ok: false, error: 'Invalid username or PIN.' };
-}
+// The PIN check itself, shared by PIN sign-in and the bar iPad's Cash
+// Out (which never mints a session). Same lock either way: five wrong
+// PINs lock it until the person signs in with their password and sets a
+// new one. `person` is a full people row.
+async function checkPin(client, person, pin, ip, wrongText) {
 if (person.pin_locked_at) {
 return { ok: false, error: 'PIN_LOCKED', message: 'Your PIN is locked after 5 wrong tries. Sign in with your username and password, then set a new PIN under My Account.' };
 }
@@ -213,7 +209,7 @@ return { ok: false, error: 'PIN_LOCKED', message: 'Your PIN is locked after 5 wr
 if (!person.password_verified_at) {
 return { ok: false, error: 'NEEDS_FIRST_LOGIN', message: 'First-time setup required — sign in with your username and password first.' };
 }
-const valid = await bcrypt.compare(pin, person.pin_hash);
+const valid = await bcrypt.compare(String(pin || ''), person.pin_hash);
 if (!valid) {
 noteIpMiss(ip);
 const count = (person.pin_failed_count || 0) + 1;
@@ -222,10 +218,24 @@ await client.query('UPDATE people SET pin_failed_count = 0, pin_locked_at = now(
 return { ok: false, error: 'PIN_LOCKED', message: 'That was the 5th wrong PIN — your PIN is now locked. Sign in with your username and password, then set a new PIN under My Account.' };
 }
 await client.query('UPDATE people SET pin_failed_count = $2 WHERE id = $1', [person.id, count]);
-return { ok: false, error: `Invalid username or PIN.${attemptsLeftText(MAX_ATTEMPTS - count, 'PIN')}` };
+return { ok: false, error: `${wrongText}${attemptsLeftText(MAX_ATTEMPTS - count, 'PIN')}` };
 }
 clearIpMisses(ip);
 if (person.pin_failed_count) await client.query('UPDATE people SET pin_failed_count = 0 WHERE id = $1', [person.id]);
+return { ok: true };
+}
+
+async function loginWithPin({ username, pin, deviceToken, ip }) {
+await throttleIp(ip);
+return withServiceClient(async (client) => {
+const { rows } = await client.query(PERSON_WITH_LOCATIONS + ' WHERE lower(p.username) = lower($1)', [String(username || '').trim()]);
+const person = rows[0];
+if (!person || person.status !== 'active' || !person.pin_hash) {
+noteIpMiss(ip);
+return { ok: false, error: 'Invalid username or PIN.' };
+}
+const check = await checkPin(client, person, pin, ip, 'Invalid username or PIN.');
+if (!check.ok) return check;
 
 let deviceId = null;
 if (deviceToken) {
@@ -346,5 +356,8 @@ next();
 }
 
 module.exports = {
+checkPin,
+throttleIp,
+PERSON_WITH_LOCATIONS,
 loginWithPassword, verifyFirstLoginCode, loginWithPin, stepUp, setPin, setPassword, requireSession, publicPerson, firstLoginCodeEnabled, clearLocks,
 };

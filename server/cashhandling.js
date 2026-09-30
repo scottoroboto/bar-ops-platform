@@ -97,7 +97,40 @@ async function getDashboard(client, { locationId, tierScope } = {}) {
      ORDER BY l.name, cs.sort_order, cs.name`,
     params
   );
+  // Where each source stands now (last count plus/minus everything
+  // since, e.g. a closing drop or a manager's top-up) and what it should
+  // hold today: $400 for a drawer, tonight's amount for the change bag.
+  const businessDate = await currentBusinessDate(client);
+  for (const row of rows) {
+    if (row.is_atm) continue;
+    row.balance = await computeExpectedAmount(client, row.id);
+    row.current_target = row.kind === 'backup_bag' ? await bagTargetFor(client, row, businessDate) : Number(row.target_amount);
+  }
   return rows;
+}
+
+// The bar's business day: anything before 6am belongs to the night before.
+const BUSINESS_DAY_ROLLOVER_HOURS = 6;
+async function currentBusinessDate(client) {
+  const { rows } = await client.query(
+    `SELECT to_char((now() AT TIME ZONE 'America/Chicago') - make_interval(hours => $1), 'YYYY-MM-DD') AS d`,
+    [BUSINESS_DAY_ROLLOVER_HOURS]
+  );
+  return rows[0].d;
+}
+
+// The change bag's amount for a business date: a special-event amount if
+// one is set, else that weekday's amount, else its plain target. 0 means
+// no amount set yet.
+async function bagTargetFor(client, source, businessDate) {
+  const { rows } = await client.query(
+    'SELECT amount FROM cash_bag_event_targets WHERE source_id = $1 AND business_date = $2',
+    [source.id, businessDate]
+  );
+  if (rows[0]) return Number(rows[0].amount);
+  const dow = new Date(`${businessDate}T12:00:00Z`).getUTCDay();
+  const day = Array.isArray(source.day_targets) ? Number(source.day_targets[dow]) : 0;
+  return day > 0 ? day : Number(source.target_amount || 0);
 }
 
 // A person's own drawer(s) — own_drawer tier's entire world. Deliberately
@@ -338,7 +371,7 @@ function validateTransactionShape({ type, fromSourceId, fromExternal, toSourceId
 // no orphaned row if the upload throws partway through.
 async function createTransaction(client, {
   locationId, type, fromSourceId, fromExternal, toSourceId, toExternal,
-  amount, reason, performedBy, receiptFile,
+  amount, reason, performedBy, receiptFile, afterCounts,
 }) {
   const shapeError = validateTransactionShape({ type, fromSourceId, fromExternal, toSourceId, toExternal, reason });
   if (shapeError) throw Object.assign(new Error(shapeError), { statusCode: 400 });
@@ -369,9 +402,13 @@ async function createTransaction(client, {
 
   const { rows } = await client.query(
     `INSERT INTO cash_transactions
-       (id, location_id, type, from_source_id, from_external, to_source_id, to_external, amount, reason, receipt_path, performed_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-    [id, locationId, type, fromSourceId || null, fromExternal || null, toSourceId || null, toExternal || null, amount, reason || null, receiptPath, performedBy]
+       (id, location_id, type, from_source_id, from_external, to_source_id, to_external, amount, reason, receipt_path, performed_by, performed_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, CASE WHEN $12 THEN clock_timestamp() ELSE now() END) RETURNING *`,
+    // afterCounts: a drop logged in the same DB transaction as the count
+    // it follows (Cash Out). now() is the transaction's start time, same
+    // as the count's counted_at, and the ledger only takes transactions
+    // strictly after the last count, so stamp it with the real clock.
+    [id, locationId, type, fromSourceId || null, fromExternal || null, toSourceId || null, toExternal || null, amount, reason || null, receiptPath, performedBy, !!afterCounts]
   );
   return rows[0];
 }
@@ -1145,6 +1182,8 @@ async function getAtmEntry(client, entryId) {
 }
 
 module.exports = {
+  currentBusinessDate,
+  bagTargetFor,
   addAtmLoad,
   addAtmBalance,
   addAtmStatement,

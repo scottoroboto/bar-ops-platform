@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Cash Out">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="apple-touch-icon" href="/logo.png">
+<title>Cash Out</title>
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { background: var(--bg); -webkit-user-select: none; user-select: none; }
+  .co { max-width: 620px; margin: 0 auto; padding: max(18px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom)); }
+  .co-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+  .co-head img { height: 44px; }
+  .co-head .bar { color: var(--muted); font-size: 15px; text-align: right; }
+  .co-head .bar b { color: var(--text); display: block; font-size: 20px; }
+  .co h1 { font-size: 30px; margin: 6px 0 6px; }
+  .co .lead { color: var(--muted); font-size: 18px; margin: 0 0 18px; line-height: 1.4; }
+  .co .lead b { color: var(--text); }
+  .co-step { color: var(--muted); font-size: 14px; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 4px; }
+  .co-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+  .co-btn { background: var(--card); border: 1px solid var(--card-border); color: var(--text); border-radius: 16px; padding: 22px 14px; font-size: 21px; font-weight: 600; text-align: center; cursor: pointer; min-height: 78px; }
+  .co-btn:active { background: #202532; }
+  .co-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .co-btn.big { padding: 34px 18px; font-size: 26px; }
+  .co-btn .sub { display: block; font-size: 15px; font-weight: 400; color: var(--muted); margin-top: 6px; }
+  .co-btn.primary .sub { color: rgba(255,255,255,.85); }
+  .co-display { background: #0b0d11; border: 1px solid var(--card-border); border-radius: 16px; font-size: 46px; font-weight: 700; text-align: center; padding: 18px; margin-bottom: 14px; min-height: 90px; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+  .co-display.pin { letter-spacing: .4em; }
+  .co-display .ph { color: #3a4150; }
+  .co-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .co-keys button { background: var(--card); border: 1px solid var(--card-border); color: var(--text); border-radius: 14px; font-size: 30px; font-weight: 600; height: 76px; cursor: pointer; }
+  .co-keys button:active { background: #232838; }
+  .co-keys .muted-key { color: var(--muted); font-size: 22px; }
+  .co-actions { display: flex; gap: 12px; margin-top: 16px; }
+  .co-actions .co-btn { flex: 1; padding: 18px; min-height: 0; margin: 0; width: auto; }
+  .co-err { background: rgba(229,86,109,.12); border: 1px solid rgba(229,86,109,.45); color: #ff9aa9; border-radius: 12px; padding: 12px 14px; font-size: 17px; margin-bottom: 14px; }
+  .co-review { background: var(--card); border: 1px solid var(--card-border); border-radius: 16px; overflow: hidden; margin-bottom: 8px; }
+  .co-review .row { display: flex; justify-content: space-between; padding: 16px 18px; font-size: 19px; border-bottom: 1px solid var(--card-border); }
+  .co-review .row:last-child { border-bottom: 0; }
+  .co-review .row .amt { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .co-review .row .tag { color: var(--muted); font-size: 14px; display: block; }
+  .co-result { text-align: center; padding: 20px 6px; }
+  .co-result .amount { font-size: 64px; font-weight: 800; color: var(--warn); margin: 10px 0; font-variant-numeric: tabular-nums; }
+  .co-result .ok { font-size: 64px; color: var(--success); }
+  .co-result p { font-size: 20px; line-height: 1.45; color: var(--text); }
+  .co-foot { color: var(--muted); font-size: 13px; text-align: center; margin-top: 26px; }
+  .co label { display: block; font-size: 15px; color: var(--muted); margin: 12px 0 6px; }
+  .co input, .co select { width: 100%; font-size: 18px; padding: 12px; border-radius: 10px; border: 1px solid var(--card-border); background: #0b0d11; color: var(--text); -webkit-user-select: text; user-select: text; }
+</style>
+</head>
+<body>
+<div class="co">
+  <div class="co-head">
+    <img src="/logo.png" alt="Ticket">
+    <div class="bar" id="coBar"></div>
+  </div>
+  <div id="coMain"><p class="lead">Loading…</p></div>
+</div>
+<script src="/common.js"></script>
+<script src="/cashout.js"></script>
+</body>
+</html>
