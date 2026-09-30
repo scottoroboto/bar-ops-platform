@@ -68,8 +68,8 @@ function eventsBlockHtml() {
     <div class="ev-block">
       <div class="tvs-col-header"><span class="tvs-col-title">Events</span></div>
       <div class="ev-scroll">${rows}</div>
-      <div class="tvs-col-header" style="margin-top:6px;"><span class="tvs-col-title">Scenes</span>${EVENTS.is_manager ? '<button class="small" onclick="openCaptureScene()">Capture scene</button>' : ''}</div>
-      <div class="ev-scenes">${scenes.length ? scenes.map((sc) => `<button ${sc.item_count ? '' : 'disabled'} onclick="confirmApplyScene(${sc.id})">${escapeHtml(sc.name)}${sc.daily_time ? `<span class="t">${fmtClock(sc.daily_time)}</span>` : ''}</button>`).join('') : '<span class="ev-empty">No scenes yet.</span>'}</div>
+      <div class="tvs-col-header" style="margin-top:6px;"><span class="tvs-col-title">Routines</span>${EVENTS.is_manager ? '<button class="small" onclick="openCaptureScene()">Capture routine</button>' : ''}</div>
+      <div class="ev-scenes">${scenes.length ? scenes.map((sc) => `<button ${sc.item_count ? '' : 'disabled'} onclick="confirmApplyScene(${sc.id})">${escapeHtml(sc.name)}${sc.daily_time ? `<span class="t">${fmtClock(sc.daily_time)}</span>` : ''}</button>`).join('') : '<span class="ev-empty">No routines yet.</span>'}</div>
     </div>`;
 }
 
@@ -127,7 +127,7 @@ async function runApplyEvent(id, choice) {
 }
 async function confirmEndEvent(id) {
   const e = evById(id); if (!e) return;
-  const after = e.after_mode === 'leave' ? 'The TVs stay as they are.' : e.after_mode === 'scene' ? `The TVs go to the "${sceneName(e.after_layout_id)}" scene.` : 'The TVs go back to how they were.';
+  const after = e.after_mode === 'leave' ? 'The TVs stay as they are.' : e.after_mode === 'scene' ? `The TVs go to the "${sceneName(e.after_layout_id)}" routine.` : 'The TVs go back to how they were.';
   const ok = await confirmModal(`End "${e.name}" now?`, after, 'End now', 'off');
   if (!ok) return;
   if (e.after_mode !== 'leave') renderBulkProgress(`${e.name} — ending`, eventWorkingRows(e));
@@ -141,7 +141,7 @@ async function confirmEndEvent(id) {
 function sceneName(id) { const sc = (EVENTS.scenes || []).find((x) => Number(x.id) === Number(id)); return sc ? sc.name : 'missing'; }
 async function confirmApplyScene(id) {
   const sc = (EVENTS.scenes || []).find((x) => Number(x.id) === Number(id)); if (!sc) return;
-  const ok = await confirmModal(`Set the room to "${sc.name}"?`, sc.kind === 'all_off' ? 'Every TV turns off.' : 'Every TV and source in this scene changes.', 'Apply scene');
+  const ok = await confirmModal(`Set the room to "${sc.name}"?`, sc.kind === 'all_off' ? 'Every TV turns off.' : 'Every TV and source in this routine changes.', 'Apply routine');
   if (!ok) return;
   renderBulkProgress(`Scene ${sc.name}`, TVS.filter((t) => t.ip).map((t) => ({ id: t.id, name: t.tag || t.name, status: 'working' })));
   try {
@@ -235,9 +235,9 @@ function eventFormHtml(e, opts) {
     <select id="evAfter" onchange="document.getElementById('evAfterScene').style.display = this.value === 'scene' ? '' : 'none'">
       <option value="restore" ${(e.after_mode || 'restore') === 'restore' ? 'selected' : ''}>Put the TVs back how they were</option>
       <option value="leave" ${e.after_mode === 'leave' ? 'selected' : ''}>Leave them as they are</option>
-      <option value="scene" ${e.after_mode === 'scene' ? 'selected' : ''}>Go to a scene</option>
+      <option value="scene" ${e.after_mode === 'scene' ? 'selected' : ''}>Go to a routine</option>
     </select>
-    <div id="evAfterScene" style="display:${e.after_mode === 'scene' ? '' : 'none'};"><label>Scene</label><select id="evAfterLayout">${scenes.map((sc) => `<option value="${sc.id}" ${Number(sc.id) === Number(e.after_layout_id) ? 'selected' : ''}>${escapeHtml(sc.name)}</option>`).join('')}</select></div>
+    <div id="evAfterScene" style="display:${e.after_mode === 'scene' ? '' : 'none'};"><label>Routine</label><select id="evAfterLayout">${scenes.map((sc) => `<option value="${sc.id}" ${Number(sc.id) === Number(e.after_layout_id) ? 'selected' : ''}>${escapeHtml(sc.name)}</option>`).join('')}</select></div>
     <div class="ev-actions">
       ${opts.capture ? '' : `<button class="danger" onclick="deleteEvent(${e.id})" style="margin-right:auto;">Delete</button>`}
       <button onclick="closeEvModal()">Cancel</button>
@@ -279,7 +279,7 @@ function readEventForm() {
   if (!body.name) throw new Error('Give the event a name.');
   if (kind === 'once' && (!body.event_date || !body.start_time || !body.end_time)) throw new Error('A one-time event needs a date, a start and an end.');
   if (kind === 'weekly' && (!body.days.length || !body.start_time || !body.end_time)) throw new Error('A weekly event needs days, a start and an end.');
-  if (body.after_mode === 'scene' && !body.after_layout_id) throw new Error('Pick the scene to go to afterwards.');
+  if (body.after_mode === 'scene' && !body.after_layout_id) throw new Error('Pick the routine to go to afterwards.');
   return body;
 }
 function captureFields() {
@@ -317,17 +317,17 @@ async function deleteEvent(id) {
   await refreshAll();
 }
 function openCaptureScene() {
-  openEvModal(`${evHeader('Capture scene')}
-    <p>Saves what every source and TV is doing right now as a scene — how the bar normally looks. Nothing changes now.</p>
+  openEvModal(`${evHeader('Capture routine')}
+    <p>Saves what every source and TV is doing right now as a routine — how the bar normally looks. Nothing changes now.</p>
     <div id="evModalMsg"></div>
     <label>Name</label><input id="scName" placeholder="e.g. Open, Daily, Close" maxlength="60">
     <label>Runs daily at (optional)</label><input id="scTime" type="time">
-    <div class="ev-actions"><button onclick="closeEvModal()">Cancel</button><button class="primary" onclick="saveScene()">Save scene</button></div>`);
+    <div class="ev-actions"><button onclick="closeEvModal()">Cancel</button><button class="primary" onclick="saveScene()">Save routine</button></div>`);
 }
 async function saveScene() {
   const name = document.getElementById('scName').value.trim();
   const daily_time = document.getElementById('scTime').value || null;
-  if (!name) { evMsg('Give the scene a name.'); return; }
+  if (!name) { evMsg('Give the routine a name.'); return; }
   try {
     const r = await api('/api/scenes/capture', { method: 'POST', body: JSON.stringify({ name, daily_time }) });
     closeEvModal();

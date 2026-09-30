@@ -602,7 +602,7 @@ function commitBarHtml() {
     </div>
     <div class="cb-right">
       <button class="cb-clear" onclick="clearTvSelection()">Clear</button>
-      ${EVENTS.is_manager ? `<button class="cb-secondary cb-capture" onclick="openCaptureScene()" title="Save what every source and TV is doing right now as a scene — changes nothing now">Capture scene</button><button class="cb-secondary cb-capture" ${n ? '' : 'disabled'} onclick="openCaptureEvent()" title="Save these TVs (and the picked source) as an event for later — changes nothing now">Capture event</button>` : ''}
+      ${EVENTS.is_manager ? `<button class="cb-secondary cb-capture" onclick="openCaptureScene()" title="Save what every source and TV is doing right now as a routine — changes nothing now">Capture routine</button><button class="cb-secondary cb-capture" ${n ? '' : 'disabled'} onclick="openCaptureEvent()" title="Save these TVs (and the picked source) as an event for later — changes nothing now">Capture event</button>` : ''}
       <button class="cb-commit" ${canCommit ? '' : 'disabled'} onclick="commitSlotChange()">${n && pickedLabel ? `Change ${n} TV${n === 1 ? '' : 's'} to ${escapeHtml(pickedLabel)}` : 'Pick a source and TVs'}</button>
     </div>
   </div>`;

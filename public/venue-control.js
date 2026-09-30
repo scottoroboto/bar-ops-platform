@@ -1315,7 +1315,7 @@ function renderLayoutsList() {
     const when = l.daily_time ? `daily at ${fmtClock(l.daily_time)}` : 'manual';
     const body = l.kind === 'all_off'
       ? '<div class="sub">Every TV off — built in, nothing to capture.</div>'
-      : (l.items.length ? `<div class="sub">${l.items.map(describeLayoutItem).map(escapeHtml).join(' · ')}</div>` : '<div class="sub">Not captured yet — TVs tab → Capture scene on the box.</div>');
+      : (l.items.length ? `<div class="sub">${l.items.map(describeLayoutItem).map(escapeHtml).join(' · ')}</div>` : '<div class="sub">Not captured yet — TVs tab → Capture routine on the box.</div>');
     return `
       <div class="list-row">
         <div class="name">${escapeHtml(l.name)} <span class="badge ${l.enabled === false ? 'off' : (l.daily_time ? 'on' : 'off')}">${l.enabled === false ? 'disabled' : when}</span>
@@ -1343,7 +1343,7 @@ async function saveEditLayout(id) {
   try {
     await withStepUp(() => api(`/api/venue-control/layouts/${id}/update`, { method: 'POST', body: { name, description: description || null, dailyTime, kind } }));
     editingLayoutId = null;
-    showLayoutMsg('Scene updated.', 'success');
+    showLayoutMsg('Routine updated.', 'success');
     await loadLayoutsAdmin(document.getElementById('sourcesLocationSelect').value);
   } catch (e) {
     showLayoutMsg(e.message, 'error');
@@ -1358,10 +1358,10 @@ async function toggleLayoutEnabled(id, enabled) {
 }
 
 async function deleteLayout(id) {
-  if (!confirm('Delete this scene? Any timer or event set to use it will stop working.')) return;
+  if (!confirm('Delete this routine? Any timer or event set to use it will stop working.')) return;
   try {
     await withStepUp(() => api(`/api/venue-control/layouts/${id}/delete`, { method: 'POST' }));
-    showLayoutMsg('Scene deleted.', 'success');
+    showLayoutMsg('Routine deleted.', 'success');
     await loadLayoutsAdmin(document.getElementById('sourcesLocationSelect').value);
   } catch (e) {
     showLayoutMsg(e.message, 'error');
@@ -1381,7 +1381,7 @@ async function addLayout() {
     document.getElementById('newLayoutName').value = '';
     document.getElementById('newLayoutDesc').value = '';
     document.getElementById('newLayoutTime').value = '';
-    showLayoutMsg(kind === 'all_off' ? 'Scene added.' : 'Scene added — capture what it looks like from the box\'s TVs tab (Capture scene).', 'success');
+    showLayoutMsg(kind === 'all_off' ? 'Routine added.' : 'Routine added — capture what it looks like from the box\'s TVs tab (Capture routine).', 'success');
     await loadLayoutsAdmin(locationId);
   } catch (e) {
     showLayoutMsg(e.message, 'error');
@@ -1413,7 +1413,7 @@ function describeEventWhen(e) {
 }
 function describeAfter(e) {
   if (e.after_mode === 'leave') return 'leave the TVs as they are';
-  if (e.after_mode === 'scene') return `go to scene "${e.after_layout_name || 'missing'}"`;
+  if (e.after_mode === 'scene') return `go to routine "${e.after_layout_name || 'missing'}"`;
   return 'put the TVs back how they were';
 }
 function showEventMsg(text, kind) {
@@ -1468,9 +1468,9 @@ function eventEditFormHtml(e) {
       <select id="evAfter" onchange="document.getElementById('evAfterScene').style.display = this.value === 'scene' ? '' : 'none'">
         <option value="restore" ${e.after_mode === 'restore' ? 'selected' : ''}>Put the TVs back how they were</option>
         <option value="leave" ${e.after_mode === 'leave' ? 'selected' : ''}>Leave them as they are</option>
-        <option value="scene" ${e.after_mode === 'scene' ? 'selected' : ''}>Go to a scene</option>
+        <option value="scene" ${e.after_mode === 'scene' ? 'selected' : ''}>Go to a routine</option>
       </select>
-      <div id="evAfterScene" style="display:${e.after_mode === 'scene' ? '' : 'none'};"><label for="evAfterLayout">Scene</label><select id="evAfterLayout">${(LAYOUTS_ADMIN || []).map((l) => `<option value="${l.id}" ${String(l.id) === String(e.after_layout_id) ? 'selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}</select></div>
+      <div id="evAfterScene" style="display:${e.after_mode === 'scene' ? '' : 'none'};"><label for="evAfterLayout">Routine</label><select id="evAfterLayout">${(LAYOUTS_ADMIN || []).map((l) => `<option value="${l.id}" ${String(l.id) === String(e.after_layout_id) ? 'selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}</select></div>
       <div class="toggle-row" style="margin-top:10px;"><span class="label">Enabled</span><label class="switch"><input type="checkbox" id="evEnabled" ${e.enabled === false ? '' : 'checked'}><span class="slider"></span></label></div>
       <div class="stack-actions">
         <button class="ghost small" onclick="editingEventId=null; renderEventsList()">Cancel</button>

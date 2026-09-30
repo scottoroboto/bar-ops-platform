@@ -61,8 +61,9 @@ function enter() {
     renderLayouts();
     loadNames(); // non-blocking -- only needed to label items by name in the apply progress list
     refreshEvents(true);
+    refreshLightRoutines();
     if (eventsTimer) clearInterval(eventsTimer);
-    eventsTimer = setInterval(() => refreshEvents(true), 15000);
+    eventsTimer = setInterval(() => { refreshEvents(true); refreshLightRoutines(); }, 15000);
     updateTopbarClock();
     if (clockTimer) clearInterval(clockTimer);
     clockTimer = setInterval(updateTopbarClock, 15000);
@@ -175,13 +176,56 @@ function flashAttention(text) {
 async function refreshAll() {
   try { LAYOUTS = await api('/api/layouts'); renderLayouts(); } catch (e) { /* keep last */ }
   await refreshEvents(true);
+  refreshLightRoutines();
+}
+
+// ---- light routines (lib/lights.js via /api/lights) ----
+let LIGHT_VIEW = null;
+async function refreshLightRoutines() {
+  if (!document.getElementById('lightRoutinesBox')) return; // Events page shares this script
+  try { LIGHT_VIEW = await api('/api/lights'); renderLightRoutines(); } catch (e) { /* no lights on this box yet */ }
+}
+function lightWhen(part) {
+  if (!part || part.kind === 'none') return '—';
+  const at = part.at ? new Date(part.at).toLocaleTimeString('en-US', { timeZone: LIGHT_VIEW.timezone, hour: 'numeric', minute: '2-digit' }) : null;
+  if (part.kind === 'time') return at || fmtClock(part.time);
+  const off = Number(part.offset) || 0;
+  const word = part.kind[0].toUpperCase() + part.kind.slice(1) + (off ? ` ${off < 0 ? '−' : '+'}${Math.abs(off)}` : '');
+  return at ? `${word} (${at})` : word;
+}
+function renderLightRoutines() {
+  const card = document.getElementById('lightRoutinesCard');
+  const box = document.getElementById('lightRoutinesBox');
+  const list = (LIGHT_VIEW && LIGHT_VIEW.routines) || [];
+  card.style.display = list.length ? '' : 'none';
+  const days = (d) => (d.length === 7 ? 'every day' : d.map((x) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][x]).join(', '));
+  box.innerHTML = list.map((r) => `
+    <div class="layout-row">
+      <div>
+        <div class="layout-name">${escapeHtml(r.name)}${r.enabled ? '' : ' <span class="layout-count">(paused)</span>'}</div>
+        <div class="layout-count">On ${escapeHtml(lightWhen(r.on))} → off ${escapeHtml(lightWhen(r.off))} · ${escapeHtml(days(r.days || []))} · ${r.count} light${r.count === 1 ? '' : 's'}</div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="primary" ${r.count ? '' : 'disabled'} onclick="runLightRoutine(${Number(r.id)}, true)">Run ON</button>
+        <button ${r.count ? '' : 'disabled'} onclick="runLightRoutine(${Number(r.id)}, false)">Run OFF</button>
+      </div>
+    </div>`).join('');
+}
+async function runLightRoutine(id, on) {
+  const r = (LIGHT_VIEW.routines || []).find((x) => x.id === id);
+  if (!on && !confirm(`Turn off every light in "${r ? r.name : 'this routine'}"?`)) return;
+  try {
+    const res = await api(`/api/lights/routines/${id}/run`, { method: 'POST', body: JSON.stringify({ on }) });
+    flashAttention(res.ok ? `${r ? r.name : 'Routine'}: lights ${on ? 'on' : 'off'}.` : `Couldn’t reach: ${res.failed.join(', ')}`);
+    refreshLightRoutines();
+  } catch (e) { flashAttention(e.message); }
 }
 
 function renderLayouts() {
   const box = document.getElementById('layoutsBox');
   if (!box) return; // the Events page shares this script and has no scenes list
   if (!LAYOUTS.length) {
-    box.innerHTML = '<p class="muted">No scenes yet. A manager can capture one from the TVs tab (Capture scene) once the room looks right, or add one in TV Admin &rarr; Scenes.</p>';
+    box.innerHTML = '<p class="muted">No routines yet. A manager can capture one from the TVs tab (Capture routine) once the room looks right, or add one in TV Admin &rarr; Routines.</p>';
     return;
   }
   box.innerHTML = LAYOUTS.map((l) => `
@@ -240,7 +284,7 @@ async function applyLayout(id) {
   const layout = LAYOUTS.find((l) => Number(l.id) === Number(id));
   const items = layout ? layout.items : [];
   const pendingRows = items.map((it) => ({ name: resolveItemName(it), detail: actionLabel(it.action), status: 'working' }));
-  renderApplyProgress(layout ? layout.name : 'Scene', pendingRows, id);
+  renderApplyProgress(layout ? layout.name : 'Routine', pendingRows, id);
 
   try {
     const result = await api(`/api/layouts/${id}/apply`, { method: 'POST' });
@@ -260,7 +304,7 @@ async function applyLayout(id) {
     // yet has nothing meaningful to undo back to.
     if (result.undo && result.undo.length) showUndoBar(result.name, result.undo);
   } catch (e) {
-    renderApplyProgress(layout ? layout.name : 'Scene', pendingRows.map((r) => ({ ...r, status: 'failed', error: e.message })), id);
+    renderApplyProgress(layout ? layout.name : 'Routine', pendingRows.map((r) => ({ ...r, status: 'failed', error: e.message })), id);
   }
 }
 
