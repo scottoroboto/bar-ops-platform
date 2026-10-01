@@ -67,6 +67,16 @@ Each game (Games → the game → Edit) says what it takes:
   stored on the line, and the review page flags a screen total that
   does not match what was counted, and a screen that was not cleared.
 
+- **Collection amount comes from the screen** (Golden Tee). The game
+  works out income less its own fees and shows the amount to be split
+  between operator and location; that number *is* the collection. The
+  bills (and coins) counted are still entered and stored on the line
+  as `bills_counted_amount`, for the audit, but add nothing. Set
+  **Screen line to read** to the label as printed on the game ("Total
+  Due") and the reader pulls that line; it also lists every labelled
+  amount it saw so the collector can tap the right one if it guessed
+  wrong.
+
 (`db/patch_044_amusement_collection_screen.sql`.)
 
 ## How a collection works

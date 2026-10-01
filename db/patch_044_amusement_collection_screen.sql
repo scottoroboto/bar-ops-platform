@@ -28,3 +28,15 @@ ALTER TABLE amusement_collection_items
 -- columns. Default: all four.
 ALTER TABLE amusement_games
   ADD COLUMN bill_denoms int[] NOT NULL DEFAULT '{1,5,10,20}';
+
+-- Golden Tee: the bills in the acceptor are counted for the audit only.
+-- The collection amount is what the game's own screen says is owed
+-- (income less its fees, the number split between operator and
+-- location). collection_from_screen turns that on; screen_amount_label
+-- is the line on that screen to read ("Total due", as printed), so the
+-- photo reader knows which number to pull.
+ALTER TABLE amusement_games
+  ADD COLUMN collection_from_screen boolean NOT NULL DEFAULT false,
+  ADD COLUMN screen_amount_label    text;
+ALTER TABLE amusement_collection_items
+  ADD COLUMN bills_counted_amount numeric(10,2);          -- what was physically counted when bills are audit-only

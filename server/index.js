@@ -4882,9 +4882,12 @@ app.post('/api/amusement/collections/:id/read-screen', auth.requireSession('ligh
   const collection = await amusement.getCollection(client, req.params.id);
   if (!collection) return { error: 'Collection not found.', status: 404 };
   if (collection.status !== 'draft') return { error: 'This collection is finalized.' };
+  const game = req.body && req.body.gameId ? await amusement.getGame(client, req.body.gameId) : null;
   const [photoPath, reading] = await Promise.all([
     amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: collection.id }),
-    amusement.readerConfigured() ? amusement.readScreenPhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype }) : Promise.resolve({ total: null, confidence: 'low', raw: '' }),
+    amusement.readerConfigured()
+      ? amusement.readScreenPhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, label: game ? game.screen_amount_label : null, fromScreen: !!(game && game.collection_from_screen) })
+      : Promise.resolve({ total: null, lines: [], confidence: 'low', raw: '' }),
   ]);
   return { ...reading, photoPath, photoStored: !!photoPath };
 }));
