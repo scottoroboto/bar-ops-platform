@@ -210,20 +210,22 @@ async function computeExpectedAmount(client, sourceId) {
 // The three audit FK params (Phase 4) are how a count row says which
 // checklist/assignment produced it; all three stay null for an ordinary
 // cash_out.
-// Opening count (patch_044): a source that has never been counted, has
-// no target baseline and has no transactions yet has no honest "expected"
-// — the first count IS the starting balance. Without this, the first
-// count of a $280 ATM read as "$280 over" against an expected $0.
+// Opening count (patch_044): a source that has never been counted and has
+// no transactions yet has no honest "expected" — the first count IS the
+// starting balance. Without this, the first count of a $280 ATM read as
+// "$280 over" against an expected $0, and T1's drawers (2026-10-01) read
+// "$150 short" against the $400 placeholder starting amount. A drawer that
+// opens under its starting amount shows "needs $X" on the dashboard, not
+// short.
 async function isOpeningCount(client, sourceId) {
   const { rows } = await client.query(
     `SELECT
        (SELECT count(*) FROM cash_counts WHERE source_id = $1) AS counts,
-       (SELECT count(*) FROM cash_transactions WHERE to_source_id = $1 OR from_source_id = $1) AS txns,
-       (SELECT target_amount FROM cash_sources WHERE id = $1) AS target`,
+       (SELECT count(*) FROM cash_transactions WHERE to_source_id = $1 OR from_source_id = $1) AS txns`,
     [sourceId]
   );
   const r = rows[0] || {};
-  return Number(r.counts) === 0 && Number(r.txns) === 0 && Number(r.target || 0) === 0;
+  return Number(r.counts) === 0 && Number(r.txns) === 0;
 }
 
 // ATMs (patch_045) are never cashed out: loads and balance receipts go
