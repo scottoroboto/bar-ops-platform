@@ -2155,7 +2155,8 @@ function renderPlugsList() {
   const macWrap = document.getElementById('plugMacGroupWrap');
   if (macWrap) macWrap.innerHTML = groupPickerHtml('plugMacGroup', readGroup('plugMacGroup'));
   const fresh = LIGHTS.plugs.filter((p) => !p.name && !p.archived_at);
-  const named = LIGHTS.plugs.filter((p) => p.name && !p.archived_at);
+  // Spares go last, under their own heading, whatever group they had.
+  const named = [...LIGHTS.plugs.filter((p) => p.name && !p.archived_at && !p.spare), ...LIGHTS.plugs.filter((p) => p.name && !p.archived_at && p.spare)];
   const archived = LIGHTS.plugs.filter((p) => p.archived_at);
   let html = '';
   if (fresh.length) {
@@ -2170,18 +2171,24 @@ function renderPlugsList() {
           <input id="plugName-${p.id}" placeholder="Name, e.g. Bud Light" style="flex:2; min-width:140px; margin:0;">
           ${groupPickerHtml(`plugGroup-${p.id}`, LAST_PLUG_GROUP)}
           <button class="small primary" style="margin:0;" onclick="nameNewPlug(${p.id})">Save</button>
+          <button class="small secondary" style="margin:0;" onclick="nameNewPlug(${p.id}, true)" title="Gets an ID number, stays off the iPad until it goes on a sign">Spare</button>
           <button class="small ghost" style="margin:0;" onclick="plugOp(${p.id}, 'archive')">Not a sign</button>
         </div>
       </div>`).join('');
   }
   if (named.length) {
-    html += `<h3 style="margin:14px 0 6px; display:flex; align-items:center; gap:10px;">Set up (${named.length})
+    const spares = named.filter((p) => p.spare).length;
+    html += `<h3 style="margin:14px 0 6px; display:flex; align-items:center; gap:10px;">Set up (${named.length - spares}${spares ? ` + ${spares} spare${spares === 1 ? '' : 's'}` : ''})
       <a href="#" class="muted" style="font-size:13px; font-weight:400;" onclick="PLUGS_SHOW_NAMED=!PLUGS_SHOW_NAMED; renderPlugsList(); return false;">${PLUGS_SHOW_NAMED ? 'hide' : 'show'}</a></h3>`;
   }
   if (named.length && PLUGS_SHOW_NAMED) {
     let lastGroup = null;
     for (const p of named) {
-      if ((p.group_name || '') !== lastGroup) { lastGroup = p.group_name || ''; html += `<div class="muted" style="font-size:12px; font-weight:700; margin:10px 0 4px; text-transform:uppercase;">${escapeHtml(lastGroup || 'No group')}</div>`; }
+      const heading = p.spare ? '\u0000spare' : (p.group_name || '');
+      if (heading !== lastGroup) {
+        lastGroup = heading;
+        html += `<div class="muted" style="font-size:12px; font-weight:700; margin:10px 0 4px; text-transform:uppercase;">${p.spare ? 'Spares <span style="text-transform:none; font-weight:400;">· not on a sign, hidden from the iPad</span>' : escapeHtml(heading || 'No group')}</div>`;
+      }
       if (PLUG_EDIT_ID === p.id) {
         html += `
         <div class="list-row" style="flex-direction:column; align-items:stretch; gap:6px;">
@@ -2190,6 +2197,8 @@ function renderPlugsList() {
             <input id="plugEditName" value="${escapeHtml(p.name)}" style="flex:2; min-width:140px; margin:0;">
             ${groupPickerHtml('plugEditGroup', p.group_name)}
           </div>
+          <label style="display:flex; gap:8px; align-items:center; margin:0;"><input type="checkbox" id="plugEditSpare" ${p.spare ? 'checked' : ''} style="width:auto; margin:0;">
+            Spare <span class="muted" style="font-size:12px;">— not on a sign yet: hidden from the iPad, ALL ON/OFF and routines</span></label>
           <select id="plugEditSchedule" style="margin:0;">
             <option value="none" ${p.schedule_mode === 'none' ? 'selected' : ''}>No schedule</option>
             ${p.schedule_mode === 'own' ? '<option value="own" selected>Own schedule (set on the iPad)</option>' : ''}
@@ -2204,7 +2213,7 @@ function renderPlugsList() {
       } else {
         html += `
         <div class="list-row">
-          <div><div class="name">${plugTagHtml(p)}${escapeHtml(p.name)}</div><div class="sub">${escapeHtml(plugScheduleWords(p))}${p.ip ? ` · ${escapeHtml(p.ip)}` : ''}</div></div>
+          <div><div class="name">${plugTagHtml(p)}${escapeHtml(p.name)}</div><div class="sub">${escapeHtml(p.spare ? 'Spare' : plugScheduleWords(p))}${p.ip ? ` · ${escapeHtml(p.ip)}` : ''}</div></div>
           <div style="display:flex; gap:6px; align-items:center;">${plugLiveWords(p)}
             <button class="small secondary" style="margin:0;" onclick="blinkPlug(${p.id}, this)">Blink</button>
             <button class="small ghost" style="margin:0;" onclick="PLUG_EDIT_ID=${p.id}; renderPlugsList();">Edit</button></div>
@@ -2280,13 +2289,13 @@ async function blinkPlug(plugId, btn) {
   } catch (e) { reset('Failed'); showMsg(e.message, 'error'); }
 }
 
-async function nameNewPlug(plugId) {
-  const name = document.getElementById(`plugName-${plugId}`).value.trim();
-  const group = readGroup(`plugGroup-${plugId}`);
+async function nameNewPlug(plugId, spare) {
+  const name = document.getElementById(`plugName-${plugId}`).value.trim() || (spare ? 'Spare' : '');
+  const group = spare ? '' : readGroup(`plugGroup-${plugId}`);
   if (!name) { showMsg('Give the plug a name.', 'error'); return; }
   try {
-    const r = await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/update`, { method: 'POST', body: { name, group } });
-    LAST_PLUG_GROUP = (r && r.plug && r.plug.group_name) || '';
+    const r = await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/update`, { method: 'POST', body: { name, group, spare: !!spare } });
+    if (!spare) LAST_PLUG_GROUP = (r && r.plug && r.plug.group_name) || '';
     const tag = r && r.plug && r.plug.tag;
     showMsg(tag ? `Saved “${name}” as ${tag}. Label the plug ${tag}.` : `Saved “${name}”.`, 'success');
     await loadLightsAdmin(lightsLocation());
@@ -2297,7 +2306,7 @@ async function savePlugEdit(plugId) {
   const sched = document.getElementById('plugEditSchedule').value;
   const body = {
     tag: document.getElementById('plugEditTag').value, name: document.getElementById('plugEditName').value,
-    group: readGroup('plugEditGroup'),
+    group: readGroup('plugEditGroup'), spare: document.getElementById('plugEditSpare').checked,
   };
   if (sched === 'none') body.schedule = { mode: 'none' };
   else if (sched.startsWith('r')) body.schedule = { mode: 'routine', routineId: Number(sched.slice(1)) };
@@ -2333,7 +2342,7 @@ async function addPlugByMac() {
 // ---- routines -----------------------------------------------------------------
 function renderLightRoutines() {
   const el = document.getElementById('lightRoutinesList');
-  const named = LIGHTS.plugs.filter((p) => p.name && !p.archived_at);
+  const named = LIGHTS.plugs.filter((p) => p.name && !p.archived_at && !p.spare);
   let html = LIGHTS.routines.map((r) => {
     if (LIGHT_EDIT === r.id) return lightRoutineForm(r, named);
     const count = named.filter((p) => p.schedule_mode === 'routine' && p.routine_id === r.id).length;

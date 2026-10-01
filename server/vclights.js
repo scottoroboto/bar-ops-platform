@@ -83,7 +83,7 @@ function plugConfigOut(p) {
 
 async function configRows(client, siteId) {
   const { rows: plugs } = await client.query(
-    'SELECT * FROM vc_plugs WHERE site_id = $1 AND archived_at IS NULL ORDER BY group_name NULLS LAST, sort_order, tag NULLS LAST, name NULLS LAST, id',
+    'SELECT * FROM vc_plugs WHERE site_id = $1 AND archived_at IS NULL AND NOT spare ORDER BY group_name NULLS LAST, sort_order, tag NULLS LAST, name NULLS LAST, id',
     [siteId]
   );
   const { rows: routines } = await client.query(
@@ -154,7 +154,7 @@ async function rememberGroup(client, siteId, group) {
 async function groupsFor(client, siteId) {
   const { rows } = await client.query(
     `SELECT g AS name,
-            (SELECT count(*)::int FROM vc_plugs p WHERE p.site_id = $1 AND p.archived_at IS NULL AND p.group_name = g) AS plugs
+            (SELECT count(*)::int FROM vc_plugs p WHERE p.site_id = $1 AND p.archived_at IS NULL AND NOT p.spare AND p.group_name = g) AS plugs
        FROM (SELECT unnest(light_groups) AS g FROM vc_sites WHERE id = $1
              UNION
              SELECT group_name FROM vc_plugs WHERE site_id = $1 AND group_name IS NOT NULL) x
@@ -169,7 +169,7 @@ async function forgetGroup(client, siteId, name) {
   const group = cleanText(name);
   if (!group) throw fail('Which group?');
   const { rows } = await client.query(
-    'SELECT count(*)::int AS n FROM vc_plugs WHERE site_id = $1 AND archived_at IS NULL AND group_name = $2', [siteId, group]
+    'SELECT count(*)::int AS n FROM vc_plugs WHERE site_id = $1 AND archived_at IS NULL AND NOT spare AND group_name = $2', [siteId, group]
   );
   if (rows[0].n) throw fail(`${rows[0].n} plug${rows[0].n === 1 ? ' is' : 's are'} still in ${group}. Move ${rows[0].n === 1 ? 'it' : 'them'} first.`);
   await client.query('UPDATE vc_sites SET light_groups = array_remove(light_groups, $2) WHERE id = $1', [siteId, group]);
@@ -189,7 +189,7 @@ async function listForAdmin(client, siteId) {
   const { rows: site } = await client.query('SELECT latitude, longitude FROM vc_sites WHERE id = $1', [siteId]);
   return {
     plugs: plugs.map((p) => ({
-      ...plugConfigOut(p), last_on: p.last_on, last_watts: p.last_watts === null ? null : Number(p.last_watts),
+      ...plugConfigOut(p), spare: !!p.spare, last_on: p.last_on, last_watts: p.last_watts === null ? null : Number(p.last_watts),
       last_seen_at: p.last_seen_at, archived_at: p.archived_at, created_at: p.created_at,
     })),
     routines: routines.map(routineOut),
@@ -270,8 +270,12 @@ async function updatePlug(client, siteId, plugId, b) {
     if (dup[0]) throw fail(`${tag} is already ${dup[0].name || 'another plug'}.`);
     set('tag', tag);
   }
+  // A spare isn't on a sign: off the iPad and out of any routine.
+  const spare = b.spare === undefined ? !!plug.spare : !!b.spare;
+  if (b.spare !== undefined) set('spare', spare);
+  if (spare && (b.spare !== undefined || b.schedule !== undefined)) { set('schedule_mode', 'none'); set('routine_id', null); }
   if (b.sortOrder !== undefined && Number.isInteger(Number(b.sortOrder))) set('sort_order', Number(b.sortOrder));
-  if (b.schedule !== undefined) {
+  if (b.schedule !== undefined && !spare) {
     const s = b.schedule || {};
     if (s.mode === 'routine') {
       const r = await routineAt(client, siteId, Number(s.routineId));
@@ -347,7 +351,7 @@ async function saveRoutine(client, siteId, routineId, b) {
     );
     await client.query(
       `UPDATE vc_plugs SET schedule_mode = 'routine', routine_id = $2, updated_at = now()
-       WHERE site_id = $1 AND id = ANY($3::bigint[])`,
+       WHERE site_id = $1 AND id = ANY($3::bigint[]) AND NOT spare`,
       [siteId, row.id, ids]
     );
   }
