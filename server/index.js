@@ -48,7 +48,19 @@ async function canManagePerson(viewer, personId) {
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// Which build is running: Render's commit id, else the start time. Sent
+// on every API response so a phone that still has an older page open
+// (Ryan mid-collection when a deploy lands) reloads itself at its next
+// page change instead of hitting rules its page knows nothing about.
+const APP_VERSION = (process.env.RENDER_GIT_COMMIT || '').slice(0, 12) || String(Date.now());
+app.use((req, res, next) => { if (req.path.startsWith('/api/')) res.set('X-App-Version', APP_VERSION); next(); });
+// Pages, scripts and styles always revalidate (ETag makes that one cheap
+// 304), so a reload really does fetch the new build.
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  setHeaders(res, filePath) {
+    if (/\.(html|js|css)$/.test(filePath)) res.set('Cache-Control', 'no-cache');
+  },
+}));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // ---------------- Status ----------------

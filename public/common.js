@@ -90,6 +90,22 @@ function shortLoc(name) {
   return m ? ('T' + m[1]) : String(name || '').slice(0, 2).toUpperCase();
 }
 
+// The server stamps every API response with the build it is running.
+// The first one we see is "ours"; when it changes, a deploy landed while
+// this page was open. Reload at the next page change (never mid-form)
+// so the page matches the rules the server now enforces.
+let APP_VERSION_SEEN = null;
+let APP_RELOAD_PENDING = false;
+function noteAppVersion(res) {
+  const v = res && res.headers ? res.headers.get('x-app-version') : null;
+  if (!v) return;
+  if (APP_VERSION_SEEN === null) { APP_VERSION_SEEN = v; return; }
+  if (v !== APP_VERSION_SEEN && !APP_RELOAD_PENDING) {
+    APP_RELOAD_PENDING = true;
+    window.addEventListener('hashchange', () => { location.reload(); }, { once: true });
+  }
+}
+
 async function api(path, opts = {}) {
   const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
   const token = getToken();
@@ -119,6 +135,7 @@ async function api(path, opts = {}) {
   } finally {
     clearTimeout(timeout);
   }
+  noteAppVersion(res);
   let data = null;
   try { data = await res.json(); } catch (e) { /* non-JSON error page */ }
 
@@ -157,6 +174,7 @@ async function apiUpload(path, formData) {
   let res;
   try {
     res = await fetch(path, { method: 'POST', headers, body: formData, signal: controller.signal });
+    noteAppVersion(res);
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('That took too long to respond. The server may be waking up — please try again.');
     // Safari reports any dropped connection as the bare "Load failed"
