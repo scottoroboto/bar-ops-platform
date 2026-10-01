@@ -139,6 +139,43 @@ async function recordStatus(client, siteId, states) {
   }
 }
 
+// A group used on a plug is kept on the bar's list to pick from next time.
+// Matching ignores case, so "main bar" lands on "Main Bar".
+async function rememberGroup(client, siteId, group) {
+  if (!group) return group;
+  const { rows } = await client.query('SELECT light_groups FROM vc_sites WHERE id = $1 FOR UPDATE', [siteId]);
+  const saved = (rows[0] && rows[0].light_groups) || [];
+  const same = saved.find((g) => g.toLowerCase() === group.toLowerCase());
+  if (same) return same;
+  await client.query('UPDATE vc_sites SET light_groups = array_append(light_groups, $2) WHERE id = $1', [siteId, group]);
+  return group;
+}
+
+async function groupsFor(client, siteId) {
+  const { rows } = await client.query(
+    `SELECT g AS name,
+            (SELECT count(*)::int FROM vc_plugs p WHERE p.site_id = $1 AND p.archived_at IS NULL AND p.group_name = g) AS plugs
+       FROM (SELECT unnest(light_groups) AS g FROM vc_sites WHERE id = $1
+             UNION
+             SELECT group_name FROM vc_plugs WHERE site_id = $1 AND group_name IS NOT NULL) x
+      ORDER BY lower(g)`,
+    [siteId]
+  );
+  return rows;
+}
+
+// Take a group off the list to pick from. One with plugs still in it stays.
+async function forgetGroup(client, siteId, name) {
+  const group = cleanText(name);
+  if (!group) throw fail('Which group?');
+  const { rows } = await client.query(
+    'SELECT count(*)::int AS n FROM vc_plugs WHERE site_id = $1 AND archived_at IS NULL AND group_name = $2', [siteId, group]
+  );
+  if (rows[0].n) throw fail(`${rows[0].n} plug${rows[0].n === 1 ? ' is' : 's are'} still in ${group}. Move ${rows[0].n === 1 ? 'it' : 'them'} first.`);
+  await client.query('UPDATE vc_sites SET light_groups = array_remove(light_groups, $2) WHERE id = $1', [siteId, group]);
+  await client.query('UPDATE vc_plugs SET group_name = NULL, updated_at = now() WHERE site_id = $1 AND group_name = $2', [siteId, group]);
+}
+
 async function listForAdmin(client, siteId) {
   const { rows: plugs } = await client.query(
     `SELECT * FROM vc_plugs WHERE site_id = $1
@@ -156,6 +193,7 @@ async function listForAdmin(client, siteId) {
       last_seen_at: p.last_seen_at, archived_at: p.archived_at, created_at: p.created_at,
     })),
     routines: routines.map(routineOut),
+    groups: await groupsFor(client, siteId),
     location: site[0] || null,
   };
 }
@@ -209,7 +247,7 @@ async function addByMac(client, siteId, b) {
      ON CONFLICT (site_id, mac) DO UPDATE SET name = EXCLUDED.name, group_name = COALESCE(EXCLUDED.group_name, vc_plugs.group_name),
        archived_at = NULL, updated_at = now()
      RETURNING *`,
-    [siteId, mac, name, cleanText(b.group)]
+    [siteId, mac, name, await rememberGroup(client, siteId, cleanText(b.group))]
   );
   return rows[0].tag ? rows[0] : assignTag(client, siteId, rows[0].id);
 }
@@ -223,7 +261,7 @@ async function updatePlug(client, siteId, plugId, b) {
   const vals = [];
   const set = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length + 2}`); };
   if (b.name !== undefined) { const n = cleanText(b.name); if (!n) throw fail('Give the plug a name.'); set('name', n); }
-  if (b.group !== undefined) set('group_name', cleanText(b.group));
+  if (b.group !== undefined) set('group_name', await rememberGroup(client, siteId, cleanText(b.group)));
   if (b.tag !== undefined && b.tag !== null && String(b.tag).trim() !== (plug.tag || '')) {
     const tag = parseTag(b.tag);
     const { rows: dup } = await client.query(
@@ -326,6 +364,6 @@ async function deleteRoutine(client, siteId, routineId) {
 }
 
 module.exports = {
-  normalizeMac, assignTag, configRows, recordSeen, recordStatus, listForAdmin, plugAt, addByMac, updatePlug,
+  normalizeMac, assignTag, forgetGroup, configRows, recordSeen, recordStatus, listForAdmin, plugAt, addByMac, updatePlug,
   setArchived, deletePlug, saveRoutine, deleteRoutine,
 };

@@ -1485,6 +1485,8 @@ if (req.params.op === 'restore') return { plug: await vclights.setArchived(clien
 if (req.params.op === 'delete') { await vclights.deletePlug(client, req.vcSiteId, id); return {}; }
 throw Object.assign(new Error('Unknown action.'), { status: 404 });
 }));
+app.post('/api/venue-control/sites/:locationId/lights/groups/remove', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => { await vclights.forgetGroup(client, req.vcSiteId, (req.body || {}).name); return {}; }));
 app.post('/api/venue-control/sites/:locationId/lights/routines', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
 lightsRoute(req, res, async (client) => ({ routine: await vclights.saveRoutine(client, req.vcSiteId, null, req.body || {}) })));
 app.post('/api/venue-control/sites/:locationId/lights/routines/:routineId/update', auth.requireSession('light'), requireOwnerSite(), (req, res) =>

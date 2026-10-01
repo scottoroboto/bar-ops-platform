@@ -2069,7 +2069,7 @@ function lightsLocation() { return document.getElementById('sourcesLocationSelec
 async function loadLightsAdmin(locationId) {
   try {
     const data = await api(`/api/venue-control/sites/${locationId}/lights`);
-    LIGHTS = { plugs: data.plugs || [], routines: data.routines || [] };
+    LIGHTS = { plugs: data.plugs || [], routines: data.routines || [], groups: data.groups || [] };
     renderPlugsList();
     renderLightRoutines();
   } catch (e) {
@@ -2110,6 +2110,41 @@ function plugLiveWords(p) {
   return `<span class="badge ${p.last_on ? 'on' : ''}">${p.last_on ? `on${p.last_watts !== null ? ` · ${Math.round(p.last_watts)} W` : ''}` : 'off'}</span>`;
 }
 
+// Groups: pick one the bar has used, or "New group…" to type one. The pick
+// carries over to the next new plug, since signs get set up a room at a time.
+let LAST_PLUG_GROUP = '';
+function groupPickerHtml(id, current) {
+  const cur = current || '';
+  const names = (LIGHTS.groups || []).map((g) => g.name);
+  if (cur && !names.includes(cur)) names.push(cur);
+  return `<span style="display:flex; gap:6px; flex:1 1 240px; min-width:0;">
+    <select id="${id}" onchange="groupPicked(this)" style="margin:0; flex:1; min-width:0;">
+      <option value="">No group</option>
+      ${names.map((n) => `<option value="${escapeHtml(n)}" ${n === cur ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+      <option value="__new">+ New group…</option>
+    </select>
+    <input id="${id}-new" placeholder="New group name" maxlength="60" style="display:none; margin:0; flex:1; min-width:0;">
+  </span>`;
+}
+function groupPicked(sel) {
+  const input = document.getElementById(`${sel.id}-new`);
+  input.style.display = sel.value === '__new' ? '' : 'none';
+  if (sel.value === '__new') input.focus();
+}
+function readGroup(id) {
+  const sel = document.getElementById(id);
+  if (!sel) return '';
+  return sel.value === '__new' ? document.getElementById(`${id}-new`).value.trim() : sel.value;
+}
+
+async function forgetLightGroup(name) {
+  try {
+    await api(`/api/venue-control/sites/${lightsLocation()}/lights/groups/remove`, { method: 'POST', body: { name } });
+    if (LAST_PLUG_GROUP === name) LAST_PLUG_GROUP = '';
+    await loadLightsAdmin(lightsLocation());
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
 // The plug's ID number (T1-001), shown ahead of its name.
 function plugTagHtml(p) {
   return p.tag ? `<span style="display:inline-block; white-space:nowrap; font-family:ui-monospace,monospace; font-size:12px; font-weight:700; padding:1px 6px; margin-right:6px; border:1px solid currentColor; border-radius:4px; opacity:.75;">${escapeHtml(p.tag)}</span>` : '';
@@ -2117,8 +2152,8 @@ function plugTagHtml(p) {
 
 function renderPlugsList() {
   const el = document.getElementById('plugsList');
-  const groups = [...new Set(LIGHTS.plugs.map((p) => p.group_name).filter(Boolean))].sort();
-  document.getElementById('plugGroups').innerHTML = groups.map((g) => `<option value="${escapeHtml(g)}">`).join('');
+  const macWrap = document.getElementById('plugMacGroupWrap');
+  if (macWrap) macWrap.innerHTML = groupPickerHtml('plugMacGroup', readGroup('plugMacGroup'));
   const fresh = LIGHTS.plugs.filter((p) => !p.name && !p.archived_at);
   const named = LIGHTS.plugs.filter((p) => p.name && !p.archived_at);
   const archived = LIGHTS.plugs.filter((p) => p.archived_at);
@@ -2133,7 +2168,7 @@ function renderPlugsList() {
         </div>
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
           <input id="plugName-${p.id}" placeholder="Name, e.g. Bud Light" style="flex:2; min-width:140px; margin:0;">
-          <input id="plugGroup-${p.id}" placeholder="Group" list="plugGroups" style="flex:1; min-width:110px; margin:0;">
+          ${groupPickerHtml(`plugGroup-${p.id}`, LAST_PLUG_GROUP)}
           <button class="small primary" style="margin:0;" onclick="nameNewPlug(${p.id})">Save</button>
           <button class="small ghost" style="margin:0;" onclick="plugOp(${p.id}, 'archive')">Not a sign</button>
         </div>
@@ -2153,7 +2188,7 @@ function renderPlugsList() {
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
             <input id="plugEditTag" value="${escapeHtml(p.tag || '')}" placeholder="ID" title="ID number on the plug's label" style="flex:0 0 90px; min-width:80px; margin:0; font-family:ui-monospace,monospace;">
             <input id="plugEditName" value="${escapeHtml(p.name)}" style="flex:2; min-width:140px; margin:0;">
-            <input id="plugEditGroup" value="${escapeHtml(p.group_name || '')}" list="plugGroups" placeholder="Group" style="flex:1; min-width:110px; margin:0;">
+            ${groupPickerHtml('plugEditGroup', p.group_name)}
           </div>
           <select id="plugEditSchedule" style="margin:0;">
             <option value="none" ${p.schedule_mode === 'none' ? 'selected' : ''}>No schedule</option>
@@ -2189,6 +2224,13 @@ function renderPlugsList() {
           <button class="small ghost" style="margin:0;" onclick="if (confirm('Delete this plug for good? If it’s still plugged in, the box will find it again as a new plug.')) plugOp(${p.id}, 'delete')">Delete</button></div>
         </div>`).join('');
     }
+  }
+  const groups = LIGHTS.groups || [];
+  if (groups.length) {
+    html += `<details style="margin-top:12px;"><summary class="muted" style="cursor:pointer;">Groups (${groups.length})</summary>
+      ${groups.map((g) => `<div class="list-row"><div><div class="name">${escapeHtml(g.name)}</div><div class="sub">${g.plugs} plug${g.plugs === 1 ? '' : 's'}</div></div>
+        ${g.plugs ? '' : `<button class="small ghost" style="margin:0;" onclick="forgetLightGroup(${escapeHtml(JSON.stringify(g.name))})">Remove</button>`}</div>`).join('')}
+      <p class="muted" style="font-size:12px;">Add a group with “+ New group…” when naming or editing a plug. A group with plugs in it can’t be removed.</p></details>`;
   }
   el.innerHTML = html;
 }
@@ -2240,10 +2282,11 @@ async function blinkPlug(plugId, btn) {
 
 async function nameNewPlug(plugId) {
   const name = document.getElementById(`plugName-${plugId}`).value.trim();
-  const group = document.getElementById(`plugGroup-${plugId}`).value.trim();
+  const group = readGroup(`plugGroup-${plugId}`);
   if (!name) { showMsg('Give the plug a name.', 'error'); return; }
   try {
     const r = await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/update`, { method: 'POST', body: { name, group } });
+    LAST_PLUG_GROUP = (r && r.plug && r.plug.group_name) || '';
     const tag = r && r.plug && r.plug.tag;
     showMsg(tag ? `Saved “${name}” as ${tag}. Label the plug ${tag}.` : `Saved “${name}”.`, 'success');
     await loadLightsAdmin(lightsLocation());
@@ -2254,7 +2297,7 @@ async function savePlugEdit(plugId) {
   const sched = document.getElementById('plugEditSchedule').value;
   const body = {
     tag: document.getElementById('plugEditTag').value, name: document.getElementById('plugEditName').value,
-    group: document.getElementById('plugEditGroup').value,
+    group: readGroup('plugEditGroup'),
   };
   if (sched === 'none') body.schedule = { mode: 'none' };
   else if (sched.startsWith('r')) body.schedule = { mode: 'routine', routineId: Number(sched.slice(1)) };
@@ -2276,11 +2319,11 @@ async function plugOp(plugId, op) {
 async function addPlugByMac() {
   const body = {
     mac: document.getElementById('plugMac').value, name: document.getElementById('plugMacName').value,
-    group: document.getElementById('plugMacGroup').value,
+    group: readGroup('plugMacGroup'),
   };
   try {
     const r = await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs`, { method: 'POST', body });
-    ['plugMac', 'plugMacName', 'plugMacGroup'].forEach((id) => { document.getElementById(id).value = ''; });
+    ['plugMac', 'plugMacName'].forEach((id) => { document.getElementById(id).value = ''; });
     const tag = r && r.plug && r.plug.tag;
     showMsg(`Plug added${tag ? ` as ${tag}` : ''}. It’s matched as soon as the box sees it.`, 'success');
     await loadLightsAdmin(lightsLocation());

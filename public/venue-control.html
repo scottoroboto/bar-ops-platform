@@ -328,10 +328,9 @@
         <p class="muted" style="font-size:12px;">From the Kasa app: the plug → Settings → Device Info. It gets matched as soon as the box sees it on the bar's network.</p>
         <input id="plugMac" placeholder="MAC, e.g. A8:42:A1:12:34:56" autocapitalize="characters" autocorrect="off" spellcheck="false">
         <input id="plugMacName" placeholder="Name, e.g. Bud Light">
-        <input id="plugMacGroup" placeholder="Group, e.g. Front Windows" list="plugGroups">
+        <div id="plugMacGroupWrap" style="display:flex; margin-bottom:8px;"></div>
         <button class="secondary" onclick="addPlugByMac()">Add plug</button>
       </details>
-      <datalist id="plugGroups"></datalist>
     </div>
 
     <div class="card" id="lightRoutinesCard">
