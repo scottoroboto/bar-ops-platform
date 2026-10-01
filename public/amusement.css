@@ -119,3 +119,12 @@ button.confirm { background: var(--success); color: #0f1115; width: 100%; margin
 .am-inline-form label { margin-top: 10px; }
 .am-hidden { display: none !important; }
 .am-tap { cursor: pointer; }
+
+/* Which bills a game's acceptor takes (game form) */
+.am-denoms button { flex: 1; }
+
+/* Labelled amounts read off a game's collection screen (tap to pick) */
+.am-lines { display: flex; flex-direction: column; gap: 4px; }
+.am-lines button { display: flex; justify-content: space-between; align-items: center; width: 100%; margin: 0; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--card-border); background: transparent; color: var(--text); font-size: 13px; }
+.am-lines button .a { font-weight: 700; font-variant-numeric: tabular-nums; }
+.am-lines button.on { border-color: var(--accent); background: rgba(80,140,255,0.14); }

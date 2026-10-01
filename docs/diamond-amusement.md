@@ -5,7 +5,7 @@ basketball, pinball) placed in the bars, collected roughly every two weeks
 by Scotto or Ryan, with each location's total rung into that bar's SpotOn
 POS as an "Amusement" sale.
 
-Files: `db/patch_041_amusement.sql`, `db/patch_042_amusement_tare_pos_photo.sql`, `server/amusement.js`, the
+Files: `db/patch_041_amusement.sql`, `db/patch_042_amusement_tare_pos_photo.sql`, `db/patch_044_amusement_collection_screen.sql`, `server/amusement.js`, the
 `/api/amusement/*` routes at the bottom of `server/index.js`,
 `public/amusement.html|js|css`, `public/amusement-tags.html` (printable QR
 stickers). App key `amusement` on `employee_apps`; the tile is
@@ -49,6 +49,35 @@ stickers). App key `amusement` on `employee_apps`; the tile is
    instead of the $10 roll (worn quarters run light; a test weight
    doesn't). Admin shows every check with its drift so a scale going
    bad is visible before it costs money.
+
+## Per-game settings that change the collection screen
+
+Each game (Games → the game → Edit) says what it takes:
+
+- **Takes quarters** — off for Golden Tee. With it off there is no
+  weighing step for that game at all.
+- **Takes bills**, and **which bills** ($1, $5, $10, $20). The collector
+  only sees columns for the bills that acceptor takes. With bills off
+  the sheet shows no bills card.
+- **Has a collection screen** — on for Golden Tee and Power Putt. Each
+  visit that game's line starts with a photo of the game's own
+  collection screen (the reader pulls the total off it when it can),
+  then asks "Did you clear the collection screen?", and only then the
+  bills (and quarters, for Power Putt). The photo and the answer are
+  stored on the line, and the review page flags a screen total that
+  does not match what was counted, and a screen that was not cleared.
+
+- **Collection amount comes from the screen** (Golden Tee). The game
+  works out income less its own fees and shows the amount to be split
+  between operator and location; that number *is* the collection. The
+  bills (and coins) counted are still entered and stored on the line
+  as `bills_counted_amount`, for the audit, but add nothing. Set
+  **Screen line to read** to the label as printed on the game ("Total
+  Due") and the reader pulls that line; it also lists every labelled
+  amount it saw so the collector can tap the right one if it guessed
+  wrong.
+
+(`db/patch_044_amusement_collection_screen.sql`.)
 
 ## How a collection works
 

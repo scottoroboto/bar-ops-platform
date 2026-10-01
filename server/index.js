@@ -50,7 +50,19 @@ async function canManagePerson(viewer, personId) {
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// Which build is running: Render's commit id, else the start time. Sent
+// on every API response so a phone that still has an older page open
+// (Ryan mid-collection when a deploy lands) reloads itself at its next
+// page change instead of hitting rules its page knows nothing about.
+const APP_VERSION = (process.env.RENDER_GIT_COMMIT || '').slice(0, 12) || String(Date.now());
+app.use((req, res, next) => { if (req.path.startsWith('/api/')) res.set('X-App-Version', APP_VERSION); next(); });
+// Pages, scripts and styles always revalidate (ETag makes that one cheap
+// 304), so a reload really does fetch the new build.
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  setHeaders(res, filePath) {
+    if (/\.(html|js|css)$/.test(filePath)) res.set('Cache-Control', 'no-cache');
+  },
+}));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // ---------------- Status ----------------
@@ -4853,6 +4865,10 @@ app.post('/api/amusement/collections/:id/scale-check', auth.requireSession('ligh
   return amusement.recordScaleCheck(client, req.params.id, { grams: req.body.grams, photoPath });
 }));
 
+app.post('/api/amusement/collections/:id/scale-check/clear', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  return amusement.clearScaleCheck(client, req.params.id);
+}));
+
 // Photo of the scale display -> { value, unit, confidence, photoPath }.
 // The photo is stored first (it's the evidence, whether or not the read
 // works), then read. Nothing about the sheet changes here — the client
@@ -4871,12 +4887,29 @@ app.post('/api/amusement/collections/:id/read-scale', auth.requireSession('light
   return { ...reading, photoPath, photoStored: !!photoPath };
 }));
 
+// Photo of a game's collection screen (Golden Tee, Power Putt) -> { total, photoPath }.
+app.post('/api/amusement/collections/:id/read-screen', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('collector', async (client, req) => {
+  if (!req.file) return { error: 'No photo received.' };
+  if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+  const collection = await amusement.getCollection(client, req.params.id);
+  if (!collection) return { error: 'Collection not found.', status: 404 };
+  if (collection.status !== 'draft') return { error: 'This collection is finalized.' };
+  const game = req.body && req.body.gameId ? await amusement.getGame(client, req.body.gameId) : null;
+  const [photoPath, reading] = await Promise.all([
+    amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: collection.id }),
+    amusement.readerConfigured()
+      ? amusement.readScreenPhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, label: game ? game.screen_amount_label : null, fromScreen: !!(game && game.collection_from_screen) })
+      : Promise.resolve({ total: null, lines: [], confidence: 'low', raw: '' }),
+  ]);
+  return { ...reading, photoPath, photoStored: !!photoPath };
+}));
+
 // Never the raw bucket path — a short-lived signed URL, same as receipts.
 app.get('/api/amusement/photo', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
   const p = String(req.query.path || '');
   if (!p || p.includes('..')) return { error: 'Bad path.' };
   const { rows } = await client.query(
-    `SELECT 1 FROM amusement_collection_items WHERE weight_photo_path = $1
+    `SELECT 1 FROM amusement_collection_items WHERE weight_photo_path = $1 OR screen_photo_path = $1
      UNION ALL SELECT 1 FROM amusement_collections WHERE scale_check_photo_path = $1 OR pos_photo_path = $1
      UNION ALL SELECT 1 FROM amusement_games WHERE tare_photo_path = $1 LIMIT 1`, [p]);
   if (!rows.length) return { error: 'Not found.', status: 404 };
