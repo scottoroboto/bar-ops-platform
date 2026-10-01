@@ -1292,7 +1292,7 @@ body.staff {
 .lt-row { display: grid; grid-template-columns: 56px 1fr 170px; gap: 10px; align-items: center; margin-top: 10px; }
 .lt-row .lb { font-size: 14px; font-weight: 800; }
 .lt-row .lb.on { color: var(--neon-green); } .lt-row .lb.off { color: #FF8A9A; }
-.staff input.lt-val-in { width: 100%; box-sizing: border-box; background: #0B0B10; border: 1px solid var(--border-mid); border-radius: 10px; padding: 9px 10px; font-size: 16px; font-weight: 800; color: #fff; text-align: center; font-family: inherit; color-scheme: dark; margin: 0; }
+.staff input.lt-val-in, .staff select.lt-val-in { width: 100%; box-sizing: border-box; background: #0B0B10; border: 1px solid var(--border-mid); border-radius: 10px; padding: 9px 10px; font-size: 16px; font-weight: 800; color: #fff; text-align: center; font-family: inherit; color-scheme: dark; margin: 0; }
 .lt-step { display: flex; align-items: center; background: #0B0B10; border: 1px solid var(--border-mid); border-radius: 10px; height: 42px; }
 .lt-step span { flex: 1; text-align: center; font-size: 14px; font-weight: 800; color: #fff; }
 .staff .lt-step button { width: 44px; height: 40px; min-height: 0; margin: 0; background: transparent; border: 0; color: var(--neon-cyan); font-size: 22px; font-weight: 800; }
