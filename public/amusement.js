@@ -495,17 +495,36 @@ async function renderWeigh(collectionId, gameId) {
   const hasBoxTare = g.tare_g !== null && g.tare_g !== undefined;
   const boxTare = hasBoxTare ? (unit === 'lb' ? Number((num(g.tare_g) / GRAMS_PER_LB).toFixed(3)) : num(g.tare_g)) : defaultTareFor(unit);
   const tare = g.item_id ? num(g.tare_weight) : boxTare;
+  const takesCoins = g.accepts_coins !== false;
+  const takesBills = !!g.accepts_bills;
+  const denoms = denomsOf(g);
+  const hasScreen = !!g.has_collection_screen;
+  const iv = (id) => ($(id) ? $(id).value : '');
   const state = {
     unit, gross: g.item_id && g.gross_weight !== null ? num(g.gross_weight) : '', tare,
     photoPath: g.weight_photo_path || null, readValue: g.item_id ? g.weight_read_value : null, readUnit: g.item_id ? g.weight_read_unit : null,
     localPhotoUrl: null, condition: g.condition || 'ok',
+    screenPhotoPath: g.screen_photo_path || null, screenLocalUrl: null,
+    screenCleared: g.item_id && (g.screen_cleared === true || g.screen_cleared === false) ? g.screen_cleared : null,
   };
+  const screenCard = hasScreen ? `
+    <div class="card">
+      <div class="am-kicker" style="margin:0 0 10px;">1 · Collection screen</div>
+      <div id="screenPhotoBox"></div>
+      <button class="am-bigbtn" id="screenBtn">${ICON_CAMERA}<span><span class="t">Photo the collection screen</span><br><span class="s">Bring it up on the game first${CAPS.photoReader ? ' · we read the total' : ''}</span></span></button>
+      <div id="screenReadBox"></div>
+      <div class="am-conv"><span>Screen total <span class="muted">(what the game says it took)</span></span><span style="display:flex; align-items:center; gap:6px;"><span class="muted">$</span><input id="screenTotal" type="number" inputmode="decimal" step="0.01" min="0" style="width:110px; margin:0; font-weight:700; text-align:right;" value="${g.item_id && g.screen_total !== null && g.screen_total !== undefined ? num(g.screen_total) : ''}" placeholder="0.00"></span></div>
+      <div style="margin-top:12px; font-weight:600;">Did you clear the collection screen?</div>
+      <div class="am-cond" style="margin-top:6px;"><button type="button" class="ok ${state.screenCleared === true ? 'on' : ''}" id="clearedYes">Yes, cleared</button><button type="button" class="issue ${state.screenCleared === false ? 'on' : ''}" id="clearedNo">No</button></div>
+      <div id="clearedNote" class="muted" style="font-size:11px; margin-top:6px;">${state.screenCleared === false ? 'Clear it before you leave or next visit\'s screen will include this one.' : ''}</div>
+    </div>` : '';
 
   $('panelMain').innerHTML = `
     ${headHtml(g.name, `${escapeHtml([g.make, g.model].filter(Boolean).join(' ') || typeLabel(g.game_type))} · ${c.location_name} · game ${idx + 1} of ${sheet.games.length}`, '#collect/' + collectionId, `<span class="muted" style="white-space:nowrap;">${money(g.price_per_play)} / play</span>`)}
-    <div class="card">
+    ${screenCard}
+    ${takesCoins ? `<div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-        <div class="am-kicker" style="margin:0;">Quarters · by weight</div>
+        <div class="am-kicker" style="margin:0;">${hasScreen ? '2 · ' : ''}Quarters · by weight</div>
         <div class="am-unit-toggle"><button id="unitG" class="${unit === 'g' ? 'on' : ''}">g</button><button id="unitLb" class="${unit === 'lb' ? 'on' : ''}">lb</button></div>
       </div>
       <div id="photoBox"></div>
@@ -517,18 +536,16 @@ async function renderWeigh(collectionId, gameId) {
       </div>
       <div class="am-conv"><span id="convText">—</span><span class="v" id="convDollars">$0.00</span></div>
       <div class="muted" style="font-size:11px; margin-top:6px;">${hasBoxTare ? `Tare is ${escapeHtml(g.tag_code)}'s own coin box (${num(g.tare_g)} g).` : `Tare is the default bucket${LEVEL === 'owner' ? ` — weigh this game's empty coin box under Games to set its own` : ''}.`} 1 quarter = ${num(SETTINGS.quarter_weight_g)} g. Rounded to the nearest coin.</div>
-    </div>
+    </div>` : ''}
 
-    <div class="card">
-      <div class="am-kicker" style="margin:0 0 10px;">Bills${g.accepts_bills ? ' · from acceptor' : ''}</div>
-      <div class="am-grid4">
-        <div><label for="b1">$1 ×</label><input id="b1" type="number" inputmode="numeric" min="0" value="${g.item_id ? g.bills_1 : ''}" placeholder="0"></div>
-        <div><label for="b5">$5 ×</label><input id="b5" type="number" inputmode="numeric" min="0" value="${g.item_id ? g.bills_5 : ''}" placeholder="0"></div>
-        <div><label for="b10">$10 ×</label><input id="b10" type="number" inputmode="numeric" min="0" value="${g.item_id ? g.bills_10 : ''}" placeholder="0"></div>
-        <div><label for="b20">$20 ×</label><input id="b20" type="number" inputmode="numeric" min="0" value="${g.item_id ? g.bills_20 : ''}" placeholder="0"></div>
+    ${takesBills ? `<div class="card">
+      <div class="am-kicker" style="margin:0 0 10px;">${hasScreen ? (takesCoins ? '3 · ' : '2 · ') : ''}Bills · from acceptor${!takesCoins ? ' <span class="muted" style="text-transform:none; letter-spacing:0; font-weight:400;">(no quarters on this game)</span>' : ''}</div>
+      <div class="am-grid4" style="grid-template-columns: repeat(${denoms.length}, 1fr);">
+        ${denoms.map((d) => `<div><label for="b${d}">$${d} ×</label><input id="b${d}" type="number" inputmode="numeric" min="0" value="${g.item_id ? g['bills_' + d] : ''}" placeholder="0"></div>`).join('')}
       </div>
       <div class="am-conv"><span>Bills total <span class="muted">(or type a flat amount)</span></span><span style="display:flex; align-items:center; gap:6px;"><span class="muted">$</span><input id="billsFlat" type="number" inputmode="decimal" step="0.01" min="0" style="width:110px; margin:0; font-weight:700; text-align:right;" value="${g.item_id && g.bills_flat_amount !== null ? num(g.bills_flat_amount) : ''}" placeholder="0.00"></span></div>
-    </div>
+      <div id="screenMatch"></div>
+    </div>` : `<div class="muted" style="font-size:11px; margin:-4px 0 10px;">No bill acceptor on this game${LEVEL === 'owner' ? ' (change under Games)' : ''}.</div><div id="screenMatch"></div>`}
 
     <div class="card">
       <div class="am-grid2">
@@ -546,21 +563,32 @@ async function renderWeigh(collectionId, gameId) {
   document.querySelector('.wrap').classList.add('has-footer');
 
   const recalc = () => {
-    const p = previewQuarters($('gross').value, $('tare').value, state.unit);
+    const p = takesCoins ? previewQuarters($('gross').value, $('tare').value, state.unit) : null;
     const bills = billsPreview();
-    if (p) {
-      $('convText').textContent = `${Math.round(p.netG)} g net ≈ ${p.coins.toLocaleString()} quarters`;
-      $('convDollars').textContent = money(p.dollars);
-    } else { $('convText').textContent = 'Enter the gross weight'; $('convDollars').textContent = '$0.00'; }
+    if (takesCoins) {
+      if (p) {
+        $('convText').textContent = `${Math.round(p.netG)} g net ≈ ${p.coins.toLocaleString()} quarters`;
+        $('convDollars').textContent = money(p.dollars);
+      } else { $('convText').textContent = 'Enter the gross weight'; $('convDollars').textContent = '$0.00'; }
+    }
     $('gameTotal').textContent = money((p ? p.dollars : 0) + bills);
+    if (hasScreen) {
+      const st = $('screenTotal').value === '' ? null : num($('screenTotal').value);
+      const cash = (p ? p.dollars : 0) + bills;
+      if (st !== null && (bills > 0 || p) && Math.abs(st - cash) > 1) {
+        $('screenMatch').innerHTML = `<div class="am-warn" style="margin-top:8px;">${ICON_WARN}<span>The screen says <strong>${money(st)}</strong> but you counted <strong>${money(cash)}</strong>. Recount, or note why.</span></div>`;
+      } else if (st !== null && (bills > 0 || p)) {
+        $('screenMatch').innerHTML = `<div class="muted" style="font-size:11px; margin-top:6px;">Matches the screen (${money(st)}).</div>`;
+      } else $('screenMatch').innerHTML = '';
+    }
   };
   const billsPreview = () => {
-    const counted = num($('b1').value) + num($('b5').value) * 5 + num($('b10').value) * 10 + num($('b20').value) * 20;
-    return counted > 0 ? counted : num($('billsFlat').value);
+    const counted = num(iv('b1')) + num(iv('b5')) * 5 + num(iv('b10')) * 10 + num(iv('b20')) * 20;
+    return counted > 0 ? counted : num(iv('billsFlat'));
   };
-  ['gross', 'tare', 'b1', 'b5', 'b10', 'b20', 'billsFlat'].forEach((id) => { $(id).addEventListener('input', recalc); });
+  ['gross', 'tare', 'b1', 'b5', 'b10', 'b20', 'billsFlat', 'screenTotal'].forEach((id) => { if ($(id)) $(id).addEventListener('input', recalc); });
   const setUnit = (u) => {
-    if (state.unit === u) return;
+    if (state.unit === u || !takesCoins) return;
     const gross = num($('gross').value, NaN);
     const t = num($('tare').value, NaN);
     const conv = (v) => (u === 'lb' ? v / GRAMS_PER_LB : v * GRAMS_PER_LB);
@@ -571,8 +599,42 @@ async function renderWeigh(collectionId, gameId) {
     $('unitLabel1').textContent = u; $('unitLabel2').textContent = u;
     recalc();
   };
-  $('unitG').onclick = () => setUnit('g');
-  $('unitLb').onclick = () => setUnit('lb');
+  if ($('unitG')) { $('unitG').onclick = () => setUnit('g'); $('unitLb').onclick = () => setUnit('lb'); }
+  if (hasScreen) {
+    const renderScreenPhoto = async () => {
+      const url = state.screenLocalUrl || (state.screenPhotoPath ? await photoUrlFor(state.screenPhotoPath) : null);
+      if (!url) { $('screenPhotoBox').innerHTML = ''; return; }
+      $('screenPhotoBox').innerHTML = `<div class="am-photo"><img src="${url}" alt="Collection screen"><div class="bar"><span>${state.screenPhotoPath ? 'Collection screen photo saved' : 'Photo not stored (storage off)'}</span><a href="#" id="screenRetake">Retake</a></div></div>`;
+      $('screenRetake').onclick = (e) => { e.preventDefault(); $('screenBtn').click(); };
+    };
+    $('screenBtn').onclick = async () => {
+      const file = await pickPhoto();
+      if (!file) return;
+      $('screenBtn').disabled = true;
+      $('screenReadBox').innerHTML = CAPS.photoReader ? '<p class="muted" style="text-align:center;">Reading the screen…</p>' : '';
+      try {
+        const blob = await shrinkImage(file, 1600);
+        if (state.screenLocalUrl) URL.revokeObjectURL(state.screenLocalUrl);
+        state.screenLocalUrl = URL.createObjectURL(blob);
+        const fd = new FormData();
+        fd.append('photo', blob, 'screen.jpg');
+        const r = await apiUpload(`/api/amusement/collections/${collectionId}/read-screen`, fd);
+        state.screenPhotoPath = r.photoPath || state.screenPhotoPath;
+        await renderScreenPhoto();
+        if (r.total !== null && r.total !== undefined) {
+          $('screenTotal').value = r.total;
+          $('screenReadBox').innerHTML = `<div class="am-warn">${ICON_WARN}<span><strong>The screen shows ${money(r.total)}${r.confidence === 'low' ? ' (not sure)' : ''}.</strong> Check it against the game — fix it if we misread. Now clear the screen on the game.</span></div>`;
+        } else {
+          $('screenReadBox').innerHTML = CAPS.photoReader ? `<p class="msg error">${escapeHtml(r.error || 'Could not read a total — type it if the screen shows one.')}</p>` : '';
+        }
+        recalc();
+      } catch (e) { $('screenReadBox').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
+      $('screenBtn').disabled = false;
+    };
+    $('clearedYes').onclick = () => { state.screenCleared = true; $('clearedYes').classList.add('on'); $('clearedNo').classList.remove('on'); $('clearedNote').textContent = ''; };
+    $('clearedNo').onclick = () => { state.screenCleared = false; $('clearedNo').classList.add('on'); $('clearedYes').classList.remove('on'); $('clearedNote').textContent = 'Clear it before you leave or next visit\'s screen will include this one.'; };
+    renderScreenPhoto();
+  }
   $('condOk').onclick = () => { state.condition = 'ok'; $('condOk').classList.add('on'); $('condIssue').classList.remove('on'); };
   $('condIssue').onclick = () => { state.condition = 'issue'; $('condIssue').classList.add('on'); $('condOk').classList.remove('on'); };
 
@@ -612,18 +674,25 @@ async function renderWeigh(collectionId, gameId) {
   };
 
   $('saveBtn').onclick = async () => {
-    const grossRaw = $('gross').value;
-    const hasBills = billsPreview() > 0;
-    if (grossRaw === '' && !hasBills) { $('saveStatus').innerHTML = '<p class="msg error">Enter the weight, or bills, before saving. If the game earned nothing, enter 0.</p>'; return; }
+    const grossRaw = takesCoins ? $('gross').value : '';
+    const billsTyped = iv('billsFlat') !== '' || ['b1', 'b5', 'b10', 'b20'].some((id) => iv(id) !== '');
+    const hasBills = billsPreview() > 0 || billsTyped;
+    if (hasScreen) {
+      if (CAPS.photoStorage && !state.screenPhotoPath) { $('saveStatus').innerHTML = '<p class="msg error">Photo the collection screen first.</p>'; return; }
+      if (state.screenCleared === null) { $('saveStatus').innerHTML = '<p class="msg error">Answer whether you cleared the collection screen.</p>'; return; }
+    }
+    if (grossRaw === '' && !hasBills && (takesCoins || takesBills)) { $('saveStatus').innerHTML = `<p class="msg error">${takesCoins ? 'Enter the weight, or bills, before saving.' : 'Enter the bills before saving.'} If the game earned nothing, enter 0.</p>`; return; }
     $('saveBtn').disabled = true;
     try {
       await api(`/api/amusement/collections/${collectionId}/items/${gameId}`, { method: 'POST', body: {
-        grossWeight: grossRaw === '' ? null : grossRaw, tareWeight: $('tare').value, weightUnit: state.unit,
-        bills1: $('b1').value, bills5: $('b5').value, bills10: $('b10').value, bills20: $('b20').value, billsFlatAmount: $('billsFlat').value,
+        grossWeight: grossRaw === '' ? null : grossRaw, tareWeight: takesCoins ? $('tare').value : null, weightUnit: state.unit,
+        bills1: iv('b1'), bills5: iv('b5'), bills10: iv('b10'), bills20: iv('b20'), billsFlatAmount: iv('billsFlat'),
         meterReading: $('meter').value, condition: state.condition, note: $('note').value,
         weightPhotoPath: state.photoPath, weightReadValue: state.readValue, weightReadUnit: state.readUnit,
+        screenPhotoPath: state.screenPhotoPath, screenTotal: hasScreen ? $('screenTotal').value : null, screenCleared: hasScreen ? state.screenCleared : null,
       } });
       if (state.localPhotoUrl) URL.revokeObjectURL(state.localPhotoUrl);
+      if (state.screenLocalUrl) URL.revokeObjectURL(state.screenLocalUrl);
       if (!g.item_id && nextGame) go(`#weigh/${collectionId}/${nextGame.id}`);
       else go('#collect/' + collectionId);
     } catch (e) {
@@ -637,7 +706,7 @@ async function renderWeigh(collectionId, gameId) {
     catch (e) { $('saveStatus').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
   };
   recalc();
-  renderPhotoBox();
+  if (takesCoins) renderPhotoBox();
 }
 
 // ---------------------------------------------------------------------
@@ -651,7 +720,7 @@ async function renderReview(collectionId) {
   const days = Math.max(1, daysAgo(c.period_start || c.started_at) || 1);
   const isFinal = c.status === 'final';
   const rows = done.map((g) => `<tr>
-      <td>${escapeHtml(g.name)}${g.condition === 'issue' ? ' <span class="badge stale">issue</span>' : ''}${g.note ? `<div class="muted" style="font-size:11px;">${escapeHtml(g.note)}</div>` : ''}</td>
+      <td>${escapeHtml(g.name)}${g.condition === 'issue' ? ' <span class="badge stale">issue</span>' : ''}${g.screen_cleared === false ? ' <span class="badge stale">screen not cleared</span>' : ''}${g.screen_total !== null && g.screen_total !== undefined ? `<div class="muted" style="font-size:11px;">Screen said ${money(g.screen_total)}${Math.abs(num(g.screen_total) - num(g.total)) > 1 ? ' <span style="color:#f0c265;">≠ counted</span>' : ''}</div>` : ''}${g.note ? `<div class="muted" style="font-size:11px;">${escapeHtml(g.note)}</div>` : ''}</td>
       <td class="r muted">${g.gross_weight !== null ? `${num(g.gross_weight)} ${g.weight_unit}` : '—'}</td>
       <td class="r muted">${num(g.bills_amount) ? money(g.bills_amount) : '—'}</td>
       <td class="r b">${money(g.total)}</td></tr>`).join('');
@@ -741,7 +810,7 @@ async function renderGames() {
     <div class="card" style="padding:4px 14px;">${byLoc[loc].map((g) => `
       <div class="list-row am-tap" onclick="go('#game/${g.id}')">
         <div><div class="name">${escapeHtml(g.name)}${g.last_condition === 'issue' ? ' <span class="badge stale">issue</span>' : ''}${g.status === 'retired' ? ' <span class="badge off">retired</span>' : ''}</div>
-          <div class="sub">${escapeHtml(typeLabel(g.game_type))}${g.make || g.model ? ' · ' + escapeHtml([g.make, g.model].filter(Boolean).join(' ')) : ''} · ${money(g.price_per_play)}/play · ${g.accepts_bills ? 'quarters + bills' : 'quarters only'} · ${escapeHtml(g.tag_code)}</div></div>
+          <div class="sub">${escapeHtml(typeLabel(g.game_type))}${g.make || g.model ? ' · ' + escapeHtml([g.make, g.model].filter(Boolean).join(' ')) : ''} · ${money(g.price_per_play)}/play · ${takesText(g)} · ${escapeHtml(g.tag_code)}</div></div>
         <div style="text-align:right;">${g.per_day_90d !== null ? `<div style="font-weight:600; font-variant-numeric: tabular-nums;">${money(g.per_day_90d)}/day</div><div class="muted" style="font-size:11px;">90-day</div>` : '<div class="muted" style="font-size:11px;">no data</div>'}</div>
       </div>`).join('')}</div>`).join('');
 
@@ -751,6 +820,14 @@ async function renderGames() {
     <div id="gameFormBox"></div>
     ${sections || '<div class="card"><p class="muted">Nothing here yet.</p></div>'}
     ${isOwner ? `<p class="muted" style="text-align:center;">Locations, stickers, settings and the scale-check history are under <a href="#admin">Admin</a>.</p>` : ''}`;
+}
+
+function denomsOf(g) { return (Array.isArray(g.bill_denoms) && g.bill_denoms.length ? g.bill_denoms : [1, 5, 10, 20]).map(Number); }
+function takesText(g) {
+  const parts = [];
+  if (g.accepts_coins !== false) parts.push('quarters');
+  if (g.accepts_bills) { const d = denomsOf(g); parts.push(d.length === 4 ? 'bills' : `bills (${d.map((x) => '$' + x).join(' ')})`); }
+  return parts.length ? parts.join(' + ') : 'no cash';
 }
 
 function gameForm(game) {
@@ -772,7 +849,11 @@ function gameForm(game) {
       <div><label for="gfSerial">Serial</label><input id="gfSerial" value="${escapeHtml(g.serial || '')}"></div>
       <div><label for="gfPrice">Price per play ($)</label><input id="gfPrice" type="number" step="0.25" min="0" value="${g.id ? num(g.price_per_play) : '1.00'}"></div>
     </div>
-    <div class="toggle-row" style="margin-top:12px;"><span class="label">Takes bills</span><label class="switch"><input type="checkbox" id="gfBills" ${g.accepts_bills ? 'checked' : ''}><span class="slider"></span></label></div>
+    <div class="toggle-row" style="margin-top:12px;"><span class="label">Takes quarters</span><label class="switch"><input type="checkbox" id="gfCoins" ${g.id ? (g.accepts_coins !== false ? 'checked' : '') : 'checked'}><span class="slider"></span></label></div>
+    <div class="toggle-row" style="margin-top:12px;"><span class="label">Takes bills</span><label class="switch"><input type="checkbox" id="gfBills" ${g.accepts_bills ? 'checked' : ''} onchange="$('gfDenoms').style.display = this.checked ? '' : 'none'"><span class="slider"></span></label></div>
+    <div id="gfDenoms" style="display:${g.accepts_bills ? '' : 'none'}; margin-top:8px;"><label>Which bills</label><div class="am-cond am-denoms">${[1, 5, 10, 20].map((d) => `<button type="button" class="ok ${(g.bill_denoms || [1, 5, 10, 20]).map(Number).includes(d) ? 'on' : ''}" data-denom="${d}" onclick="this.classList.toggle('on')">$${d}</button>`).join('')}</div></div>
+    <div class="toggle-row" style="margin-top:12px;"><span class="label">Has a collection screen <span class="muted" style="font-weight:400;">(Golden Tee, Power Putt)</span></span><label class="switch"><input type="checkbox" id="gfScreen" ${g.has_collection_screen ? 'checked' : ''}><span class="slider"></span></label></div>
+    <div class="muted" style="font-size:11px; margin-top:6px;">With a collection screen, each visit starts with a photo of that screen, then asks if it was cleared, then the bills.</div>
     <label for="gfNotes">Notes</label><input id="gfNotes" value="${escapeHtml(g.notes || '')}">
     <div id="gfStatus"></div>
     <div class="stack-actions"><button class="secondary" onclick="$('gameFormBox').innerHTML=''">Cancel</button><button class="primary" style="margin-top:10px;" id="gfSave">${g.id ? 'Save' : 'Add game'}</button></div>
@@ -780,7 +861,8 @@ function gameForm(game) {
   box.scrollIntoView({ behavior: 'smooth', block: 'start' });
   $('gfSave').onclick = async () => {
     const body = { name: $('gfName').value, gameType: $('gfType').value, make: $('gfMake').value, model: $('gfModel').value, serial: $('gfSerial').value,
-      pricePerPlay: $('gfPrice').value, acceptsBills: $('gfBills').checked, notes: $('gfNotes').value };
+      pricePerPlay: $('gfPrice').value, acceptsBills: $('gfBills').checked, acceptsCoins: $('gfCoins').checked, hasCollectionScreen: $('gfScreen').checked, notes: $('gfNotes').value,
+      billDenoms: Array.from(document.querySelectorAll('#gfDenoms button.on')).map((b) => Number(b.dataset.denom)) };
     if (!g.id) body.locationId = $('gfLoc').value;
     try {
       const r = await withStepUp(() => api(g.id ? `/api/amusement/games/${g.id}/update` : '/api/amusement/games', { method: 'POST', body }));
@@ -808,7 +890,8 @@ async function renderGameDetail(id) {
         <div><div class="k">Make / model</div><div>${escapeHtml([g.make, g.model].filter(Boolean).join(' ') || '—')}</div></div>
         <div><div class="k">Serial</div><div>${escapeHtml(g.serial || '—')}</div></div>
         <div><div class="k">Price per play</div><div>${money(g.price_per_play)} (${Math.round(num(g.price_per_play) * 4)} quarters)</div></div>
-        <div><div class="k">Takes bills</div><div>${g.accepts_bills ? 'Yes' : 'No'}</div></div>
+        <div><div class="k">Takes</div><div>${takesText(g)}</div></div>
+        <div><div class="k">Collection screen</div><div>${g.has_collection_screen ? 'Yes — photo it each visit' : 'No'}</div></div>
         <div><div class="k">Sticker</div><div>${escapeHtml(g.tag_code)}</div></div>
         <div><div class="k">Added</div><div>${fmtDate(g.created_at)}</div></div>
       </div>

@@ -119,3 +119,6 @@ button.confirm { background: var(--success); color: #0f1115; width: 100%; margin
 .am-inline-form label { margin-top: 10px; }
 .am-hidden { display: none !important; }
 .am-tap { cursor: pointer; }
+
+/* Which bills a game's acceptor takes (game form) */
+.am-denoms button { flex: 1; }
