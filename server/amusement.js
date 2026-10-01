@@ -622,6 +622,16 @@ async function report(client, { days = 90 } = {}) {
 
 // Every start-of-visit check, newest first — the "is the scale drifting"
 // view on the Admin page.
+async function clearScaleCheck(client, collectionId) {
+  const collection = await getCollection(client, collectionId);
+  if (!collection) throw httpError('Collection not found.', 404);
+  if (collection.status !== 'draft') throw httpError('This collection is finalized.');
+  const { rows } = await client.query(
+    `UPDATE amusement_collections SET scale_check_g = NULL, scale_check_ok = NULL, scale_check_expected_g = NULL
+     WHERE id = $1 RETURNING *`, [collectionId]);
+  return { collection: rows[0] };
+}
+
 async function listScaleChecks(client, limit = 40) {
   const { rows } = await client.query(
     `SELECT c.id, c.started_at, c.scale_check_g, c.scale_check_expected_g, c.scale_check_ok, c.scale_check_photo_path,
@@ -732,7 +742,7 @@ module.exports = {
   getAccess, getSettings, updateSettings,
   listLocations, getLocation, createLocation, updateLocation,
   listGames, getGame, getGameByTag, createGame, updateGame, moveGame, setGameStatus, setGameTare, getGamePlacements, getGameHistory, listScaleChecks,
-  getCollection, getCollectionSheet, startOrResumeCollection, computeItem, upsertItem, removeItem, recordScaleCheck,
+  getCollection, getCollectionSheet, startOrResumeCollection, computeItem, upsertItem, removeItem, recordScaleCheck, clearScaleCheck,
   updateCollectionNote, finalizeCollection, markPosted, discardDraft, listCollections,
   report, readScalePhoto, readerConfigured, storePhoto, photoUrl, GRAMS_PER_LB,
 };
