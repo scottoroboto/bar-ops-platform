@@ -42,13 +42,13 @@ function showMsg(text, kind) {
 function sourceStatus(s) {
   if (s.is_atm) return atmStatus(s);
   if (!s.last_counted_at) {
-    // Never counted but money has moved in (the Drop Safe's closing drops).
-    const bal = Number(s.balance || 0);
-    return { dot: '#9aa3b2', label: bal > 0 ? `${fmtMoney(bal)} · not counted yet` : 'Not counted yet' };
+    // Never counted (money may have moved in: the Drop Safe's closing drops,
+    // shown as the tile's balance).
+    return { dot: '#9aa3b2', label: 'Not counted yet' };
   }
   const v = Number(s.last_variance);
   const need = sourceShortBy(s);
-  if (v === 0 && need > 0) return { dot: '#e0a83e', label: `At ${fmtMoney(s.balance)} · needs ${fmtMoney(need)}` };
+  if (v === 0 && need > 0) return { dot: '#e0a83e', label: `Needs ${fmtMoney(need)}` };
   if (v === 0) return { dot: '#3fbf7f', label: 'OK' };
   if (v < 0) return { dot: '#e5566d', label: `${fmtMoney(Math.abs(v))} short` };
   return { dot: '#e0a83e', label: `${fmtMoney(v)} over` };
@@ -179,7 +179,6 @@ function dashboardHtml(sources, tier) {
   const orphanBags = sources.filter(s => s.kind === 'backup_bag' && !drawers.some(d => d.linked_source_id === s.id));
   const fixedPoints = sources.filter(s => s.kind === 'fixed_point');
 
-  const amountOf = (s) => Number((s.is_atm ? s.atm_balance : (s.balance ?? s.last_counted_amount)) ?? s.target_amount ?? 0);
   const registerTotal = drawers.reduce((sum, d) => sum + amountOf(d), 0)
     + sources.filter(s => s.kind === 'backup_bag').reduce((sum, b) => sum + amountOf(b), 0);
   const fixedTotal = fixedPoints.reduce((sum, f) => sum + amountOf(f), 0);
@@ -223,6 +222,23 @@ function dashboardHtml(sources, tier) {
   return html;
 }
 
+// What's in a source now: the last count plus/minus money moved since (the
+// ATM: its last receipt). Falls back to the starting amount before any count.
+function amountOf(s) {
+  return Number((s.is_atm ? s.atm_balance : (s.balance ?? s.last_counted_amount)) ?? s.target_amount ?? 0);
+}
+
+// The dollar line on a dashboard tile: what's in it, and for a drawer or
+// the bank bag what it should start the shift with.
+function tileAmountHtml(s) {
+  const known = s.is_atm ? !!s.atm_balance_at : (s.last_counted_at || (s.balance !== undefined && s.balance !== null && Number(s.balance) !== 0));
+  if (!known) return '';
+  const start = Number(s.current_target ?? s.target_amount);
+  const ofStart = !s.is_atm && (s.kind === 'drawer' || s.kind === 'backup_bag') && start > 0
+    ? ` <span class="sys-sub" style="font-weight:400;">· starts at ${fmtMoney(start)}</span>` : '';
+  return `<div class="ch-amt" style="font-size:20px;">${fmtMoney(amountOf(s))}${ofStart}</div>`;
+}
+
 function sourceTileHtml(s) {
   const m = sourceStatus(s);
   return `<div class="sys-tile" style="border-left-color:${m.dot}">
@@ -231,6 +247,7 @@ function sourceTileHtml(s) {
         <div class="sys-icon">${sourceIcon(s)}</div>
         <div><div class="sys-name">${escapeHtml(s.name)}</div><div class="sys-sub">${escapeHtml(s.location_name || '')}</div></div>
       </div>
+      ${tileAmountHtml(s)}
       <div class="status-row"><span class="dot" style="background:${m.dot}"></span><span class="label" style="color:${m.dot}">${m.label}</span></div>
     </div>
     ${topUpHtml(s)}
@@ -246,8 +263,9 @@ function drawerTileHtml(d, bag) {
         <div class="sys-icon">${sourceIcon(d)}</div>
         <div><div class="sys-name">${escapeHtml(d.name)}</div><div class="sys-sub">${escapeHtml(d.location_name || '')}${d.assigned_person_name ? ' · ' + escapeHtml(d.assigned_person_name) : ''}</div></div>
       </div>
+      ${tileAmountHtml(d)}
       <div class="status-row"><span class="dot" style="background:${m.dot}"></span><span class="label" style="color:${m.dot}">${m.label}</span></div>
-      ${bag ? `<div class="bag-chip"><span class="dot" style="background:${bagMeta.dot}"></span>${escapeHtml(bag.name)} · ${bagMeta.label}</div>` : ''}
+      ${bag ? `<div class="bag-chip"><span class="dot" style="background:${bagMeta.dot}"></span>${escapeHtml(bag.name)} · ${bag.last_counted_at ? fmtMoney(amountOf(bag)) + ' · ' : ''}${bagMeta.label}</div>` : ''}
     </div>
     ${topUpHtml(d)}
   </div>`;
@@ -1300,12 +1318,11 @@ function atmMonthEndDue(s) {
 function atmStatus(s) {
   const v = Number(s.last_variance);
   if (s.last_counted_at && v !== 0) {
-    const bal = s.atm_balance_at ? `${fmtMoney(s.atm_balance)} · ` : '';
-    return { dot: '#e5566d', label: `${bal}audit ${fmtMoney(Math.abs(v))} ${v < 0 ? 'short' : 'over'}` };
+    return { dot: '#e5566d', label: `Audit ${fmtMoney(Math.abs(v))} ${v < 0 ? 'short' : 'over'}` };
   }
   if (!s.atm_balance_at) return { dot: '#9aa3b2', label: 'No receipt yet' };
-  if (atmMonthEndDue(s)) return { dot: '#e0a83e', label: `${fmtMoney(s.atm_balance)} · month-end receipt due` };
-  return { dot: '#3fbf7f', label: `Balance ${fmtMoney(s.atm_balance)}` };
+  if (atmMonthEndDue(s)) return { dot: '#e0a83e', label: 'Month-end receipt due' };
+  return { dot: '#3fbf7f', label: 'OK' };
 }
 
 function atmPhotoInputHtml(id, label, { pdf } = {}) {
