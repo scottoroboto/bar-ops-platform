@@ -1956,7 +1956,7 @@ function renderDiscoveryRow(d) {
   return `
     <div class="list-row"${formOpen ? ' style="flex-direction:column; align-items:stretch;"' : ''}>
       <div class="name">${escapeHtml(d.ip)} <span class="badge off">${escapeHtml(discoveryDeviceLabel(d))}</span>
-        ${alreadyAdopted ? `<span class="badge ${d.adopted_enabled === false ? 'off' : 'on'}">${d.adopted_enabled === false ? 'archived' : 'in system'} as ${escapeHtml(d.adopted_type === 'tv' ? 'TV' : 'source')}${d.adopted_name ? ' · ' + escapeHtml(d.adopted_name) : ''}</span>` : ''}
+        ${alreadyAdopted ? `<span class="badge ${d.adopted_enabled === false ? 'off' : 'on'}">${d.adopted_enabled === false ? 'archived' : 'in system'} as ${escapeHtml(d.adopted_type === 'tv' ? 'TV' : d.adopted_type === 'plug' ? 'light (Lights tab)' : 'source')}${d.adopted_name ? ' · ' + escapeHtml(d.adopted_name) : ''}</span>` : ''}
       </div>
       <p class="muted" style="margin:4px 0;">${discoveryControlBadges(d)}</p>
       ${!alreadyAdopted && adoptAs
@@ -2058,6 +2058,9 @@ let LIGHTS = { plugs: [], routines: [] };
 let LIGHT_EDIT = null;          // routine being edited: id, 'new', or null
 let PLUG_EDIT_ID = null;        // named plug whose row is open for editing
 let PLUGS_SHOW_ARCHIVED = false;
+// Plugs already named are tucked away so Find plugs shows only what's new;
+// "show" opens them for editing.
+let PLUGS_SHOW_NAMED = false;
 const LIGHT_KINDS = [['time', 'Clock time'], ['sunset', 'Sunset'], ['dusk', 'Dusk'], ['sunrise', 'Sunrise'], ['dawn', 'Dawn'], ['none', 'Never']];
 const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -2132,7 +2135,10 @@ function renderPlugsList() {
       </div>`).join('');
   }
   if (named.length) {
-    html += `<h3 style="margin:14px 0 6px;">Plugs (${named.length})</h3>`;
+    html += `<h3 style="margin:14px 0 6px; display:flex; align-items:center; gap:10px;">Set up (${named.length})
+      <a href="#" class="muted" style="font-size:13px; font-weight:400;" onclick="PLUGS_SHOW_NAMED=!PLUGS_SHOW_NAMED; renderPlugsList(); return false;">${PLUGS_SHOW_NAMED ? 'hide' : 'show'}</a></h3>`;
+  }
+  if (named.length && PLUGS_SHOW_NAMED) {
     let lastGroup = null;
     for (const p of named) {
       if ((p.group_name || '') !== lastGroup) { lastGroup = p.group_name || ''; html += `<div class="muted" style="font-size:12px; font-weight:700; margin:10px 0 4px; text-transform:uppercase;">${escapeHtml(lastGroup || 'No group')}</div>`; }
@@ -2166,6 +2172,7 @@ function renderPlugsList() {
     }
   }
   if (!fresh.length && !named.length) html += '<p class="muted">No plugs yet. Plug them in on the bar’s Wi-Fi, set them up in the Kasa app, then tap Find plugs.</p>';
+  else if (!fresh.length) html = '<p class="muted">No new plugs. Plug the next one in and tap Find plugs.</p>' + html;
   if (archived.length) {
     html += `<p style="margin-top:12px;"><a href="#" class="muted" onclick="PLUGS_SHOW_ARCHIVED=!PLUGS_SHOW_ARCHIVED; renderPlugsList(); return false;">${PLUGS_SHOW_ARCHIVED ? 'Hide' : 'Show'} archived (${archived.length})</a></p>`;
     if (PLUGS_SHOW_ARCHIVED) {
