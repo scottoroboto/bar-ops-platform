@@ -30,7 +30,15 @@ if (process.env.KASA_USER) kasa.setAccount({ username: process.env.KASA_USER, pa
     return;
   }
   if (a === 'wifi') {
-    if (!b) { console.log('Usage: node kasa-test.js wifi "Wi-Fi name" "password"'); process.exitCode = 1; return; }
+    if (!b) { console.log('Usage: node kasa-test.js wifi "Wi-Fi name" \'password\''); process.exitCode = 1; return; }
+    // Phones and chat apps turn ' and " into curly quotes, which the shell
+    // passes through as part of the text. Stop before sending a wrong password.
+    if (/[\u2018\u2019\u201C\u201D]/.test(`${b}${c || ''}`)) {
+      console.log('Those are curly quotes (‘ ’ “ ”), which become part of the name or password. Type it again with plain quotes,');
+      console.log('or no quotes at all and a backslash before any $, e.g.:  node kasa-test.js wifi Ticket1_Pri2 T1cket\\$100 wpa2');
+      process.exitCode = 1;
+      return;
+    }
     // Security type: what the plug reports for that network, unless given
     // as a 4th word ("wpa2" forces WPA2, the type Kasa plugs always handle).
     let keyType = 3;
