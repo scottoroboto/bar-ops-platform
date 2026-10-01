@@ -4558,6 +4558,10 @@ app.post('/api/amusement/collections/:id/scale-check', auth.requireSession('ligh
   return amusement.recordScaleCheck(client, req.params.id, { grams: req.body.grams, photoPath });
 }));
 
+app.post('/api/amusement/collections/:id/scale-check/clear', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
+  return amusement.clearScaleCheck(client, req.params.id);
+}));
+
 // Photo of the scale display -> { value, unit, confidence, photoPath }.
 // The photo is stored first (it's the evidence, whether or not the read
 // works), then read. Nothing about the sheet changes here — the client

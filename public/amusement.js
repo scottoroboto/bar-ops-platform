@@ -279,7 +279,10 @@ async function renderSheet(id) {
   }).join('');
 
   const check = c.scale_check_g !== null
-    ? `<div class="msg ${c.scale_check_ok ? 'success' : 'error'}" style="margin-bottom:10px;">Scale check: read ${num(c.scale_check_g)} g${c.scale_check_ok ? ' — good.' : ` — expected about ${num(c.scale_check_expected_g || checkWeightInfo().grams)} g. Check the scale before weighing.`}</div>`
+    ? `<div class="msg ${c.scale_check_ok ? 'success' : 'error'}" style="margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <span>Scale check: read ${num(c.scale_check_g)} g${c.scale_check_ok ? ' — good.' : ` — expected about ${num(c.scale_check_expected_g || checkWeightInfo().grams)} g. Check the scale before weighing.`}</span>
+        <span style="display:flex; gap:6px; flex-shrink:0;"><button class="small secondary" style="margin:0; width:auto;" onclick="scaleCheckPrompt('${c.id}')">Redo</button><button class="small ghost" style="margin:0; width:auto;" onclick="clearScaleCheck('${c.id}')">Clear</button></span>
+      </div>`
     : `<div class="card" style="padding:12px 14px; margin-bottom:10px;">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
           <div><div style="font-weight:600; font-size:14px;">Scale check</div><div class="muted">Weigh ${checkWeightInfo().label} first. It should read about ${checkWeightInfo().grams} g.</div></div>
@@ -314,6 +317,16 @@ async function discardDraft(id) {
 
 // The $10-roll check. Photo the scale with the roll on it (reader fills
 // the grams), or just type what it says.
+// Wrong weight on the scale, or a typo: wipe the check so the sheet
+// reads "not checked yet" again. Redo just records over the old one.
+async function clearScaleCheck(collectionId) {
+  if (!confirm('Clear this scale check? You can do it again right after.')) return;
+  try {
+    await api(`/api/amusement/collections/${collectionId}/scale-check/clear`, { method: 'POST' });
+    route();
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
 async function scaleCheckPrompt(collectionId) {
   const host = $('panelMain');
   const box = document.createElement('div');
@@ -325,7 +338,7 @@ async function scaleCheckPrompt(collectionId) {
     <label for="scGrams">Grams</label>
     <input id="scGrams" type="number" inputmode="decimal" step="0.1" class="am-bigin" placeholder="${checkWeightInfo().grams}">
     <div id="scStatus"></div>
-    <div class="stack-actions"><button class="secondary" id="scCancel">Skip</button><button class="primary" id="scSave" style="margin-top:10px;">Save check</button></div>`;
+    <div class="stack-actions"><button class="secondary" id="scCancel">Cancel</button><button class="primary" id="scSave" style="margin-top:10px;">Save check</button></div>`;
   host.prepend(box);
   box.scrollIntoView({ behavior: 'smooth', block: 'start' });
   let photoBlob = null;
@@ -662,7 +675,7 @@ async function renderReview(collectionId) {
     ${headHtml(`${c.location_name} · ${fmtDay(c.finalized_at || c.started_at)}`, `${isFinal ? `Finalized ${fmtTime(c.finalized_at)} by ${c.finalized_by_name || ''}` : 'Review'} · ${days}-day period`, isFinal ? '#home' : '#collect/' + collectionId, badge(isFinal ? (c.pos_status === 'posted' ? 'Posted' : 'Final · not in SpotOn') : 'Review', isFinal ? (c.pos_status === 'posted' ? 'on' : 'stale') : 'on'))}
     <div class="card am-total"><div class="l">COLLECTION TOTAL</div><div class="n">${money(sheet.totals.total)}</div>
       <div class="meta"><span>Quarters ${money(sheet.totals.quarters)}</span><span>Bills ${money(sheet.totals.bills)}</span><span>${money(sheet.totals.total / days)} / day</span></div></div>
-    ${c.scale_check_g !== null ? `<div class="muted" style="margin:-6px 0 12px; text-align:center;">Scale check: $10 roll weighed ${num(c.scale_check_g)} g${c.scale_check_ok ? ' ✓' : ' (out of tolerance)'}</div>` : ''}
+    ${c.scale_check_g !== null ? `<div class="muted" style="margin:-6px 0 12px; text-align:center;">Scale check: ${c.scale_check_expected_g !== null ? `${num(c.scale_check_expected_g)} g check weight` : 'the $10 roll'} read ${num(c.scale_check_g)} g${c.scale_check_ok ? ' ✓' : ' (out of tolerance)'}</div>` : ''}
     ${missing.length && !isFinal ? `<div class="msg error">Not weighed yet: ${escapeHtml(missing.map((g) => g.name).join(', '))}. Finalize will record them as $0 if you continue.</div>` : ''}
     <div class="card" style="padding:4px 16px;"><table class="am-table"><thead><tr><th>Game</th><th class="r">Weight</th><th class="r">Bills</th><th class="r">Total</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${posBlock}
