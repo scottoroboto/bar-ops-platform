@@ -297,7 +297,7 @@ function view() {
       manualUntil = cand || null;
     }
     return {
-      id: p.id, name: p.name, group: p.group_name || 'Lights', sort_order: p.sort_order,
+      id: p.id, tag: p.tag || null, name: p.name, group: p.group_name || 'Lights', sort_order: p.sort_order,
       on: st.on === undefined ? null : st.on, watts: st.watts === undefined ? null : st.watts,
       reachable: !!st.reachable, error: st.reachable ? null : (st.error || 'checking…'),
       dead: !!(st.reachable && st.on && st.watts !== null && st.watts !== undefined && st.watts < DEAD_WATTS),

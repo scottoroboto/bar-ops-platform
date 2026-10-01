@@ -2110,6 +2110,11 @@ function plugLiveWords(p) {
   return `<span class="badge ${p.last_on ? 'on' : ''}">${p.last_on ? `on${p.last_watts !== null ? ` · ${Math.round(p.last_watts)} W` : ''}` : 'off'}</span>`;
 }
 
+// The plug's ID number (T1-001), shown ahead of its name.
+function plugTagHtml(p) {
+  return p.tag ? `<span style="display:inline-block; white-space:nowrap; font-family:ui-monospace,monospace; font-size:12px; font-weight:700; padding:1px 6px; margin-right:6px; border:1px solid currentColor; border-radius:4px; opacity:.75;">${escapeHtml(p.tag)}</span>` : '';
+}
+
 function renderPlugsList() {
   const el = document.getElementById('plugsList');
   const groups = [...new Set(LIGHTS.plugs.map((p) => p.group_name).filter(Boolean))].sort();
@@ -2146,6 +2151,7 @@ function renderPlugsList() {
         html += `
         <div class="list-row" style="flex-direction:column; align-items:stretch; gap:6px;">
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <input id="plugEditTag" value="${escapeHtml(p.tag || '')}" placeholder="ID" title="ID number on the plug's label" style="flex:0 0 90px; min-width:80px; margin:0; font-family:ui-monospace,monospace;">
             <input id="plugEditName" value="${escapeHtml(p.name)}" style="flex:2; min-width:140px; margin:0;">
             <input id="plugEditGroup" value="${escapeHtml(p.group_name || '')}" list="plugGroups" placeholder="Group" style="flex:1; min-width:110px; margin:0;">
           </div>
@@ -2163,7 +2169,7 @@ function renderPlugsList() {
       } else {
         html += `
         <div class="list-row">
-          <div><div class="name">${escapeHtml(p.name)}</div><div class="sub">${escapeHtml(plugScheduleWords(p))}${p.ip ? ` · ${escapeHtml(p.ip)}` : ''}</div></div>
+          <div><div class="name">${plugTagHtml(p)}${escapeHtml(p.name)}</div><div class="sub">${escapeHtml(plugScheduleWords(p))}${p.ip ? ` · ${escapeHtml(p.ip)}` : ''}</div></div>
           <div style="display:flex; gap:6px; align-items:center;">${plugLiveWords(p)}
             <button class="small secondary" style="margin:0;" onclick="blinkPlug(${p.id}, this)">Blink</button>
             <button class="small ghost" style="margin:0;" onclick="PLUG_EDIT_ID=${p.id}; renderPlugsList();">Edit</button></div>
@@ -2178,7 +2184,7 @@ function renderPlugsList() {
     if (PLUGS_SHOW_ARCHIVED) {
       html += archived.map((p) => `
         <div class="list-row">
-          <div><div class="name">${escapeHtml(p.name || 'Unnamed plug')}</div><div class="sub">${escapeHtml(p.mac)}</div></div>
+          <div><div class="name">${plugTagHtml(p)}${escapeHtml(p.name || 'Unnamed plug')}</div><div class="sub">${escapeHtml(p.mac)}</div></div>
           <div style="display:flex; gap:6px;"><button class="small secondary" style="margin:0;" onclick="plugOp(${p.id}, 'restore')">Restore</button>
           <button class="small ghost" style="margin:0;" onclick="if (confirm('Delete this plug for good? If it’s still plugged in, the box will find it again as a new plug.')) plugOp(${p.id}, 'delete')">Delete</button></div>
         </div>`).join('');
@@ -2237,15 +2243,19 @@ async function nameNewPlug(plugId) {
   const group = document.getElementById(`plugGroup-${plugId}`).value.trim();
   if (!name) { showMsg('Give the plug a name.', 'error'); return; }
   try {
-    await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/update`, { method: 'POST', body: { name, group } });
-    showMsg(`Saved “${name}”.`, 'success');
+    const r = await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/update`, { method: 'POST', body: { name, group } });
+    const tag = r && r.plug && r.plug.tag;
+    showMsg(tag ? `Saved “${name}” as ${tag}. Label the plug ${tag}.` : `Saved “${name}”.`, 'success');
     await loadLightsAdmin(lightsLocation());
   } catch (e) { showMsg(e.message, 'error'); }
 }
 
 async function savePlugEdit(plugId) {
   const sched = document.getElementById('plugEditSchedule').value;
-  const body = { name: document.getElementById('plugEditName').value, group: document.getElementById('plugEditGroup').value };
+  const body = {
+    tag: document.getElementById('plugEditTag').value, name: document.getElementById('plugEditName').value,
+    group: document.getElementById('plugEditGroup').value,
+  };
   if (sched === 'none') body.schedule = { mode: 'none' };
   else if (sched.startsWith('r')) body.schedule = { mode: 'routine', routineId: Number(sched.slice(1)) };
   try {
@@ -2269,9 +2279,10 @@ async function addPlugByMac() {
     group: document.getElementById('plugMacGroup').value,
   };
   try {
-    await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs`, { method: 'POST', body });
+    const r = await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs`, { method: 'POST', body });
     ['plugMac', 'plugMacName', 'plugMacGroup'].forEach((id) => { document.getElementById(id).value = ''; });
-    showMsg('Plug added. It’s matched as soon as the box sees it.', 'success');
+    const tag = r && r.plug && r.plug.tag;
+    showMsg(`Plug added${tag ? ` as ${tag}` : ''}. It’s matched as soon as the box sees it.`, 'success');
     await loadLightsAdmin(lightsLocation());
   } catch (e) { showMsg(e.message, 'error'); }
 }
@@ -2324,7 +2335,7 @@ function lightRoutineForm(r, named) {
       ${named.length ? named.map((p) => {
         const inThis = r && p.schedule_mode === 'routine' && p.routine_id === r.id;
         const elsewhere = p.schedule_mode === 'routine' && (!r || p.routine_id !== r.id) ? LIGHTS.routines.find((q) => q.id === p.routine_id) : null;
-        return `<label style="display:flex; gap:6px; align-items:center; margin:4px 0;"><input type="checkbox" class="lr-plug" value="${p.id}" ${inThis ? 'checked' : ''} style="width:auto; margin:0;">${escapeHtml(p.name)}<span class="muted" style="font-size:12px;">${escapeHtml(p.group_name || '')}${elsewhere ? ` · now in ${escapeHtml(elsewhere.name)}` : p.schedule_mode === 'own' ? ' · own schedule' : ''}</span></label>`;
+        return `<label style="display:flex; gap:6px; align-items:center; margin:4px 0;"><input type="checkbox" class="lr-plug" value="${p.id}" ${inThis ? 'checked' : ''} style="width:auto; margin:0;">${plugTagHtml(p)}${escapeHtml(p.name)}<span class="muted" style="font-size:12px;">${escapeHtml(p.group_name || '')}${elsewhere ? ` · now in ${escapeHtml(elsewhere.name)}` : p.schedule_mode === 'own' ? ' · own schedule' : ''}</span></label>`;
       }).join('') : '<p class="muted">Name some plugs first.</p>'}
     </div>
     <p class="muted" style="font-size:12px;">A light follows one routine. Ticking one that’s in another routine moves it here.</p>

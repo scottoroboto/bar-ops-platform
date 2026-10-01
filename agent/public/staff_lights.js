@@ -233,7 +233,7 @@ function renderMain() {
             const [l1, l2] = scheduleLines(p);
             return `<div class="lt-tile ${st} ${selIds && selIds.has(p.id) ? 'hl' : ''}" data-act="plug" data-id="${p.id}">
               <span class="bulb"></span>
-              <div class="nm">${escapeHtml(p.name)}</div>
+              ${p.tag ? `<div class="tg">${escapeHtml(p.tag)}</div>` : ''}<div class="nm">${escapeHtml(p.name)}</div>
               <div class="st"><span class="s">${word}</span>${w ? `<span class="w">${w}</span>` : ''}</div>
               <div class="sch">${l1}${l2}</div>
             </div>`;
@@ -284,7 +284,7 @@ function renderSheet() {
   const following = p.schedule_mode === 'routine' && p.routine_name ? `Following <b class="rn">${escapeHtml(p.routine_name)}</b>.` : p.schedule_mode === 'own' ? 'On its own schedule.' : 'No schedule.';
   document.getElementById('ltSheet').innerHTML = `
   <div class="lt-scrim" data-act="scrim"><div class="lt-sheet" data-act="sheet">
-    <div class="h"><span class="t">${escapeHtml(p.name)}</span><span class="lt-chip">${escapeHtml(p.group)}</span>${chip}</div>
+    <div class="h"><span class="t">${escapeHtml(p.name)}</span>${p.tag ? `<span class="lt-chip">${escapeHtml(p.tag)}</span>` : ''}<span class="lt-chip">${escapeHtml(p.group)}</span>${chip}</div>
     <div class="now">${following} A tap on ON or OFF holds until the next scheduled time.</div>
     <div class="lt-big">
       <button class="on" data-act="sheet-on">TURN ON</button>

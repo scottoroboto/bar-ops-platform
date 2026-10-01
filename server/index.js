@@ -1382,7 +1382,7 @@ const { rows: devices } = await withServiceClient((client) => client.query(
       UNION ALL
      -- Kasa plugs (patch_049) are handled under Lights; once the box has
      -- found one it isn't "new" here either.
-     SELECT 'plug', p.id, COALESCE(p.name, 'unnamed — see Lights'), (p.archived_at IS NULL)
+     SELECT 'plug', p.id, COALESCE(p.tag || ' ', '') || COALESCE(p.name, 'unnamed — see Lights'), (p.archived_at IS NULL)
        FROM vc_plugs p
       WHERE p.site_id = $2
         AND ((dd.mac IS NOT NULL AND p.mac = dd.mac::text) OR (dd.mac IS NULL AND p.ip = host(dd.ip)))

@@ -71,7 +71,7 @@ function routineOut(r) {
 // out so a status report doesn't change the config ETag every minute.
 function plugConfigOut(p) {
   return {
-    id: Number(p.id), mac: p.mac, name: p.name, group_name: p.group_name, ip: p.ip, model: p.model,
+    id: Number(p.id), tag: p.tag || null, mac: p.mac, name: p.name, group_name: p.group_name, ip: p.ip, model: p.model,
     protocol: p.protocol, http_port: p.http_port, sort_order: p.sort_order,
     schedule_mode: p.schedule_mode, routine_id: p.routine_id === null ? null : Number(p.routine_id),
     own: {
@@ -83,7 +83,7 @@ function plugConfigOut(p) {
 
 async function configRows(client, siteId) {
   const { rows: plugs } = await client.query(
-    'SELECT * FROM vc_plugs WHERE site_id = $1 AND archived_at IS NULL ORDER BY group_name NULLS LAST, sort_order, name NULLS LAST, id',
+    'SELECT * FROM vc_plugs WHERE site_id = $1 AND archived_at IS NULL ORDER BY group_name NULLS LAST, sort_order, tag NULLS LAST, name NULLS LAST, id',
     [siteId]
   );
   const { rows: routines } = await client.query(
@@ -142,7 +142,7 @@ async function recordStatus(client, siteId, states) {
 async function listForAdmin(client, siteId) {
   const { rows: plugs } = await client.query(
     `SELECT * FROM vc_plugs WHERE site_id = $1
-     ORDER BY archived_at IS NOT NULL, name IS NOT NULL, group_name NULLS LAST, sort_order, name, id`,
+     ORDER BY archived_at IS NOT NULL, name IS NOT NULL, group_name NULLS LAST, sort_order, tag NULLS LAST, name, id`,
     [siteId]
   );
   const { rows: routines } = await client.query(
@@ -170,6 +170,34 @@ async function routineAt(client, siteId, routineId) {
   return rows[0] || null;
 }
 
+// The plug's ID number for its sticker: the bar's prefix and the next number
+// (T1-001, T1-002, ...). Handed out when a plug is named. Locking the site row
+// keeps two at once from getting the same number; one the owner typed by hand
+// is skipped over.
+async function assignTag(client, siteId, plugId) {
+  const { rows: [site] } = await client.query(
+    'SELECT plug_tag_prefix, plug_tag_next FROM vc_sites WHERE id = $1 FOR UPDATE', [siteId]
+  );
+  const prefix = (site && site.plug_tag_prefix) || 'P';
+  const { rows: taken } = await client.query('SELECT tag FROM vc_plugs WHERE site_id = $1 AND tag IS NOT NULL', [siteId]);
+  const used = new Set(taken.map((r) => r.tag));
+  let n = Math.max(1, Number(site && site.plug_tag_next) || 1);
+  const tagFor = (k) => `${prefix}-${String(k).padStart(3, '0')}`;
+  while (used.has(tagFor(n))) n += 1;
+  await client.query('UPDATE vc_sites SET plug_tag_next = $2 WHERE id = $1', [siteId, n + 1]);
+  const { rows } = await client.query(
+    'UPDATE vc_plugs SET tag = $3, updated_at = now() WHERE id = $1 AND site_id = $2 AND tag IS NULL RETURNING *',
+    [plugId, siteId, tagFor(n)]
+  );
+  return rows[0] || plugAt(client, siteId, plugId);
+}
+
+function parseTag(v) {
+  const t = String(v || '').trim().toUpperCase().replace(/\s+/g, '-');
+  if (!/^[A-Z0-9][A-Z0-9-]{0,11}$/.test(t)) throw fail('An ID is letters, numbers and dashes, like T1-004.');
+  return t;
+}
+
 // Pre-register by MAC (from the Kasa app's Device Info), named up front.
 async function addByMac(client, siteId, b) {
   const mac = normalizeMac(b.mac);
@@ -183,7 +211,7 @@ async function addByMac(client, siteId, b) {
      RETURNING *`,
     [siteId, mac, name, cleanText(b.group)]
   );
-  return rows[0];
+  return rows[0].tag ? rows[0] : assignTag(client, siteId, rows[0].id);
 }
 
 // Name, group, order, and/or schedule. Schedule: { mode: 'routine' |
@@ -196,6 +224,14 @@ async function updatePlug(client, siteId, plugId, b) {
   const set = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length + 2}`); };
   if (b.name !== undefined) { const n = cleanText(b.name); if (!n) throw fail('Give the plug a name.'); set('name', n); }
   if (b.group !== undefined) set('group_name', cleanText(b.group));
+  if (b.tag !== undefined && b.tag !== null && String(b.tag).trim() !== (plug.tag || '')) {
+    const tag = parseTag(b.tag);
+    const { rows: dup } = await client.query(
+      'SELECT name FROM vc_plugs WHERE site_id = $1 AND tag = $2 AND id <> $3', [siteId, tag, plugId]
+    );
+    if (dup[0]) throw fail(`${tag} is already ${dup[0].name || 'another plug'}.`);
+    set('tag', tag);
+  }
   if (b.sortOrder !== undefined && Number.isInteger(Number(b.sortOrder))) set('sort_order', Number(b.sortOrder));
   if (b.schedule !== undefined) {
     const s = b.schedule || {};
@@ -214,12 +250,15 @@ async function updatePlug(client, siteId, plugId, b) {
       throw fail('Pick how this plug is scheduled.');
     }
   }
-  if (!sets.length) return plug;
-  const { rows } = await client.query(
-    `UPDATE vc_plugs SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 AND site_id = $2 RETURNING *`,
-    [plugId, siteId, ...vals]
-  );
-  return rows[0];
+  let row = plug;
+  if (sets.length) {
+    const { rows } = await client.query(
+      `UPDATE vc_plugs SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 AND site_id = $2 RETURNING *`,
+      [plugId, siteId, ...vals]
+    );
+    row = rows[0];
+  }
+  return row.name && !row.tag ? assignTag(client, siteId, plugId) : row;
 }
 
 async function setArchived(client, siteId, plugId, archived) {
@@ -287,6 +326,6 @@ async function deleteRoutine(client, siteId, routineId) {
 }
 
 module.exports = {
-  normalizeMac, configRows, recordSeen, recordStatus, listForAdmin, plugAt, addByMac, updatePlug,
+  normalizeMac, assignTag, configRows, recordSeen, recordStatus, listForAdmin, plugAt, addByMac, updatePlug,
   setArchived, deletePlug, saveRoutine, deleteRoutine,
 };
