@@ -229,7 +229,14 @@ async function getGameByTag(client, tagCode) {
   return rows[0] || null;
 }
 
-async function createGame(client, { name, gameType, make, model, serial, pricePerPlay, acceptsBills, locationId, notes, createdBy }) {
+const BILL_DENOMS = [1, 5, 10, 20];
+function cleanDenoms(v) {
+  if (!Array.isArray(v)) return BILL_DENOMS;
+  const out = BILL_DENOMS.filter((d) => v.map(Number).includes(d));
+  return out.length ? out : BILL_DENOMS;
+}
+
+async function createGame(client, { name, gameType, make, model, serial, pricePerPlay, acceptsBills, acceptsCoins, hasCollectionScreen, billDenoms, locationId, notes, createdBy }) {
   if (!name || !name.trim()) throw httpError('A name is required.');
   if (!locationId) throw httpError('Pick where the game is.');
   const loc = await getLocation(client, locationId);
@@ -237,10 +244,11 @@ async function createGame(client, { name, gameType, make, model, serial, pricePe
   const tag = await nextTagCode(client);
   const { rows: sortRows } = await client.query('SELECT COALESCE(MAX(sort_order), 0) AS max FROM amusement_games WHERE current_location_id = $1', [locationId]);
   const { rows } = await client.query(
-    `INSERT INTO amusement_games (name, game_type, make, model, serial, price_per_play, accepts_bills, tag_code, current_location_id, notes, sort_order, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    `INSERT INTO amusement_games (name, game_type, make, model, serial, price_per_play, accepts_bills, accepts_coins, has_collection_screen, bill_denoms, tag_code, current_location_id, notes, sort_order, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
     [name.trim(), (gameType || 'other').trim(), make || null, model || null, serial || null,
-      Math.max(0, num(pricePerPlay, 1)), !!acceptsBills, tag, locationId, notes || null, Number(sortRows[0].max) + 1, createdBy]
+      Math.max(0, num(pricePerPlay, 1)), !!acceptsBills, acceptsCoins === undefined ? true : !!acceptsCoins, !!hasCollectionScreen, cleanDenoms(billDenoms),
+      tag, locationId, notes || null, Number(sortRows[0].max) + 1, createdBy]
   );
   await client.query('INSERT INTO amusement_game_placements (game_id, location_id, moved_by) VALUES ($1,$2,$3)', [rows[0].id, locationId, createdBy]);
   return getGame(client, rows[0].id);
@@ -257,6 +265,9 @@ async function updateGame(client, id, fields) {
   if (fields.serial !== undefined) put('serial', fields.serial || null);
   if (fields.pricePerPlay !== undefined) put('price_per_play', Math.max(0, num(fields.pricePerPlay, 1)));
   if (fields.acceptsBills !== undefined) put('accepts_bills', !!fields.acceptsBills);
+  if (fields.acceptsCoins !== undefined) put('accepts_coins', !!fields.acceptsCoins);
+  if (fields.hasCollectionScreen !== undefined) put('has_collection_screen', !!fields.hasCollectionScreen);
+  if (fields.billDenoms !== undefined) put('bill_denoms', cleanDenoms(fields.billDenoms));
   if (fields.notes !== undefined) put('notes', fields.notes || null);
   if (fields.sortOrder !== undefined) put('sort_order', num(fields.sortOrder, 0));
   if (!sets.length) return getGame(client, id);
@@ -358,10 +369,11 @@ async function getCollectionSheet(client, id) {
   const collection = await getCollection(client, id);
   if (!collection) return null;
   const { rows: games } = await client.query(
-    `SELECT g.id, g.name, g.game_type, g.make, g.model, g.tag_code, g.price_per_play, g.accepts_bills, g.sort_order, g.tare_g,
+    `SELECT g.id, g.name, g.game_type, g.make, g.model, g.tag_code, g.price_per_play, g.accepts_bills, g.accepts_coins, g.has_collection_screen, g.bill_denoms, g.sort_order, g.tare_g,
             i.id AS item_id, i.gross_weight, i.tare_weight, i.weight_unit, i.net_weight_g, i.quarter_count, i.quarters_amount,
             i.bills_1, i.bills_5, i.bills_10, i.bills_20, i.bills_flat_amount, i.bills_amount, i.total, i.meter_reading,
             i.condition, i.note, i.weight_photo_path, i.weight_read_value, i.weight_read_unit, i.entered_at, i.updated_at,
+            i.screen_photo_path, i.screen_total, i.screen_cleared,
             eb.name AS entered_by_name
      FROM amusement_games g
      LEFT JOIN amusement_collection_items i ON i.game_id = g.id AND i.collection_id = $1
@@ -413,7 +425,9 @@ function computeItem(input, settings, game) {
   const quarterG = num(settings.quarter_weight_g, 5.67);
   let netG = null;
   let coins = 0;
-  if (gross !== null) {
+  // A game with no coin mech (Golden Tee) never has a quarters line, whatever was typed.
+  const takesCoins = !game || game.accepts_coins !== false;
+  if (gross !== null && takesCoins) {
     netG = Math.max(0, toGrams(gross, unit) - toGrams(tare, unit));
     coins = Math.round(netG / quarterG);
   }
@@ -426,7 +440,7 @@ function computeItem(input, settings, game) {
   const flat = input.billsFlatAmount === null || input.billsFlatAmount === undefined || input.billsFlatAmount === '' ? null : Math.max(0, num(input.billsFlatAmount));
   const bills = round2(counted > 0 ? counted : (flat || 0));
   return {
-    unit, gross, tare, netG: netG === null ? null : round2(netG), quarterG, coins, quarters,
+    unit, gross: takesCoins ? gross : null, tare, netG: netG === null ? null : round2(netG), quarterG, coins, quarters,
     b1, b5, b10, b20, flat, bills, total: round2(quarters + bills),
   };
 }
@@ -443,13 +457,26 @@ async function upsertItem(client, collectionId, gameId, input, personId) {
   const condition = input.condition === 'issue' ? 'issue' : 'ok';
   const meter = input.meterReading === null || input.meterReading === undefined || input.meterReading === '' ? null : Math.max(0, Math.floor(num(input.meterReading)));
   const readValue = input.weightReadValue === null || input.weightReadValue === undefined || input.weightReadValue === '' ? null : num(input.weightReadValue, null);
+  // The collection screen (Golden Tee, Power Putt): a photo of it and a
+  // straight answer about clearing it are part of the line, not optional.
+  let screenTotal = null;
+  let screenCleared = null;
+  if (game.has_collection_screen) {
+    if (storage.isConfigured() && !input.screenPhotoPath) throw httpError('Photo the collection screen first.');
+    if (input.screenCleared !== true && input.screenCleared !== false) throw httpError('Answer whether the collection screen was cleared.');
+    screenCleared = input.screenCleared;
+    screenTotal = input.screenTotal === null || input.screenTotal === undefined || input.screenTotal === '' ? null : Math.max(0, num(input.screenTotal, 0));
+  }
   const { rows } = await client.query(
     `INSERT INTO amusement_collection_items
        (collection_id, game_id, gross_weight, tare_weight, weight_unit, net_weight_g, quarter_weight_g, quarter_count, quarters_amount,
         bills_1, bills_5, bills_10, bills_20, bills_flat_amount, bills_amount, total, meter_reading, condition, note,
-        weight_photo_path, weight_read_value, weight_read_unit, weight_confirmed_by, entered_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+        weight_photo_path, weight_read_value, weight_read_unit, weight_confirmed_by, entered_by,
+        screen_photo_path, screen_total, screen_cleared)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
      ON CONFLICT (collection_id, game_id) DO UPDATE SET
+       screen_photo_path = COALESCE(EXCLUDED.screen_photo_path, amusement_collection_items.screen_photo_path),
+       screen_total = EXCLUDED.screen_total, screen_cleared = EXCLUDED.screen_cleared,
        gross_weight = EXCLUDED.gross_weight, tare_weight = EXCLUDED.tare_weight, weight_unit = EXCLUDED.weight_unit,
        net_weight_g = EXCLUDED.net_weight_g, quarter_weight_g = EXCLUDED.quarter_weight_g, quarter_count = EXCLUDED.quarter_count,
        quarters_amount = EXCLUDED.quarters_amount, bills_1 = EXCLUDED.bills_1, bills_5 = EXCLUDED.bills_5, bills_10 = EXCLUDED.bills_10,
@@ -461,7 +488,8 @@ async function upsertItem(client, collectionId, gameId, input, personId) {
      RETURNING *`,
     [collectionId, gameId, m.gross, m.tare, m.unit, m.netG, m.quarterG, m.coins, m.quarters,
       m.b1, m.b5, m.b10, m.b20, m.flat, m.bills, m.total, meter, condition, input.note || null,
-      input.weightPhotoPath || null, readValue, input.weightReadUnit || null, personId, personId]
+      input.weightPhotoPath || null, readValue, input.weightReadUnit || null, personId, personId,
+      game.has_collection_screen ? (input.screenPhotoPath || null) : null, screenTotal, screenCleared]
   );
   await refreshTotals(client, collectionId);
   return rows[0];
@@ -670,6 +698,43 @@ If the display shows "lb" with a colon or space (pounds and ounces, e.g. "1lb 3.
 If no readable number is visible, set value to null.
 Respond with JSON only, no prose: {"value": <number or "p:o" string or null>, "unit": "g"|"kg"|"lb"|"oz"|"lb_oz"|null, "confidence": "high"|"medium"|"low", "raw": "<the characters you saw>"}`;
 
+const SCREEN_PROMPT = `This photo shows the collection (audit / earnings) screen of a coin-operated arcade game such as Golden Tee or Power Putt, photographed by the route collector.
+Find the total cash collected since the last collection — the line usually labelled "Total", "Cash", "Collection", "Coin" or "Bills total" in dollars. Prefer a grand total of cash over any single sub-line. Ignore card, online, lifetime or cumulative figures.
+If no dollar total is readable, set total to null.
+Respond with JSON only, no prose: {"total": <number or null>, "confidence": "high"|"medium"|"low", "raw": "<the labels and numbers you saw, briefly>"}`;
+
+// Reads the game's own collection screen so the collector can compare
+// it to the bills they count. Same shape of failure as the scale read:
+// soft, the collector types it or skips it.
+async function readScreenPhoto({ buffer, mimetype }) {
+  const client = getAnthropic();
+  if (!client) return { total: null, confidence: 'low', raw: '', error: 'Photo reading is not configured (ANTHROPIC_API_KEY).' };
+  try {
+    const response = await client.messages.create({
+      model: 'claude-opus-5-5',
+      max_tokens: 300,
+      output_config: { effort: 'low' },
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mimetype, data: buffer.toString('base64') } },
+          { type: 'text', text: SCREEN_PROMPT },
+        ],
+      }],
+    });
+    if (response.stop_reason === 'refusal') return { total: null, confidence: 'low', raw: '', error: 'The photo could not be read.' };
+    const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return { total: null, confidence: 'low', raw: text.slice(0, 80) };
+    const parsed = JSON.parse(match[0]);
+    const total = parsed.total === null || parsed.total === undefined ? null : num(String(parsed.total).replace(/[$,]/g, ''), NaN);
+    return { total: Number.isFinite(total) ? round2(total) : null, confidence: parsed.confidence || 'medium', raw: String(parsed.raw || '') };
+  } catch (e) {
+    console.error('[amusement] screen photo read failed', e.message);
+    return { total: null, confidence: 'low', raw: '', error: 'Could not read the photo — type the total instead.' };
+  }
+}
+
 async function readScalePhoto({ buffer, mimetype }) {
   const client = getAnthropic();
   if (!client) return { value: null, unit: null, confidence: 'low', raw: '', error: 'Photo reading is not configured (ANTHROPIC_API_KEY).' };
@@ -744,5 +809,5 @@ module.exports = {
   listGames, getGame, getGameByTag, createGame, updateGame, moveGame, setGameStatus, setGameTare, getGamePlacements, getGameHistory, listScaleChecks,
   getCollection, getCollectionSheet, startOrResumeCollection, computeItem, upsertItem, removeItem, recordScaleCheck, clearScaleCheck,
   updateCollectionNote, finalizeCollection, markPosted, discardDraft, listCollections,
-  report, readScalePhoto, readerConfigured, storePhoto, photoUrl, GRAMS_PER_LB,
+  report, readScalePhoto, readScreenPhoto, readerConfigured, storePhoto, photoUrl, GRAMS_PER_LB,
 };

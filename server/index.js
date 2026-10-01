@@ -4580,12 +4580,26 @@ app.post('/api/amusement/collections/:id/read-scale', auth.requireSession('light
   return { ...reading, photoPath, photoStored: !!photoPath };
 }));
 
+// Photo of a game's collection screen (Golden Tee, Power Putt) -> { total, photoPath }.
+app.post('/api/amusement/collections/:id/read-screen', auth.requireSession('light'), parseAmusementPhoto, amusementRoute('collector', async (client, req) => {
+  if (!req.file) return { error: 'No photo received.' };
+  if (!storage.PHOTO_MIMES.includes(req.file.mimetype) || !storage.looksLikeImage(req.file.buffer, req.file.mimetype)) return { error: 'The photo needs to be a JPEG, PNG, HEIC or WebP image.' };
+  const collection = await amusement.getCollection(client, req.params.id);
+  if (!collection) return { error: 'Collection not found.', status: 404 };
+  if (collection.status !== 'draft') return { error: 'This collection is finalized.' };
+  const [photoPath, reading] = await Promise.all([
+    amusement.storePhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype, collectionId: collection.id }),
+    amusement.readerConfigured() ? amusement.readScreenPhoto({ buffer: req.file.buffer, mimetype: req.file.mimetype }) : Promise.resolve({ total: null, confidence: 'low', raw: '' }),
+  ]);
+  return { ...reading, photoPath, photoStored: !!photoPath };
+}));
+
 // Never the raw bucket path — a short-lived signed URL, same as receipts.
 app.get('/api/amusement/photo', auth.requireSession('light'), amusementRoute('collector', async (client, req) => {
   const p = String(req.query.path || '');
   if (!p || p.includes('..')) return { error: 'Bad path.' };
   const { rows } = await client.query(
-    `SELECT 1 FROM amusement_collection_items WHERE weight_photo_path = $1
+    `SELECT 1 FROM amusement_collection_items WHERE weight_photo_path = $1 OR screen_photo_path = $1
      UNION ALL SELECT 1 FROM amusement_collections WHERE scale_check_photo_path = $1 OR pos_photo_path = $1
      UNION ALL SELECT 1 FROM amusement_games WHERE tare_photo_path = $1 LIMIT 1`, [p]);
   if (!rows.length) return { error: 'Not found.', status: 404 };
