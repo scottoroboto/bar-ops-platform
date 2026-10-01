@@ -7,7 +7,8 @@
 // Brand-new plug (join your laptop to the plug's own "TP-LINK_Smart Plug_…"
 // Wi-Fi first):
 //   node agent/tools/kasa-test.js networks                 what the plug can see
-//   node agent/tools/kasa-test.js wifi "Ticket WiFi" "password"
+//   node agent/tools/kasa-test.js wifi "Ticket WiFi" 'password'      (single quotes if it has a $)
+//   node agent/tools/kasa-test.js wifi "Ticket WiFi" 'password' wpa2 (force WPA2)
 // If a plug says it wants a Kasa login, add KASA_USER=... KASA_PASS=... in
 // front of the command.
 const kasa = require('../lib/drivers/kasa');
@@ -20,7 +21,8 @@ if (process.env.KASA_USER) kasa.setAccount({ username: process.env.KASA_USER, pa
     try {
       const list = await kasa.wifiScan();
       if (!list.length) console.log('The plug sees no networks.');
-      for (const n of list) console.log(`${String(n.ssid).padEnd(32)} ${n.signal !== null ? `${n.signal} dBm` : ''}`);
+      const SEC = { 0: 'open', 1: 'WEP', 2: 'WPA', 3: 'WPA2', 4: 'WPA3?' };
+      for (const n of list) console.log(`${String(n.ssid).padEnd(32)} ${String(SEC[n.keyType] || `type ${n.keyType}`).padEnd(8)} ${n.signal !== null ? `${n.signal} dBm` : ''}`);
     } catch (e) {
       console.log(`No answer from a plug in setup mode (${e.code || e.message}). Is this computer on the plug's own "TP-LINK_Smart Plug" Wi-Fi?`);
       process.exitCode = 1;
@@ -29,12 +31,18 @@ if (process.env.KASA_USER) kasa.setAccount({ username: process.env.KASA_USER, pa
   }
   if (a === 'wifi') {
     if (!b) { console.log('Usage: node kasa-test.js wifi "Wi-Fi name" "password"'); process.exitCode = 1; return; }
+    // Security type: what the plug reports for that network, unless given
+    // as a 4th word ("wpa2" forces WPA2, the type Kasa plugs always handle).
     let keyType = 3;
+    const forced = process.argv[5] ? String(process.argv[5]).toLowerCase() : '';
     try {
       const seen = (await kasa.wifiScan()).find((n) => n.ssid === b);
-      if (seen && seen.keyType !== undefined) keyType = seen.keyType;
-      else console.log(`Heads up: the plug doesn't see a network called "${b}" (names are case-sensitive). Sending it anyway.`);
+      if (!seen) console.log(`Heads up: the plug doesn't see a network called "${b}" (names are case-sensitive). Sending it anyway.`);
+      else if (seen.keyType !== undefined && !forced) keyType = seen.keyType;
+      if (seen) console.log(`The plug sees "${b}" at ${seen.signal} dBm, security type ${seen.keyType}.`);
     } catch (e) { /* some plugs don't scan; join still works */ }
+    if (forced === 'wpa2') keyType = 3;
+    else if (/^\d+$/.test(forced)) keyType = Number(forced);
     try {
       const r = await kasa.wifiJoin(undefined, b, c || '', keyType);
       console.log(r.confirmed ? `The plug took it. It's joining "${b}" now.` : `Sent. The plug dropped its setup Wi-Fi, which means it's joining "${b}".`);
