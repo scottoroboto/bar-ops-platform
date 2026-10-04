@@ -20,6 +20,8 @@ let state = { ok: false, error: 'Looking for the Sonos…', transport: null, tra
 let favorites = [];             // [{ id, title, art, uri, meta, service }]
 let favoritesAt = 0;
 let timer = null;
+let lastStationDidl = '';        // the playing station's own metadata, for auto-save
+const autoSaveTried = new Set(); // station ids already tried this run (one try each)
 let lastDiscoverAt = 0;
 
 // ---------------------------------------------------------------- SOAP
@@ -139,6 +141,7 @@ async function readState() {
     ]);
     const transport = tag(ti, 'CurrentTransportState') || 'STOPPED';
     const track = parseTrack(tag(pi, 'TrackMetaData'));
+    const stationDidl = unesc(tag(mi, 'CurrentURIMetaData') || '');
     const stationMeta = parseTrack(tag(mi, 'CurrentURIMetaData'));
     const currentUri = unesc(tag(mi, 'CurrentURI') || '');
     // Radio streams put "Artist - Title" in r:streamContent and the station
@@ -157,6 +160,7 @@ async function readState() {
       player: { name: p.name, model: p.model, ip: p.ip },
       updatedAt: new Date().toISOString(),
     };
+    lastStationDidl = stationDidl;
   } catch (err) {
     state = { ...state, ok: false, error: err.message, updatedAt: new Date().toISOString() };
     if (/ECONNREFUSED|EHOSTUNREACH|abort|fetch failed/i.test(err.message) && Date.now() - lastDiscoverAt > DISCOVER_EVERY_MS) player = null; // let discovery find it again (new IP)
@@ -171,10 +175,19 @@ async function readFavorites(force = false) {
   const p = await ensurePlayer();
   if (!p) return favorites;
   if (!force && Date.now() - favoritesAt < 30000) return favorites;
-  const xml = await soap(p.ip, 'ContentDirectory', 'Browse', {
-    ObjectID: 'FV:2', BrowseFlag: 'BrowseDirectChildren', Filter: '*', StartingIndex: 0, RequestedCount: 200, SortCriteria: '',
-  });
-  const didl = unesc(tag(xml, 'Result') || '');
+  // Sonos hands back at most 100 per Browse, so page until it's all here
+  // (the bar's Pandora account has 100+ stations).
+  let didl = '';
+  for (let start = 0; start < 2000;) {
+    const xml = await soap(p.ip, 'ContentDirectory', 'Browse', {
+      ObjectID: 'FV:2', BrowseFlag: 'BrowseDirectChildren', Filter: '*', StartingIndex: start, RequestedCount: 100, SortCriteria: '',
+    });
+    didl += unesc(tag(xml, 'Result') || '');
+    const got = Number(tag(xml, 'NumberReturned')) || 0;
+    const total = Number(tag(xml, 'TotalMatches')) || 0;
+    start += got;
+    if (!got || start >= total) break;
+  }
   const items = [];
   const re = /<item\b([^>]*)>([\s\S]*?)<\/item>/g;
   let m;
@@ -233,6 +246,60 @@ async function removeFavorite(id) {
   await readFavorites(true).catch(() => {});
 }
 
+// ---------------------------------------------------------------- auto-save
+// "Play it once and it's on the list" (Scotto, 2026-10-04): a Pandora
+// station playing on the bar's Sonos that isn't in My Sonos gets added
+// there, so a station someone made in the Sonos app shows up on the iPad
+// without a second step. Pandora's Shuffle and anything that isn't a
+// Pandora station are left alone. Adding uses ContentDirectory
+// CreateObject on FV:2 (the call the Sonos desktop app makes; not in
+// Sonos's public docs), with the URI and metadata exactly as the player
+// reported them. One try per station per run, so a refusal can't loop.
+function pandoraStationId(uri) {
+  const m = /^x-sonosapi-radio:([^?]+)/i.exec(String(uri || ''));
+  if (!m) return null;
+  let id;
+  try { id = decodeURIComponent(m[1]); } catch (e) { return null; }
+  return /^ST:/i.test(id) ? id.toUpperCase() : null;
+}
+
+function isFavorite(uri) {
+  const id = pandoraStationId(uri);
+  const base = String(uri).split('?')[0];
+  return favorites.some((f) => f.uri && (f.uri.split('?')[0] === base || (id && pandoraStationId(f.uri) === id)));
+}
+
+async function autoSaveStation() {
+  const st = state.station;
+  if (!state.ok || !state.playing || !st || !st.uri || !st.title || !player) return null;
+  const id = pandoraStationId(st.uri);
+  if (!id || /shuffle|quickmix/i.test(st.title)) return null;
+  if (!favoritesAt || autoSaveTried.has(id) || isFavorite(st.uri)) return null;
+  autoSaveTried.add(id);
+  const scheme = st.uri.split(':')[0];
+  const art = (/<upnp:albumArtURI>([\s\S]*?)<\/upnp:albumArtURI>/.exec(lastStationDidl) || [])[1];
+  const elements = '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
+    + 'xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+    + '<item id="" restricted="true">'
+    + `<dc:title>${esc(st.title)}</dc:title>`
+    + '<upnp:class>object.itemobject.item.sonos-favorite</upnp:class>'
+    + '<r:ordinal>-1</r:ordinal>'
+    + (art ? `<upnp:albumArtURI>${art}</upnp:albumArtURI>` : '')
+    + `<res protocolInfo="${esc(scheme)}:*:*:*">${esc(st.uri)}</res>`
+    + '<r:type>instance</r:type><r:description>Pandora</r:description>'
+    + `<r:resMD>${esc(lastStationDidl)}</r:resMD>`
+    + '</item></DIDL-Lite>';
+  try {
+    await soap(player.ip, 'ContentDirectory', 'CreateObject', { ContainerID: 'FV:2', Elements: elements });
+    console.log(`[sonos] saved "${st.title}" to My Sonos (played on the Sonos, wasn't a favorite)`);
+    await readFavorites(true).catch(() => {});
+    return st.title;
+  } catch (err) {
+    console.warn(`[sonos] couldn't save "${st.title}" to My Sonos: ${err.message}`);
+    return null;
+  }
+}
+
 function getState() { return state; }
 function getFavorites() { return favorites; }
 function currentFavoriteId() {
@@ -244,10 +311,10 @@ function currentFavoriteId() {
 
 function start() {
   if (timer) return;
-  const tick = () => readState().then(() => readFavorites().catch(() => {})).catch(() => {});
+  const tick = () => readState().then(() => readFavorites().catch(() => {})).then(() => autoSaveStation()).catch(() => {});
   tick();
   timer = setInterval(tick, POLL_MS);
   console.log(config.SONOS_IP ? `[sonos] polling ${config.SONOS_IP}` : '[sonos] no SONOS_IP set — will look for a player on the network');
 }
 
-module.exports = { start, getState, getFavorites, readFavorites, currentFavoriteId, transport, playFavorite, readState, removeFavorite };
+module.exports = { start, getState, getFavorites, readFavorites, currentFavoriteId, transport, playFavorite, readState, removeFavorite, autoSaveStation, pandoraStationId };
