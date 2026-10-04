@@ -146,16 +146,27 @@ async function refresh() {
 async function search(query) {
   const q = String(query || '').trim().slice(0, 80);
   if (!q) return [];
-  const data = await call('/api/v3/sod/search', {
-    query: q, types: ['AR', 'TR', 'GE', 'SF'], listener: null, start: 0, count: 20,
-    annotate: true, searchTime: 0, annotationRecipe: 'CLASS_OF_2019',
-  });
+  // Artists, songs and genre stations ("SF", station factories). Pandora
+  // rejects a type it doesn't know with a -32000 assert, so fall back to
+  // just artists and songs if the genre type is ever refused.
+  let data;
+  for (const types of [['AR', 'TR', 'SF'], ['AR', 'TR']]) {
+    try {
+      data = await call('/api/v3/sod/search', {
+        query: q, types, listener: null, start: 0, count: 20,
+        annotate: true, searchTime: 0, annotationRecipe: 'CLASS_OF_2019',
+      });
+      break;
+    } catch (err) {
+      if (!/-32000|Assert failed/.test(err.message) || types.length === 2) throw err;
+    }
+  }
   const ids = Array.isArray(data.results) ? data.results : [];
   const notes = data.annotations || {};
   return ids.map((id) => {
     const a = notes[id] || {};
     const type = String(a.type || id.split(':')[0] || '');
-    const kind = type === 'AR' ? 'Artist' : type === 'TR' ? 'Song' : (type === 'GE' || type === 'SF') ? 'Genre' : 'Music';
+    const kind = type === 'AR' ? 'Artist' : type === 'TR' ? 'Song' : type === 'SF' ? 'Genre' : 'Music';
     const sub = type === 'TR' ? [a.artistName, a.albumName].filter(Boolean).join(' · ') : '';
     return { pandoraId: id, kind, name: String(a.name || a.title || id), sub, art: pickArt(a) };
   }).filter((r) => r.name);
