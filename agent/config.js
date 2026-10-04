@@ -35,4 +35,9 @@ if (!AGENT_TOKEN) {
 const KASA_USER = process.env.KASA_USER || '';
 const KASA_PASS = process.env.KASA_PASS || '';
 
-module.exports = { KASA_USER, KASA_PASS, CLOUD_URL, AGENT_TOKEN, ADMIN_PIN, STAFF_PIN, SMARTTHINGS_TOKEN, PORT, UNIFI_URL, UNIFI_USER, UNIFI_PASS, UNIFI_SITE, SPEEDTEST_EVERY_HOURS, SONOS_IP, SONOS_PORT };
+// The bar's Pandora account (lib/pandora.js): lists every station on the
+// staff Music page and lets staff make new ones. One account per bar.
+const PANDORA_USER = process.env.PANDORA_USER || '';
+const PANDORA_PASS = process.env.PANDORA_PASS || '';
+
+module.exports = { KASA_USER, KASA_PASS, PANDORA_USER, PANDORA_PASS, CLOUD_URL, AGENT_TOKEN, ADMIN_PIN, STAFF_PIN, SMARTTHINGS_TOKEN, PORT, UNIFI_URL, UNIFI_USER, UNIFI_PASS, UNIFI_SITE, SPEEDTEST_EVERY_HOURS, SONOS_IP, SONOS_PORT };

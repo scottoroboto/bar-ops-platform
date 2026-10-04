@@ -1,8 +1,9 @@
 // Staff Music tab (Sept 2026): Pandora on the bar's Sonos. Left: now
-// playing with artwork, play / pause / skip. Right: one tile per station
-// saved under My Sonos in the Sonos app, tap to switch. Nothing else on
-// purpose -- thumbs, search and new stations live in the Pandora app, and
-// volume lives on the mixer. Local API only (/api/music/*).
+// playing with artwork, play / pause / skip. Right: every station on the
+// bar's Pandora account (when the box is linked to it) plus anything in
+// My Sonos, tap to switch; "+ Add station" searches Pandora and makes a
+// new one (Oct 2026). Volume lives on the mixer. Local API only
+// (/api/music/*).
 let MUSIC = null;
 let refreshTimer = null;
 let clockTimer = null;
@@ -125,7 +126,7 @@ function renderNowPlaying() {
         : `<button class="mu-tb mu-play${busy('play')}" onclick="musicCmd('play')">&#9654; PLAY</button>`}
       <button class="mu-tb${busy('next')}" onclick="musicCmd('next')">&#9197; SKIP</button>
     </div>
-    <div class="mu-foot muted">Thumbs, search and new stations: the Pandora app on this iPad. Volume: the mixer.</div>`;
+    <div class="mu-foot muted">${m.pandora && m.pandora.enabled ? 'New stations: + Add station.' : 'New stations: the Sonos app.'} Volume: the mixer.</div>`;
 }
 
 let STATION_FILTER = '';
@@ -174,10 +175,12 @@ function renderStations() {
       ${FAV_MENU_OPEN ? favMenuHtml() : ''}
     </div>
     ${list ? `<button type="button" class="mu-sort" onclick="openSheet({ kind: 'listmenu', list: listById('${list.id}') })" title="Copy or delete this list">&#8943;</button>` : ''}
-  </div>`;
+    ${m.pandora && m.pandora.enabled ? `<button type="button" class="mu-sort mu-add" onclick="openSheet({ kind: 'add' })">&#65291; Add station</button>` : ''}
+  </div>
+  ${m.pandora && m.pandora.enabled && m.pandora.error ? `<p class="mu-hint muted">Pandora: ${escapeHtml(m.pandora.error)}${m.pandora.count ? ' Showing the last list it sent.' : ''}</p>` : ''}`;
 
   if (!all.length && !showingDeleted) {
-    box.innerHTML = header + `<p class="muted" style="margin-top:12px;">No stations yet. In the Sonos app, play a Pandora station and add it to My Sonos. It shows up here within a minute.</p>` + sheetHtml();
+    box.innerHTML = header + `<p class="muted" style="margin-top:12px;">No stations yet. ${m.pandora && m.pandora.enabled ? 'Tap + Add station to make one, or check the Pandora account on this box.' : 'In the Sonos app, play a Pandora station once (or add it to My Sonos). It shows up here within a minute.'}</p>` + sheetHtml();
     return;
   }
   let body;
@@ -207,7 +210,7 @@ function rowHtml(f, list, showingDeleted) {
   // A div, not a button: the star / restore buttons live inside the row and
   // a button can't contain buttons (the parser would split them apart).
   return `<div role="button" tabindex="0" class="mu-row${now ? ' now' : ''}${busy ? ' busy' : ''}${f.missing ? ' missing' : ''}" data-uri="${escapeHtml(f.uri)}" data-id="${escapeHtml(f.id || '')}" data-title="${escapeHtml(f.title)}" ${playable ? `onclick="rowTap(this)"` : ''}>
-    <span class="mu-row-art">${f.art ? `<img src="${escapeHtml(f.art)}" alt="">` : '<span class="blank"></span>'}</span>
+    <span class="mu-row-art">${f.art ? `<img src="${escapeHtml(f.art)}" alt="" onerror="this.remove()">` : '<span class="blank"></span>'}</span>
     <span class="mu-row-name">${escapeHtml(f.title)}${f.missing ? ' <small>no longer in My Sonos</small>' : ''}</span>
     ${right}
   </div>`;
@@ -248,6 +251,19 @@ function sheetHtml() {
       <div class="mu-sheet-sub">${SHEET.copyOf ? 'The copy gets its own name; the original stays until you delete it.' : 'Your name works best: Scott, Mindy, Barry.'}</div>
       <input id="muNewListName" type="text" maxlength="40" placeholder="List name" autocomplete="off" autocapitalize="words">
       <div class="mu-sheet-btns"><button type="button" class="mu-sheet-cancel" onclick="closeSheet()">Cancel</button><button type="button" class="mu-sheet-go" onclick="listCreate()">Create</button></div>`;
+  } else if (SHEET.kind === 'add') {
+    const a = ADD;
+    let rows;
+    if (a.busy) rows = `<p class="muted">${a.busy === 'search' ? 'Searching Pandora…' : 'Making the station…'}</p>`;
+    else if (a.error) rows = `<p class="muted">${escapeHtml(a.error)}</p>`;
+    else if (a.q && !a.results.length) rows = `<p class="muted">Nothing on Pandora matches "${escapeHtml(a.q)}".</p>`;
+    else rows = a.results.map((r, i) => `<button type="button" class="mu-sheet-row mu-add-row" onclick="addStationFrom(${i})">
+        <span class="mu-row-art">${r.art ? `<img src="${escapeHtml(r.art)}" alt="" onerror="this.remove()">` : '<span class="blank"></span>'}</span>
+        <span class="mu-add-text"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.kind)}${r.sub ? ' · ' + escapeHtml(r.sub) : ''}</small></span></button>`).join('');
+    inner = `<div class="mu-sheet-title">Add a station</div>
+      <div class="mu-sheet-sub">Type an artist, song or genre. Tap one and Pandora makes a station from it, plays it here, and adds it to the list.</div>
+      <input id="muAddQuery" type="search" placeholder="e.g. Zac Brown Band" value="${escapeHtml(a.q)}" oninput="addSearchInput(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <div class="mu-sheet-list" style="margin-top:10px;">${rows}</div>`;
   } else if (SHEET.kind === 'listmenu') {
     const l = SHEET.list;
     inner = `<div class="mu-sheet-title">${escapeHtml(l.name)}'s list</div><div class="mu-sheet-sub">${(l.stations || []).length} station${(l.stations || []).length === 1 ? '' : 's'}</div>
@@ -259,7 +275,13 @@ function sheetHtml() {
   return `<div class="mu-sheet-back" onclick="closeSheet()"><div class="mu-sheet" onclick="event.stopPropagation()">${inner}${SHEET.kind !== 'newlist' ? '<button type="button" class="mu-sheet-cancel wide" onclick="closeSheet()">Cancel</button>' : ''}</div></div>`;
 }
 
-function openSheet(sheet) { SHEET = sheet; FAV_MENU_OPEN = false; renderStations(); const inp = document.getElementById('muNewListName'); if (inp) inp.focus(); }
+function openSheet(sheet) {
+  SHEET = sheet; FAV_MENU_OPEN = false;
+  if (sheet.kind === 'add') ADD = { q: '', results: [], busy: null, error: null, seq: 0 };
+  renderStations();
+  const inp = document.getElementById('muNewListName') || document.getElementById('muAddQuery');
+  if (inp) inp.focus();
+}
 function closeSheet() { SHEET = null; renderStations(); }
 function toggleFavMenu() { FAV_MENU_OPEN = !FAV_MENU_OPEN; renderStations(); }
 document.addEventListener('click', (e) => { if (FAV_MENU_OPEN && !e.target.closest('.mu-favwrap')) { FAV_MENU_OPEN = false; renderStations(); } });
@@ -290,6 +312,45 @@ document.addEventListener('pointerdown', (e) => {
 ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => document.addEventListener(ev, () => { clearTimeout(holdTimer); if (holdRow) holdRow.classList.remove('held'); }));
 document.addEventListener('pointermove', (e) => { if (holdRow && e.buttons && Math.abs(e.movementY) > 6) clearTimeout(holdTimer); });
 function rowTap(row) { if (holdFired) { holdFired = false; return; } musicStation(row.dataset.id); }
+
+// ---- + Add station (Pandora search) -------------------------------------
+let ADD = { q: '', results: [], busy: null, error: null, seq: 0 };
+let addTimer = null;
+function renderAddSheet() {
+  const inp = document.getElementById('muAddQuery');
+  const pos = inp ? inp.selectionStart : null;
+  renderStations();
+  const again = document.getElementById('muAddQuery');
+  if (again) { again.focus(); if (pos != null) try { again.setSelectionRange(pos, pos); } catch (e) { /* ignore */ } }
+}
+function addSearchInput(v) {
+  ADD.q = v || '';
+  clearTimeout(addTimer);
+  if (!ADD.q.trim()) { ADD.results = []; ADD.error = null; ADD.busy = null; renderAddSheet(); return; }
+  addTimer = setTimeout(async () => {
+    const seq = ++ADD.seq;
+    ADD.busy = 'search'; ADD.error = null; renderAddSheet();
+    try {
+      const r = await api('/api/music/pandora/search?q=' + encodeURIComponent(ADD.q.trim()));
+      if (seq !== ADD.seq) return;
+      ADD.results = r.results || [];
+    } catch (e) { if (seq === ADD.seq) ADD.error = e.message; }
+    if (seq === ADD.seq) { ADD.busy = null; renderAddSheet(); }
+  }, 450);
+}
+async function addStationFrom(i) {
+  const pick = ADD.results[i];
+  if (!pick || ADD.busy) return;
+  ADD.busy = 'create'; renderAddSheet();
+  try {
+    const r = await api('/api/music/pandora/add', { method: 'POST', body: JSON.stringify({ pandoraId: pick.pandoraId, name: pick.name }) });
+    SHEET = null; ADD.busy = null;
+    STATION_FILTER = '';
+    await refreshAll(true);
+    renderPage();
+    if (!r.playing) alert(`"${r.station.title}" was added to the Pandora account but didn't start: ${r.playError || 'unknown error'}`);
+  } catch (e) { ADD.busy = null; ADD.error = e.message; renderAddSheet(); }
+}
 
 // ---- actions ----------------------------------------------------------
 async function musicCmd(action) {

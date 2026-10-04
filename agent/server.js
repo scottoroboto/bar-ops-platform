@@ -13,6 +13,7 @@ const tvPoller = require('./lib/tv-poller');
 const health = require('./lib/health');
 const speedtest = require('./lib/speedtest');
 const sonos = require('./lib/sonos');
+const pandora = require('./lib/pandora');
 const lights = require('./lib/lights');
 const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
@@ -179,19 +180,51 @@ app.post('/api/lights/:id/schedule', async (req, res) => {
 // ---------------- Music (lib/sonos.js) ----------------
 // Now playing + the station tiles (Sonos favorites) for the staff Music
 // page and the strip on every staff page. Volume is deliberately absent.
+// One station list from two places: every station on the bar's Pandora
+// account (lib/pandora.js, when linked) and whatever is in My Sonos. A
+// Pandora station that's also a favorite plays through the favorite;
+// one that isn't plays by its id ("P:<id>"). Pandora stations are keyed
+// by station id, so favorites lists and Deleted stations match either way.
+function musicStations() {
+  const favs = sonos.getFavorites();
+  const favByKey = new Map();
+  for (const f of favs) { const k = sonos.pandoraStationId(f.uri); if (k) favByKey.set(k, f); }
+  const out = [];
+  const seen = new Set();
+  for (const s of pandora.getStations()) {
+    const key = `ST:${String(s.stationId).toUpperCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const fav = favByKey.get(key);
+    out.push({ id: fav ? fav.id : `P:${s.stationId}`, title: s.name, art: s.art || (fav && fav.art) || null, service: 'Pandora', uri: `x-sonosapi-radio:ST%3a${key.slice(3)}`, key });
+  }
+  for (const f of favs) {
+    const k = sonos.pandoraStationId(f.uri);
+    if (k && seen.has(k)) continue;
+    if (k) seen.add(k);
+    out.push({ id: f.id, title: f.title, art: f.art, service: f.service, uri: k ? `x-sonosapi-radio:ST%3a${k.slice(3)}` : f.uri, key: k || String(f.uri).split('?')[0] });
+  }
+  return out;
+}
+function currentStationId(stations) {
+  const key = sonos.currentStationKey();
+  const hit = key && stations.find((s) => s.key === key);
+  return hit ? hit.id : null;
+}
+
 app.get('/api/music/state', async (req, res) => {
   const st = sonos.getState();
-  const favs = sonos.getFavorites();
   const config = cache.get('config') || {};
   const hidden = config.music_hidden || [];
   const hiddenUris = new Set(hidden.map((h) => h.uri));
-  const all = favs.map((f) => ({ id: f.id, title: f.title, art: f.art, service: f.service, uri: f.uri }));
+  const all = musicStations();
   res.json({
     ...st,
     favorites: all.filter((f) => !hiddenUris.has(f.uri)),
     hiddenStations: all.filter((f) => hiddenUris.has(f.uri)).map((f) => ({ ...f, hidden_by: (hidden.find((h) => h.uri === f.uri) || {}).hidden_by })),
     lists: config.music_lists || [],
-    currentFavoriteId: sonos.currentFavoriteId(),
+    currentFavoriteId: currentStationId(all),
+    pandora: pandora.status(),
     isOwner: req.vcActor === 'admin',
   });
 });
@@ -227,7 +260,7 @@ app.post('/api/music/hidden/:op(hide|restore|purge)', async (req, res) => {
   const { uri, title, favoriteId } = req.body || {};
   if (req.params.op === 'purge' && !ownerOnly(req, res)) return;
   try {
-    if (req.params.op === 'purge' && favoriteId) await sonos.removeFavorite(String(favoriteId));
+    if (req.params.op === 'purge' && favoriteId && String(favoriteId).startsWith('FV:')) await sonos.removeFavorite(String(favoriteId));
     const r = await sync.musicWrite(`/hidden/${req.params.op}`, { uri, title, actor: musicActor(req) });
     activity.record('music.station.' + req.params.op, { actor: req.vcActor, targetType: 'music', targetId: null, detail: { title } });
     res.json(r);
@@ -235,6 +268,7 @@ app.post('/api/music/hidden/:op(hide|restore|purge)', async (req, res) => {
 });
 app.post('/api/music/refresh', async (req, res) => {
   try { await sonos.readState(); await sonos.readFavorites(true); } catch (e) { /* state carries the error */ }
+  await pandora.refresh().catch(() => {});
   res.json({ ok: true });
 });
 app.post('/api/music/:action(play|pause|next|previous)', async (req, res) => {
@@ -247,11 +281,36 @@ app.post('/api/music/:action(play|pause|next|previous)', async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+// "+ Add station": search Pandora, then make a station from a result and
+// start it on the Sonos.
+app.get('/api/music/pandora/search', async (req, res) => {
+  if (!pandora.enabled()) return res.status(400).json({ error: 'This box isn’t linked to a Pandora account yet.' });
+  try { res.json({ results: await pandora.search(req.query.q) }); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.post('/api/music/pandora/add', async (req, res) => {
+  if (!pandora.enabled()) return res.status(400).json({ error: 'This box isn’t linked to a Pandora account yet.' });
+  const { pandoraId, name } = req.body || {};
+  try {
+    const st = await pandora.createStation(pandoraId);
+    activity.record('music.station.create', { actor: req.vcActor, targetType: 'music', targetId: null, detail: { from: name || pandoraId, station: st.name } });
+    let playing = true;
+    let playError = null;
+    try { await sonos.playPandoraStation(st); } catch (e) { playing = false; playError = e.message; }
+    res.json({ ok: true, station: { id: `P:${st.stationId}`, title: st.name, art: st.art }, playing, playError });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
 app.post('/api/music/station', async (req, res) => {
   const { id } = req.body || {};
   if (!id) return res.status(400).json({ error: 'Missing station "id".' });
   try {
-    const r = await sonos.playFavorite(String(id));
+    let r;
+    if (String(id).startsWith('P:')) {
+      const s = pandora.stationById(String(id).slice(2));
+      if (!s) return res.status(404).json({ error: 'That station is no longer on the Pandora account.' });
+      r = await sonos.playPandoraStation(s);
+    } else {
+      r = await sonos.playFavorite(String(id));
+    }
     activity.record('music.station', { actor: req.vcActor, targetType: 'music', targetId: null, detail: { station: r.station } });
     res.json({ ok: true, ...r });
   } catch (err) {
@@ -1008,6 +1067,7 @@ app.listen(config.PORT, () => {
   health.start();
   speedtest.start();
   sonos.start();
+  pandora.start();
   lights.start();
   scheduler.start();
   activity.start();

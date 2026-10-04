@@ -1308,3 +1308,11 @@ body.staff {
 .staff .lt-foot button { flex: 1; height: 54px; min-height: 0; margin: 0; border-radius: 12px; font-size: 16px; font-weight: 800; font-family: inherit; }
 .staff .lt-foot .cancel { background: transparent; border: 1px solid var(--border-strong); color: var(--muted-strong); }
 .staff .lt-foot .save { background: var(--neon-green); border: 0; color: #06110A; }
+/* Music: + Add station (Pandora search) */
+.staff .mu-sort.mu-add { color: var(--neon-cyan); border-color: var(--neon-cyan); margin-left: auto; }
+.staff .mu-add-row { display: flex; align-items: center; gap: 10px; text-align: left; }
+.staff .mu-add-row .mu-row-art { width: 40px; height: 40px; flex: 0 0 40px; }
+.staff .mu-add-text { display: flex; flex-direction: column; min-width: 0; }
+.staff .mu-add-text b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staff .mu-add-text small { font-size: 12px; color: var(--muted-strong); font-weight: 600; }
+.staff #muAddQuery { width: 100%; box-sizing: border-box; }
