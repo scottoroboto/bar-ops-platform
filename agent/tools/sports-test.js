@@ -14,8 +14,9 @@ function ymdToday() {
   return d.replace(/-/g, '');
 }
 
-function chText(name) {
+function chText(name, market) {
   const c = sports.channelFor(name);
+  if (!c && /home|away/.test(market || '')) return `${name} = regional (other market)`;
   if (!c) return `${name} = ?? (no channel set)`;
   if (c.streaming) return `${name} = streaming only`;
   if (c.package) return `${name} = package (find it with the guide scan)`;
@@ -35,8 +36,8 @@ async function games(leagueKey, ymd) {
         const when = new Date(g.start).toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' });
         const score = g.state === 'pre' ? '' : `  ${g.away.abbr} ${g.away.score ?? ''} - ${g.home.abbr} ${g.home.score ?? ''}`;
         console.log(`  ${when.padStart(8)}  ${g.name.padEnd(14)} ${g.detail}${score}`);
-        console.log(`            TV: ${g.networks.length ? g.networks.map((n) => chText(n.name)).join(' | ') : 'none listed'}`);
-        for (const n of g.networks) if (!sports.channelFor(n.name)) unknown.add(n.name);
+        console.log(`            TV: ${g.networks.length ? g.networks.map((n) => chText(n.name, n.market)).join(' | ') : 'none listed'}`);
+        for (const n of g.networks) if (!sports.channelFor(n.name) && !/home|away/.test(n.market)) unknown.add(n.name);
       }
       if (list.length > 25) console.log(`  ... and ${list.length - 25} more`);
     } catch (err) {

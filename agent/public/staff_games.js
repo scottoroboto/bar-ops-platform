@@ -276,7 +276,7 @@ function renderGameSheet() {
   const opt = opts[SHEET.ch] || null;
   const others = (g.options || []).filter((o) => o.kind !== 'tv');
   const chips = opts.map((o, i) => `<button type="button" class="gs-chip${i === SHEET.ch ? ' sel' : ''}" onclick="SHEET.ch=${i};renderGameSheet()"><b>${escapeHtml(chLabel(o))}</b> ${escapeHtml(o.name)}${o.confirmed ? ' <i>✓ guide</i>' : ''}</button>`).join('')
-    + others.map((o) => `<span class="gs-chip off">${escapeHtml(o.name)} <i>${o.kind === 'streaming' ? 'streaming' : o.kind === 'package' ? 'package — set channel' : o.kind === 'off' ? 'not on DirecTV' : 'no channel set'}</i></span>`).join('');
+    + others.map((o) => `<span class="gs-chip off">${escapeHtml(o.name)} <i>${o.kind === 'streaming' ? 'streaming' : o.kind === 'package' ? 'package — set channel' : o.kind === 'regional' ? 'regional — set channel if we get it' : o.kind === 'off' ? 'not on DirecTV' : 'no channel set'}</i></span>`).join('');
   const firstNet = (g.options || []).find((o) => o.kind !== 'streaming' && !/^Ch \d/.test(o.name));
   const edit = !GAMES_EDIT ? '' : SHEET.editing ? `
       <div class="gs-edit">

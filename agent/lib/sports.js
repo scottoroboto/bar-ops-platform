@@ -61,7 +61,7 @@ const NETWORKS = [
   { keys: ['nflnet', 'nflnetwork', 'nfln', 'nflhd'], major: 212, label: 'NFL Network' },
   { keys: ['mlbn', 'mlbnetwork', 'mlbnet', 'mlbhd'], major: 213, label: 'MLB Network' },
   { keys: ['nbatv', 'nbatvhd'], major: 216, label: 'NBA TV' },
-  { keys: ['nhln', 'nhlnetwork', 'nhlhd'], major: 215, label: 'NHL Network' },
+  { keys: ['nhln', 'nhlnet', 'nhlnetwork', 'nhlhd'], major: 215, label: 'NHL Network' },
   { keys: ['cbssn', 'cbssportsnetwork', 'cbssports', 'cbssnhd'], major: 221, label: 'CBS Sports Network' },
   { keys: ['golf', 'golfchannel', 'golfhd'], major: 218, label: 'Golf Channel' },
   { keys: ['tennis', 'tennischannel', 'tenhd'], major: 217, label: 'Tennis Channel' },
@@ -76,6 +76,12 @@ const STREAMING = new Set(['espnplus', 'peacock', 'primevideo', 'amazonprimevide
   'tubi', 'roku', 'victoryplus', 'fanduelsportsnetworkapp', 'nflplus', 'peacocktv', 'trutvapp', 'maxapp', 'foxsportsapp', 'nbcsportsapp']);
 const PACKAGES = new Set(['nflsundayticket', 'sundayticket', 'mlbextrainnings', 'extrainnings', 'nhlcenterice', 'centerice', 'nbaleaguepass', 'leaguepass', 'nhlcentreice']);
 
+// "Prime Video (Local)", "Peacock Premium": a streaming name with extra words.
+function isStreaming(name) {
+  const k = norm(name);
+  for (const s of STREAMING) if (k === s || (s.length >= 6 && k.startsWith(s))) return true;
+  return false;
+}
 function norm(s) { return String(s || '').toLowerCase().replace(/\+/g, 'plus').replace(/[^a-z0-9]/g, ''); }
 const ALIAS = new Map();
 for (const n of NETWORKS) for (const k of n.keys) ALIAS.set(k, n);
@@ -163,6 +169,7 @@ function normalizeEvent(ev, league) {
     nets.push({ name, market: String(market || '').toLowerCase(), streaming: !!streaming });
   };
   for (const g of comp.geoBroadcasts || []) {
+    if (/radio/i.test((g.type && g.type.shortName) || '')) continue; // radio calls, not TV
     add(g.media && (g.media.shortName || g.media.callLetters || g.media.name), g.market && (g.market.type || g.market), /stream/i.test((g.type && g.type.shortName) || ''));
   }
   for (const b of comp.broadcasts || []) for (const n of b.names || []) add(n, b.market);
@@ -271,7 +278,7 @@ function favoriteFor(key) {
 // { major, minor, from } | { off: true } | null for one network name.
 function channelFor(name) {
   const key = canonical(name);
-  if (STREAMING.has(norm(name))) return { streaming: true };
+  if (isStreaming(name)) return { streaming: true };
   const set = channelSettings()[key];
   if (set) return set.off ? { off: true } : { major: Number(set.major), minor: set.minor != null ? Number(set.minor) : null, from: 'owner' };
   const fav = favoriteFor(key);
@@ -328,6 +335,10 @@ function optionsFor(g) {
     else if (c && c.package) opts.push({ name: n.name, kind: 'package' });
     else if (c && c.off) opts.push({ name: n.name, kind: 'off' });
     else if (c && c.major) opts.push({ name: n.name, kind: 'tv', major: c.major, minor: c.minor, from: c.from });
+    // A home/away network we have no number for is a regional sports
+    // network (NESN, NBC Sports Philadelphia...): only on DirecTV in that
+    // team's market or through a package.
+    else if (/home|away/.test(n.market)) opts.push({ name: n.name, kind: 'regional' });
     else opts.push({ name: n.name, kind: 'unknown' });
   }
   for (const e of guideMatches(g)) {
