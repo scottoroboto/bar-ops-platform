@@ -315,8 +315,13 @@ async function setPower(tv, desiredState) {
       const res = await sendKey(tv, 'KEY_POWER');
       token = res.token;
       method = 'ws';
-      await sleep(1500);
-      after = await getPowerState(tv);
+      // Some sets take a few seconds to report "off". Watch up to 8s;
+      // never press again (Power toggles).
+      for (let i = 0; i < 8; i += 1) {
+        await sleep(1000);
+        after = await getPowerState(tv, 1500);
+        if (after !== 'on') break;
+      }
     } catch (err) { /* fall through to ST below */ }
   }
   if (after === 'on' && samsungSt.configured() && tv.st_device_id) {
