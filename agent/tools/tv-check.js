@@ -36,13 +36,13 @@ const squash = (s) => String(s).toLowerCase().replace(/\s+/g, '');
   const off = await samsung.setPower(tv, 'off');
   console.log(`   ${off.ok ? 'OK' : 'FAILED'} in ${secs(t)} (${off.method}, now ${word(off.state)})`);
 
-  console.log('   Watching it for 20s while off:');
+  console.log('   Watching it for 6s while off:');
   const seen = [];
-  for (let i = 0; i < 10; i += 1) {
+  for (let i = 0; i < 3; i += 1) {
     await sleep(2000);
     const s = await samsung.getPowerState(tv, 1500);
     seen.push(s);
-    process.stdout.write(`   ${(i + 1) * 2}s ${s === 'unreachable' ? 'asleep' : s}${i % 5 === 4 ? '\n' : ''}`);
+    process.stdout.write(`   ${(i + 1) * 2}s ${s === 'unreachable' ? 'asleep' : s}${i === 2 ? '\n' : ''}`);
   }
   const offState = seen[seen.length - 1];
   console.log(offState === 'unreachable'
