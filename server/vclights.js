@@ -83,7 +83,9 @@ function plugConfigOut(p) {
 
 async function configRows(client, siteId) {
   const { rows: plugs } = await client.query(
-    'SELECT * FROM vc_plugs WHERE site_id = $1 AND archived_at IS NULL AND NOT spare ORDER BY group_name NULLS LAST, sort_order, tag NULLS LAST, name NULLS LAST, id',
+    `SELECT * FROM vc_plugs WHERE site_id = $1 AND archived_at IS NULL AND NOT spare
+     ORDER BY array_position((SELECT light_groups FROM vc_sites WHERE id = $1), group_name) NULLS LAST,
+              group_name NULLS LAST, sort_order, tag NULLS LAST, name NULLS LAST, id`,
     [siteId]
   );
   const { rows: routines } = await client.query(
@@ -158,7 +160,7 @@ async function groupsFor(client, siteId) {
        FROM (SELECT unnest(light_groups) AS g FROM vc_sites WHERE id = $1
              UNION
              SELECT group_name FROM vc_plugs WHERE site_id = $1 AND group_name IS NOT NULL) x
-      ORDER BY lower(g)`,
+      ORDER BY array_position((SELECT light_groups FROM vc_sites WHERE id = $1), g) NULLS LAST, lower(g)`,
     [siteId]
   );
   return rows;
@@ -176,10 +178,45 @@ async function forgetGroup(client, siteId, name) {
   await client.query('UPDATE vc_plugs SET group_name = NULL, updated_at = now() WHERE site_id = $1 AND group_name = $2', [siteId, group]);
 }
 
+// Owner's order for groups (the bar's light_groups list) and for plugs in a
+// group (sort_order). Both are the order the iPad Lights page shows.
+async function moveGroup(client, siteId, name, direction) {
+  const group = cleanText(name);
+  const { rows } = await client.query('SELECT light_groups FROM vc_sites WHERE id = $1 FOR UPDATE', [siteId]);
+  const list = [...((rows[0] && rows[0].light_groups) || [])];
+  const { rows: used } = await client.query('SELECT DISTINCT group_name FROM vc_plugs WHERE site_id = $1 AND group_name IS NOT NULL', [siteId]);
+  for (const u of used) if (!list.includes(u.group_name)) list.push(u.group_name);
+  const i = list.indexOf(group);
+  if (i === -1) throw fail('Not found.', 404);
+  const j = i + (direction === 'up' ? -1 : 1);
+  if (j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  await client.query('UPDATE vc_sites SET light_groups = $2 WHERE id = $1', [siteId, list]);
+}
+
+async function movePlug(client, siteId, plugId, direction) {
+  const plug = await plugAt(client, siteId, plugId);
+  if (!plug) throw fail('Not found.', 404);
+  const { rows } = await client.query(
+    `SELECT id FROM vc_plugs WHERE site_id = $1 AND group_name IS NOT DISTINCT FROM $2 AND archived_at IS NULL AND NOT spare AND name IS NOT NULL
+     ORDER BY sort_order, tag NULLS LAST, name, id`,
+    [siteId, plug.group_name]
+  );
+  const ids = rows.map((r) => Number(r.id));
+  const i = ids.indexOf(Number(plugId));
+  if (i === -1) return;
+  const j = i + (direction === 'up' ? -1 : 1);
+  if (j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  for (let k = 0; k < ids.length; k += 1) await client.query('UPDATE vc_plugs SET sort_order = $3, updated_at = now() WHERE id = $1 AND site_id = $2', [ids[k], siteId, k]);
+}
+
 async function listForAdmin(client, siteId) {
   const { rows: plugs } = await client.query(
     `SELECT * FROM vc_plugs WHERE site_id = $1
-     ORDER BY archived_at IS NOT NULL, name IS NOT NULL, group_name NULLS LAST, sort_order, tag NULLS LAST, name, id`,
+     ORDER BY archived_at IS NOT NULL, name IS NOT NULL,
+              array_position((SELECT light_groups FROM vc_sites WHERE id = $1), group_name) NULLS LAST,
+              group_name NULLS LAST, sort_order, tag NULLS LAST, name, id`,
     [siteId]
   );
   const { rows: routines } = await client.query(
@@ -368,6 +405,6 @@ async function deleteRoutine(client, siteId, routineId) {
 }
 
 module.exports = {
-  normalizeMac, assignTag, forgetGroup, configRows, recordSeen, recordStatus, listForAdmin, plugAt, addByMac, updatePlug,
+  normalizeMac, assignTag, forgetGroup, moveGroup, movePlug, configRows, recordSeen, recordStatus, listForAdmin, plugAt, addByMac, updatePlug,
   setArchived, deletePlug, saveRoutine, deleteRoutine,
 };

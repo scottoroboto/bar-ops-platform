@@ -147,7 +147,9 @@ function groupByZone(tvs) {
   const keys = Array.from(groups.keys()).sort((a, b) => {
     if (a === 'unassigned') return 1;
     if (b === 'unassigned') return -1;
-    return zoneName(Number(a)).localeCompare(zoneName(Number(b)));
+    // The zones' order from TV Admin (its arrows); ZONES comes sorted.
+    const ia = ZONES.findIndex((z) => String(z.id) === a), ib = ZONES.findIndex((z) => String(z.id) === b);
+    return (ia === -1 ? 9999 : ia) - (ib === -1 ? 9999 : ib) || zoneName(Number(a)).localeCompare(zoneName(Number(b)));
   });
   return keys.map((key) => ({ key, name: key === 'unassigned' ? 'Unassigned' : zoneName(Number(key)), tvs: groups.get(key) }));
 }

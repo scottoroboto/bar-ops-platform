@@ -1488,8 +1488,11 @@ const id = Number(req.params.plugId);
 if (req.params.op === 'archive') return { plug: await vclights.setArchived(client, req.vcSiteId, id, true) };
 if (req.params.op === 'restore') return { plug: await vclights.setArchived(client, req.vcSiteId, id, false) };
 if (req.params.op === 'delete') { await vclights.deletePlug(client, req.vcSiteId, id); return {}; }
+if (req.params.op === 'move') { await vclights.movePlug(client, req.vcSiteId, id, (req.body || {}).direction); return {}; }
 throw Object.assign(new Error('Unknown action.'), { status: 404 });
 }));
+app.post('/api/venue-control/sites/:locationId/lights/groups/move', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
+lightsRoute(req, res, async (client) => { await vclights.moveGroup(client, req.vcSiteId, (req.body || {}).name, (req.body || {}).direction); return {}; }));
 app.post('/api/venue-control/sites/:locationId/lights/groups/remove', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
 lightsRoute(req, res, async (client) => { await vclights.forgetGroup(client, req.vcSiteId, (req.body || {}).name); return {}; }));
 app.post('/api/venue-control/sites/:locationId/lights/routines', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
@@ -2041,6 +2044,28 @@ if (err.code === '23505') return res.status(400).json({ error: 'That MAC address
 if (err.code === '23514' && err.constraint === 'vc_tvs_control_chk') return res.status(400).json({ error: 'Not a recognized control method.' });
 res.status(400).json({ error: err.message });
 }
+});
+
+// Move a TV up or down among the TVs in its zone (the order staff see it
+// on the TVs tab). Renumbers that zone 0..n so ties from old rows sort out.
+app.post('/api/venue-control/tvs/:id/move', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const dir = (req.body || {}).direction === 'up' ? -1 : 1;
+const out = await withServiceClient(async (client) => {
+  const { rows: me } = await client.query('SELECT id, site_id, zone_id FROM vc_tvs WHERE id = $1', [req.params.id]);
+  if (!me[0]) return { status: 404, body: { error: 'TV not found.' } };
+  const { rows: peers } = await client.query(
+    'SELECT id FROM vc_tvs WHERE site_id = $1 AND zone_id IS NOT DISTINCT FROM $2 ORDER BY sort_order, name, id',
+    [me[0].site_id, me[0].zone_id]
+  );
+  const ids = peers.map((r) => String(r.id));
+  const i = ids.indexOf(String(me[0].id));
+  const j = i + dir;
+  if (j >= 0 && j < ids.length) [ids[i], ids[j]] = [ids[j], ids[i]];
+  for (let k = 0; k < ids.length; k += 1) await client.query('UPDATE vc_tvs SET sort_order = $2, updated_at = now() WHERE id = $1', [ids[k], k]);
+  return { status: 200, body: { ok: true } };
+});
+res.status(out.status).json(out.body);
 });
 
 // Identify (patch_038): queue a nudge for one TV so the person in the

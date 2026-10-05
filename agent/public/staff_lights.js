@@ -226,9 +226,10 @@ function renderMain() {
       ${groups.length ? groups.map((g) => {
         const gOn = g.plugs.filter((p) => p.reachable && p.on).length;
         return `<div class="lt-group">
-          <div class="lt-gh"><span class="gn">${escapeHtml(g.name)}</span><span class="gs"><b>${gOn}</b> / ${g.plugs.length} on</span><span class="sp"></span>
+          <div class="lt-gh"><span class="gn">${escapeHtml(g.name)}</span>
             <button class="lt-mini on" data-act="group-on" data-group="${escapeHtml(g.name)}">ALL ON</button>
             <button class="lt-mini off hold-danger" data-hold-action="group-off" data-group="${escapeHtml(g.name)}"><span class="hold-fill"></span><span class="hold-label">ALL OFF <span class="hold-chip">HOLD</span></span></button>
+            <span class="sp"></span><span class="gs"><b>${gOn}</b> / ${g.plugs.length} on</span>
           </div>
           <div class="lt-grid">${g.plugs.map((p) => {
             const st = plugState(p);

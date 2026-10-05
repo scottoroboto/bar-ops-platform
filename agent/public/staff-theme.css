@@ -1335,3 +1335,6 @@ body.staff {
 @media (max-width: 980px) {
   .staff .mu-az { position: sticky; top: 72px; height: calc(100vh - 200px); }
 }
+/* TVs: a zone's ALL ON / ALL OFF beside its name */
+.staff .tvz-header button.tvz-pw { height: 26px; padding: 0 10px; font-size: 11px; }
+.staff .tvz-header button.tvz-pw.on { margin-left: 6px; }

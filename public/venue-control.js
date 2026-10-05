@@ -913,8 +913,13 @@ function renderTvsList() {
   const el = document.getElementById('tvsList');
   renderTvBulkBar();
   if (!TVS_ADMIN.length) { el.innerHTML = '<p class="muted">No TVs yet.</p>'; return; }
-  const rows = filteredTvs();
+  // Zone by zone in the zones' order, then each zone's own order: the
+  // order staff see on the TVs tab. The arrows move a TV within its zone.
+  const zonePos = (t) => { const i = ZONES_ADMIN.findIndex((z) => String(z.id) === String(t.zone_id)); return i === -1 ? 9999 : i; };
+  const rows = filteredTvs().slice().sort((a, b) => zonePos(a) - zonePos(b) || (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name)));
   if (!rows.length) { el.innerHTML = '<p class="muted">No TVs match this filter.</p>'; return; }
+  const inZone = (t) => TVS_ADMIN.filter((x) => String(x.zone_id) === String(t.zone_id))
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name)));
   el.innerHTML = rows.map((t) => {
     if (t.id === editingTvId) {
       return `
@@ -954,6 +959,7 @@ function renderTvsList() {
           <div class="sub">${escapeHtml(zoneName(t.zone_id))} · ${escapeHtml(t.control_method)}${t.ip ? ' · ' + escapeHtml(t.ip) : ''}${t.wol_enabled ? ' · WoL' : ''}${t.channel_capable ? ' · channel-capable' : ''}${t.default_source_slot != null ? ` · default slot ${t.default_source_slot}` : ''}</div>
         </div>
         <div class="stack-actions" style="margin-top:0;">
+          ${(() => { const z = inZone(t); const i = z.findIndex((x) => x.id === t.id); return `<button class="small ghost" title="Move up in ${escapeHtml(zoneName(t.zone_id))}" onclick="moveTv('${t.id}','up')" ${i <= 0 ? 'disabled' : ''}>&#9650;</button><button class="small ghost" title="Move down in ${escapeHtml(zoneName(t.zone_id))}" onclick="moveTv('${t.id}','down')" ${i === z.length - 1 ? 'disabled' : ''}>&#9660;</button>`; })()}
           <button class="small ghost" onclick="startEditTv('${t.id}')">Edit</button>
           ${t.ip && t.enabled ? `<button class="small ghost" id="identify-${t.id}" onclick="identifyTv('${t.id}')" title="The box nudges this TV's volume up and down so you can see which set it is">Identify</button>` : ''}
           ${t.enabled
@@ -963,6 +969,13 @@ function renderTvsList() {
         </div>
       </div>`;
   }).join('');
+}
+
+async function moveTv(id, direction) {
+  try {
+    await api(`/api/venue-control/tvs/${id}/move`, { method: 'POST', body: { direction } });
+    await loadTvsAdmin(document.getElementById('sourcesLocationSelect').value);
+  } catch (e) { showMsg(e.message, 'error'); }
 }
 
 // Identify (patch_038): which physical set is this row? The box nudges the
@@ -2190,6 +2203,21 @@ function readGroup(id) {
   return sel.value === '__new' ? document.getElementById(`${id}-new`).value.trim() : sel.value;
 }
 
+let LIGHT_GROUPS_OPEN = false; // keep the Groups list open while its arrows are used
+async function moveLightGroup(name, direction) {
+  try {
+    await api(`/api/venue-control/sites/${lightsLocation()}/lights/groups/move`, { method: 'POST', body: { name, direction } });
+    LIGHT_GROUPS_OPEN = true;
+    await loadLightsAdmin(lightsLocation());
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+async function movePlug(plugId, direction) {
+  try {
+    await api(`/api/venue-control/sites/${lightsLocation()}/lights/plugs/${plugId}/move`, { method: 'POST', body: { direction } });
+    await loadLightsAdmin(lightsLocation());
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
 async function forgetLightGroup(name) {
   try {
     await api(`/api/venue-control/sites/${lightsLocation()}/lights/groups/remove`, { method: 'POST', body: { name } });
@@ -2264,10 +2292,13 @@ function renderPlugsList() {
           </div>
         </div>`;
       } else {
+        const sib = p.spare ? [] : named.filter((x) => !x.spare && (x.group_name || '') === (p.group_name || ''));
+        const si = sib.findIndex((x) => x.id === p.id);
         html += `
         <div class="list-row">
           <div><div class="name">${plugTagHtml(p)}${escapeHtml(p.name)}</div><div class="sub">${escapeHtml(p.spare ? 'Spare' : plugScheduleWords(p))}${p.ip ? ` · ${escapeHtml(p.ip)}` : ''}</div></div>
           <div style="display:flex; gap:6px; align-items:center;">${plugLiveWords(p)}
+            ${p.spare ? '' : `<button class="small ghost" style="margin:0;" title="Move up" onclick="movePlug(${p.id},'up')" ${si <= 0 ? 'disabled' : ''}>&#9650;</button><button class="small ghost" style="margin:0;" title="Move down" onclick="movePlug(${p.id},'down')" ${si === sib.length - 1 ? 'disabled' : ''}>&#9660;</button>`}
             <button class="small secondary" style="margin:0;" onclick="blinkPlug(${p.id}, this)">Blink</button>
             <button class="small ghost" style="margin:0;" onclick="PLUG_EDIT_ID=${p.id}; renderPlugsList();">Edit</button></div>
         </div>`;
@@ -2289,10 +2320,13 @@ function renderPlugsList() {
   }
   const groups = LIGHTS.groups || [];
   if (groups.length) {
-    html += `<details style="margin-top:12px;"><summary class="muted" style="cursor:pointer;">Groups (${groups.length})</summary>
-      ${groups.map((g) => `<div class="list-row"><div><div class="name">${escapeHtml(g.name)}</div><div class="sub">${g.plugs} plug${g.plugs === 1 ? '' : 's'}</div></div>
-        ${g.plugs ? '' : `<button class="small ghost" style="margin:0;" onclick="forgetLightGroup(${escapeHtml(JSON.stringify(g.name))})">Remove</button>`}</div>`).join('')}
-      <p class="muted" style="font-size:12px;">Add a group with “+ New group…” when naming or editing a plug. A group with plugs in it can’t be removed.</p></details>`;
+    html += `<details style="margin-top:12px;" ${LIGHT_GROUPS_OPEN ? 'open' : ''} ontoggle="LIGHT_GROUPS_OPEN = this.open"><summary class="muted" style="cursor:pointer;">Groups (${groups.length})</summary>
+      ${groups.map((g, i) => `<div class="list-row"><div><div class="name">${escapeHtml(g.name)}</div><div class="sub">${g.plugs} plug${g.plugs === 1 ? '' : 's'}</div></div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button class="small ghost" style="margin:0;" title="Move up" onclick="moveLightGroup(${escapeHtml(JSON.stringify(g.name))},'up')" ${i === 0 ? 'disabled' : ''}>&#9650;</button>
+          <button class="small ghost" style="margin:0;" title="Move down" onclick="moveLightGroup(${escapeHtml(JSON.stringify(g.name))},'down')" ${i === groups.length - 1 ? 'disabled' : ''}>&#9660;</button>
+          ${g.plugs ? '' : `<button class="small ghost" style="margin:0;" onclick="forgetLightGroup(${escapeHtml(JSON.stringify(g.name))})">Remove</button>`}</div></div>`).join('')}
+      <p class="muted" style="font-size:12px;">The arrows set the order groups show on the iPad Lights page. Add a group with “+ New group…” when naming or editing a plug. A group with plugs in it can’t be removed.</p></details>`;
   }
   el.innerHTML = html;
 }

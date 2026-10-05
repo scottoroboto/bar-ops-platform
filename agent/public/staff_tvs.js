@@ -464,12 +464,18 @@ function groupByZone(tvs) {
   const orderedKeys = Array.from(groups.keys()).sort((a, b) => {
     if (a === 'unassigned') return 1;
     if (b === 'unassigned') return -1;
-    return zoneName(Number(a)).localeCompare(zoneName(Number(b)));
+    // The zones' order from TV Admin (its arrows); ZONES comes sorted.
+    const ia = ZONES.findIndex((z) => String(z.id) === a), ib = ZONES.findIndex((z) => String(z.id) === b);
+    return (ia === -1 ? 9999 : ia) - (ib === -1 ? 9999 : ib) || zoneName(Number(a)).localeCompare(zoneName(Number(b)));
   });
   return orderedKeys.map((key) => ({ key, name: key === 'unassigned' ? 'Unassigned' : zoneName(Number(key)), tvs: groups.get(key) }));
 }
 
+// A zone's ALL OFF lives in the column that redraws on refresh; while one
+// is being held, the redraw waits so the hold isn't cut short.
+let pendingTvsRender = false;
 function renderTvsColumn() {
+  if (holdState && holdState.btn && holdState.btn.closest('#tvsColTvs')) { pendingTvsRender = true; return; }
   const box = document.getElementById('tvsColTvs');
   const tvs = TV_REMOTE_OPEN ? remoteableTvs() : pickableTvs();
   const groups = groupByZone(tvs);
@@ -527,10 +533,39 @@ function zoneGroupHtml(g) {
   return `<div class="tvz-group">
     <div class="tvz-header">
       <button class="zone-toggle" onclick="toggleZoneCollapse('${g.key}')" title="Collapse ${escapeHtml(g.name)}"><span class="chev">&#9660;</span></button>
-      <span class="tvz-name">${escapeHtml(g.name)}</span><span class="tvz-count">${g.tvs.length}</span>${deadNote}
+      <span class="tvz-name">${escapeHtml(g.name)}</span><span class="tvz-count">${g.tvs.length}</span>${zonePowerButtons(g)}${deadNote}
     </div>
     <div class="tv-chip-grid">${g.tvs.map(chipHtml).join('')}</div>
   </div>`;
+}
+
+// ALL ON / ALL OFF for one zone, right beside its name so it's clear what
+// they switch (Scotto, 2026-10-05). OFF is press-and-hold like ALL TVs OFF.
+function zoneTvs(key) {
+  return TVS.filter((t) => t.ip && (key === 'unassigned' ? t.zone_id == null : String(t.zone_id) === key));
+}
+function zonePowerButtons(g) {
+  if (TV_REMOTE_OPEN || !zoneTvs(g.key).length) return '';
+  return `<button class="lt-mini on tvz-pw" onclick="zonePower('${g.key}', 'on')">ALL ON</button>
+    <button class="lt-mini off hold-danger tvz-pw" data-hold-action="zone-off" data-zone="${g.key}"><span class="hold-fill"></span><span class="hold-label">ALL OFF <span class="hold-chip">HOLD</span></span></button>`;
+}
+async function zonePower(key, state) {
+  const targets = zoneTvs(key);
+  if (!targets.length) return;
+  const label = `${key === 'unassigned' ? 'Unassigned' : zoneName(Number(key))} — ${state === 'on' ? 'On' : 'Off'}`;
+  renderBulkProgress(label, targets.map((t) => ({ id: t.id, name: t.tag || t.name, status: 'working' })));
+  try {
+    const { results } = await api('/api/tvs/bulk/power', { method: 'POST', body: JSON.stringify({ state, tv_ids: targets.map((t) => t.id) }) });
+    const rows = targets.map((t) => {
+      const r = results.find((rr) => Number(rr.target_id ?? rr.id) === Number(t.id));
+      if (!r) return { id: t.id, name: t.tag || t.name, status: 'failed', error: 'No result reported.' };
+      return { id: t.id, name: r.name || t.tag || t.name, status: r.ok ? 'done' : 'failed', error: r.error };
+    });
+    renderBulkProgress(label, rows, () => zonePower(key, state));
+    await refreshAll();
+  } catch (e) {
+    renderBulkProgress(label, targets.map((t) => ({ id: t.id, name: t.tag || t.name, status: 'failed', error: e.message })), () => zonePower(key, state));
+  }
 }
 
 function toggleZoneCollapse(key) {
@@ -716,9 +751,13 @@ function holdStart(btn) {
     const pct = Math.min(1, (now - startedAt) / HOLD_MS);
     if (fill) fill.style.width = `${pct * 100}%`;
     if (pct >= 1) {
+      const action = btn.getAttribute('data-hold-action');
+      const zone = btn.getAttribute('data-zone');
       holdState = null;
       if (fill) fill.style.width = '0%';
-      bulkPower(btn.getAttribute('data-hold-action'));
+      if (action === 'zone-off') zonePower(zone, 'off');
+      else bulkPower(action);
+      if (pendingTvsRender) { pendingTvsRender = false; renderTvsColumn(); }
       return;
     }
     holdState.raf = requestAnimationFrame(step);
@@ -728,6 +767,7 @@ function holdStart(btn) {
 
 function holdCancel() {
   if (!holdState) return;
+  if (pendingTvsRender) { pendingTvsRender = false; setTimeout(renderTvsColumn, 0); }
   cancelAnimationFrame(holdState.raf);
   const fill = holdState.btn.querySelector('.hold-fill');
   if (fill) fill.style.width = '0%';
