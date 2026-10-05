@@ -1033,38 +1033,9 @@ body.staff {
 .staff .mu-tile.now .n { color: var(--neon-green); }
 .staff .mu-tile.now .k { background: var(--neon-green); color: #06110A; }
 
-/* The strip: fixed to the bottom of every staff page; pages that fill the
-   screen (TVs, Power) give up its height so nothing hides under it. */
-.staff .mu-strip {
-  position: fixed; left: 16px; right: 16px; bottom: 12px; height: 72px; z-index: 35;
-  border-radius: 14px; background: #101015; border: 1px solid var(--border-mid);
-  display: flex; align-items: center; gap: 14px; padding: 0 12px; box-shadow: 0 -8px 30px rgba(0,0,0,0.6);
-}
-.staff .mu-strip-art { width: 52px; height: 52px; border-radius: 9px; overflow: hidden; flex-shrink: 0; background: var(--card-alt); }
-.staff .mu-strip-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.staff .mu-strip-art .blank, .staff .mu-strip-art.blank { width: 100%; height: 100%; background: linear-gradient(135deg, #1D2B64, #4DD8FF33); }
-.staff .mu-strip-text { flex: 1; min-width: 0; }
-.staff .mu-strip-text .s { font-size: 16px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.staff .mu-strip-text .ar { font-size: 12.5px; color: var(--muted-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.staff .mu-strip-text .stn { font-size: 10.5px; font-weight: 700; color: var(--neon-cyan); letter-spacing: 0.08em; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.staff .mu-strip-btns { display: flex; gap: 8px; flex-shrink: 0; }
-.staff .mu-strip-btn {
-  height: 48px; min-width: 48px; border-radius: 10px; font-family: inherit; font-weight: 800; font-size: 13px; letter-spacing: 0.06em;
-  border: 1px solid var(--border-strong); background: var(--card); color: #fff; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center;
-  text-decoration: none; min-height: 0;
-}
-.staff .mu-strip-btn.play { background: var(--neon-green); color: #06110A; border: 0; }
-.staff .mu-strip-btn.stations { color: var(--neon-cyan); border-color: #1E5A70; }
-.staff .mu-strip-btn.busy { opacity: 0.55; }
-.staff.has-music-strip .wrap:has(.tvs-workspace), .staff.has-music-strip .wrap:has(.pw-workspace) { height: calc(100vh - 64px - 84px); }
-.staff.has-music-strip .wrap { padding-bottom: 96px; }
-.staff.has-music-strip .wrap:has(.tvs-workspace), .staff.has-music-strip .wrap:has(.pw-workspace) { padding-bottom: 12px; }
-.staff.has-music-strip #undoBar { bottom: 96px; }
 @media (max-width: 980px) {
   .staff .wrap:has(.mu-workspace) { height: auto; display: block; padding: 12px 12px 110px; }
   .staff .mu-np { width: 100%; }
-  .staff .mu-strip { left: 8px; right: 8px; bottom: 8px; }
-  .staff .mu-strip-btn.stations span { display: none; }
 }
 
 /* Five tabs + three action buttons + the clock have to fit one row on a
