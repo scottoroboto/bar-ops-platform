@@ -276,7 +276,7 @@ async function autoSaveStation() {
   const st = state.station;
   if (!state.ok || !state.playing || !st || !st.uri || !st.title || !player) return null;
   const id = pandoraStationId(st.uri);
-  if (!id || /shuffle|quickmix/i.test(st.title)) return null;
+  if (!id) return null;
   if (!favoritesAt || autoSaveTried.has(id) || isFavorite(st.uri)) return null;
   autoSaveTried.add(id);
   const scheme = st.uri.split(':')[0];

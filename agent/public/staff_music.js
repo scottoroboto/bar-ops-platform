@@ -157,7 +157,7 @@ function renderStations() {
   } else if (showingDeleted) {
     favs = m.hiddenStations || [];
   } else {
-    favs = all.slice().sort((a, b) => sortKey(a.title).localeCompare(sortKey(b.title), undefined, { sensitivity: 'base' }));
+    favs = all.slice().sort((a, b) => (b.shuffle ? 1 : 0) - (a.shuffle ? 1 : 0) || sortKey(a.title).localeCompare(sortKey(b.title), undefined, { sensitivity: 'base' }));
   }
   const q = STATION_FILTER.trim().toLowerCase();
   if (q) favs = favs.filter((f) => (f.title || '').toLowerCase().includes(q));
@@ -190,7 +190,7 @@ function renderStations() {
     // A–Z bar down the right of the full list (not a person's list or a
     // search): tap or slide a finger down it to jump to that letter.
     const withIndex = !list && !showingDeleted && !q && favs.length > 12;
-    const rows = favs.map((f) => rowHtml(f, list, showingDeleted, withIndex ? letterOf(f.title) : null)).join('');
+    const rows = favs.map((f) => rowHtml(f, list, showingDeleted, withIndex ? (f.shuffle ? '★' : letterOf(f.title)) : null)).join('');
     if (withIndex) {
       const have = new Set(favs.map((f) => letterOf(f.title)));
       const bar = AZ_LETTERS.map((l) => `<span data-az="${l}" class="${have.has(l) ? '' : 'off'}">${l}</span>`).join('');

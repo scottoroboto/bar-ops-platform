@@ -117,8 +117,10 @@ async function fetchStations() {
     const page = Array.isArray(data.stations) ? data.stations : [];
     for (const s of page) {
       const id = String(s.stationId || s.id || '').replace(/^ST:/i, '');
-      if (!id || isShuffle(s)) continue;
-      out.push({ stationId: id, name: String(s.name || s.stationName || 'Station'), art: pickArt(s) });
+      if (!id) continue;
+      // Shuffle (all the account's stations mixed) is kept and pinned first.
+      if (isShuffle(s)) out.push({ stationId: id, name: 'Shuffle (all stations)', art: pickArt(s), shuffle: true });
+      else out.push({ stationId: id, name: String(s.name || s.stationName || 'Station'), art: pickArt(s) });
     }
     start += page.length;
     const total = Number(data.totalStations || data.total || 0);

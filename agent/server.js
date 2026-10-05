@@ -196,7 +196,7 @@ function musicStations() {
     if (seen.has(key)) continue;
     seen.add(key);
     const fav = favByKey.get(key);
-    out.push({ id: fav ? fav.id : `P:${s.stationId}`, title: s.name, art: s.art || (fav && fav.art) || null, service: 'Pandora', uri: `x-sonosapi-radio:ST%3a${key.slice(3)}`, key });
+    out.push({ id: fav ? fav.id : `P:${s.stationId}`, title: s.name, art: s.art || (fav && fav.art) || null, service: 'Pandora', uri: `x-sonosapi-radio:ST%3a${key.slice(3)}`, key, shuffle: !!s.shuffle });
   }
   for (const f of favs) {
     const k = sonos.pandoraStationId(f.uri);
