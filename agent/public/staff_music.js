@@ -14,7 +14,11 @@ const PASS_KEY = 'vc_staff_pass';
 function readPassFromUrl() {
   const m = (location.hash || '').match(/[#&]pass=([^&]+)/);
   if (!m) return null;
-  try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ }
+  // A bar iPad's permanent pass stays in the address so Add to Home Screen
+  // saves it (patch_053); everyone else's is wiped from the address bar.
+  let barIpad = false;
+  try { barIpad = JSON.parse(atob(decodeURIComponent(m[1]).split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))).actor === 'device'; } catch (e) { /* not a pass */ }
+  if (!barIpad) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ }
   return decodeURIComponent(m[1]);
 }
 function passInfo(pass) {

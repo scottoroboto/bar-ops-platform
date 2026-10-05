@@ -91,6 +91,8 @@ function verifyPass(pass) {
   const site = (cache.get('config') || {}).site;
   const siteId = site ? (site.id != null ? site.id : site.site_id) : null;
   if (siteId != null && Number(siteId) !== Number(data.siteId)) return null;
+  // A bar iPad the owner removed in TV Admin (patch_053).
+  if (data.actor === 'device' && ((cache.get('config') || {}).revoked_bar_ipads || []).includes(data.deviceId)) return null;
   return data;
 }
 function requireStaffPin(req, res, next) {

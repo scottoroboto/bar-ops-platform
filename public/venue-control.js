@@ -173,8 +173,61 @@ function renderSitesList() {
         </div>
         ${on ? renderAgentRow(s) : ''}
         <div id="tokenBox_${s.location_id}"></div>
+        ${on && s.has_agent_token ? `<div id="barIpads_${s.location_id}" style="margin-top:8px;"></div>` : ''}
       </div>`;
   }).join('');
+  SITES.filter((s) => s.site_enabled && s.has_agent_token).forEach((s) => loadBarIpads(s.location_id));
+}
+
+// ---- Bar iPads (patch_053) ---------------------------------------------
+// The iPad behind the bar stays signed in to the TV pages for good. Set it
+// up from TV Admin ON that iPad: name it, it opens the TV page with its
+// permanent sign-in, then Share -> Add to Home Screen saves it full screen.
+async function loadBarIpads(locationId) {
+  const el = document.getElementById(`barIpads_${locationId}`);
+  if (!el) return;
+  try {
+    const r = await api(`/api/venue-control/sites/${locationId}/bar-ipads`);
+    const live = (r.ipads || []).filter((d) => !d.revoked_at);
+    el.innerHTML = `
+      <div class="muted" style="font-size:13px; font-weight:700; margin-bottom:4px;">Bar iPads (always signed in to the TV pages)</div>
+      ${live.map((d) => `<div style="display:flex; align-items:center; gap:8px; margin:2px 0;"><span class="badge on">${escapeHtml(d.name)}</span>
+        <span class="muted" style="font-size:12px;">since ${new Date(d.created_at).toLocaleDateString()}</span>
+        <button class="small ghost" style="margin:0;" onclick="removeBarIpad('${d.id}', '${locationId}', '${escapeHtml(d.name).replace(/'/g, '&#39;')}')">Remove</button></div>`).join('') || '<div class="muted" style="font-size:12px;">None yet.</div>'}
+      <div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
+        <input id="barIpadName_${locationId}" placeholder="Where it sits, e.g. Main Bar" maxlength="30" style="flex:1; min-width:160px; margin:0;">
+        <button class="small secondary" style="margin:0;" onclick="makeBarIpad('${locationId}')">Make this a bar iPad</button>
+      </div>
+      <div id="barIpadSteps_${locationId}"></div>`;
+  } catch (e) {
+    el.innerHTML = `<p class="muted" style="font-size:12px;">Bar iPads: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function makeBarIpad(locationId) {
+  const name = (document.getElementById(`barIpadName_${locationId}`).value || '').trim();
+  if (!name) { showMsg('Name it for where it sits, like Main Bar.', 'error'); return; }
+  try {
+    const r = await withStepUp(() => api(`/api/venue-control/sites/${locationId}/bar-ipads`, { method: 'POST', body: { name } }));
+    await loadBarIpads(locationId); // redraws the list (and empties the steps box), so the steps go in after
+    document.getElementById(`barIpadSteps_${locationId}`).innerHTML = `
+      <div class="msg success" style="margin-top:8px;">
+        <b>${escapeHtml(r.ipad.name)}</b> is set up. Do this on the bar iPad:<br>
+        1. Tap <b>Open the TV page</b> below (it opens in Safari).<br>
+        2. Tap <b>Share</b> &rarr; <b>Add to Home Screen</b> &rarr; <b>Add</b>.<br>
+        3. Use the new <b>Ticket TVs</b> icon from now on: full screen, always signed in.<br>
+        4. Optional: Settings &rarr; Accessibility &rarr; Guided Access, to keep the iPad in that app.<br>
+        <a class="button" href="${escapeHtml(r.url)}" style="display:inline-block; margin-top:8px;">Open the TV page</a>
+      </div>`;
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+async function removeBarIpad(id, locationId, name) {
+  if (!confirm(`Remove ${name}? It's signed out the next time the bar's box syncs (within a minute).`)) return;
+  try {
+    await api(`/api/venue-control/bar-ipads/${id}/remove`, { method: 'POST', body: {} });
+    loadBarIpads(locationId);
+  } catch (e) { showMsg(e.message, 'error'); }
 }
 
 // Agent status line — only shown once a site is on (matches the routes:

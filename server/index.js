@@ -926,8 +926,13 @@ const { rows: musicHidden } = await withServiceClient((client) => client.query(
 ));
 // patch_049: Kasa plugs + light routines + the site's lat/long for sun times.
 const lights = await withServiceClient((client) => vclights.configRows(client, req.vcSite.site_id));
+// patch_053: bar iPads the owner removed; the box refuses their passes.
+const { rows: revokedIpads } = await withServiceClient((client) => client.query(
+'SELECT id FROM vc_bar_ipads WHERE site_id = $1 AND revoked_at IS NOT NULL', [req.vcSite.site_id]
+));
 const config = {
-schema_version: 8,
+schema_version: 9,
+revoked_bar_ipads: revokedIpads.map((r) => r.id),
 site: {
 id: req.vcSite.site_id, // patch_036: the box checks a pass is for this site
 location_id: req.vcSite.location_id,
@@ -1493,6 +1498,68 @@ app.post('/api/venue-control/sites/:locationId/lights/routines/:routineId/update
 lightsRoute(req, res, async (client) => ({ routine: await vclights.saveRoutine(client, req.vcSiteId, Number(req.params.routineId), req.body || {}) })));
 app.post('/api/venue-control/sites/:locationId/lights/routines/:routineId/delete', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
 lightsRoute(req, res, async (client) => { await vclights.deleteRoutine(client, req.vcSiteId, Number(req.params.routineId)); return {}; }));
+
+// ---- Bar iPads (patch_053) ----------------------------------------------
+// The iPad behind the bar stays signed in to the TV pages: the owner opens
+// TV Admin on that iPad, names it ("Main Bar" -> "T1-Main Bar"), and gets
+// sent to the box's TV page with a permanent pass in the address, where
+// Add to Home Screen saves it. Remove ends it (the box gets the id in its
+// config). Owner only; making one needs a full (password) session.
+async function barIpadPrefix(client, siteId) {
+  const { rows } = await client.query(
+    `SELECT vs.plug_tag_prefix, l.name FROM vc_sites vs JOIN locations l ON l.id = vs.location_id WHERE vs.id = $1`, [siteId]
+  );
+  return (rows[0] && (rows[0].plug_tag_prefix || rows[0].name)) || 'Bar';
+}
+app.get('/api/venue-control/sites/:locationId/bar-ipads', auth.requireSession('light'), requireOwnerSite(), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+'SELECT id, name, created_by, created_at, revoked_at FROM vc_bar_ipads WHERE site_id = $1 ORDER BY revoked_at IS NOT NULL, created_at',
+[req.vcSiteId]
+));
+res.json({ ipads: rows });
+});
+app.post('/api/venue-control/sites/:locationId/bar-ipads', auth.requireSession('full'), requireOwnerSite(), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const label = String((req.body || {}).name || '').trim().slice(0, 30);
+if (!label) return res.status(400).json({ error: 'Name it for where it sits, like Main Bar.' });
+try {
+const out = await withServiceClient(async (client) => {
+  const { rows: site } = await client.query(
+    `SELECT vs.id, vs.location_id, vs.agent_token_hash, va.lan_ip
+       FROM vc_sites vs
+       LEFT JOIN LATERAL (SELECT lan_ip FROM vc_agents WHERE site_id = vs.id ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT 1) va ON true
+      WHERE vs.id = $1`, [req.vcSiteId]
+  );
+  const s = site[0];
+  if (!s || !s.agent_token_hash) throw Object.assign(new Error('This bar’s box has no agent token yet.'), { status: 400 });
+  const lanIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(s.lan_ip || '') ? s.lan_ip : null;
+  if (!lanIp) throw Object.assign(new Error('This bar’s box hasn’t reported its address yet. Make sure it’s online.'), { status: 400 });
+  const name = `${await barIpadPrefix(client, req.vcSiteId)}-${label}`;
+  const { rows } = await client.query(
+    'INSERT INTO vc_bar_ipads (site_id, name, created_by) VALUES ($1, $2, $3) RETURNING id, name, created_at',
+    [req.vcSiteId, name, req.person.name || req.person.username || null]
+  );
+  const ipad = rows[0];
+  const pass = tvpass.mintPass({
+    agentTokenHash: s.agent_token_hash, siteId: s.id, locationId: s.location_id,
+    person: { id: null, name }, actor: 'device', deviceId: ipad.id,
+    expiresAt: new Date(Date.now() + 10 * 365 * 24 * 3600e3),
+  });
+  return { ipad, url: `http://${lanIp}:8088/staff_tvs.html#pass=${pass}` };
+});
+res.json(out);
+} catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+app.post('/api/venue-control/bar-ipads/:id/remove', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const { rows } = await withServiceClient((client) => client.query(
+'UPDATE vc_bar_ipads SET revoked_at = now(), revoked_by = $2 WHERE id = $1 AND revoked_at IS NULL RETURNING id',
+[req.params.id, req.person.name || req.person.username || null]
+));
+if (!rows[0]) return res.status(404).json({ error: 'Not found (or already removed).' });
+res.json({ ok: true });
+});
 
 // Agent-facing side of vc_agent_commands: the agent's existing 30s poll
 // loop (agent/lib/sync.js) claims any pending command for its own site --

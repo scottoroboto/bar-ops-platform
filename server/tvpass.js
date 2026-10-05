@@ -75,10 +75,11 @@ function describeLength(length) {
 // pass = base64url(JSON) + '.' + hex HMAC-SHA256 over that base64url text,
 // keyed with the site's agent token hash. The box (agent/server.js
 // requireStaffPass) recomputes the same thing from sha256(AGENT_TOKEN).
-function mintPass({ agentTokenHash, siteId, locationId, person, actor, expiresAt }) {
+function mintPass({ agentTokenHash, siteId, locationId, person, actor, expiresAt, deviceId }) {
   const payload = Buffer.from(JSON.stringify({
     v: 1, siteId: Number(siteId), locationId, personId: person.id, name: person.name, actor,
     exp: expiresAt.getTime(),
+    ...(deviceId ? { deviceId } : {}), // a bar iPad (patch_053): actor 'device', revocable by id
   })).toString('base64url');
   const sig = crypto.createHmac('sha256', agentTokenHash).update(payload).digest('hex');
   return `${payload}.${sig}`;
