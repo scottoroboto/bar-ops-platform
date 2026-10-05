@@ -157,7 +157,7 @@ function renderStations() {
   } else if (showingDeleted) {
     favs = m.hiddenStations || [];
   } else {
-    favs = all.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' }));
+    favs = all.slice().sort((a, b) => sortKey(a.title).localeCompare(sortKey(b.title), undefined, { sensitivity: 'base' }));
   }
   const q = STATION_FILTER.trim().toLowerCase();
   if (q) favs = favs.filter((f) => (f.title || '').toLowerCase().includes(q));
@@ -187,14 +187,68 @@ function renderStations() {
   if (!favs.length) {
     body = `<p class="muted" style="margin-top:12px;">${q ? `Nothing matches "${escapeHtml(STATION_FILTER)}".` : list ? 'Nothing in this list yet. Press and hold any station to save it here.' : showingDeleted ? 'Nothing deleted.' : 'No stations.'}</p>`;
   } else {
-    body = `<div class="tvz-scroll mu-list">${favs.map((f) => rowHtml(f, list, showingDeleted)).join('')}</div>`;
+    // A–Z bar down the right of the full list (not a person's list or a
+    // search): tap or slide a finger down it to jump to that letter.
+    const withIndex = !list && !showingDeleted && !q && favs.length > 12;
+    const rows = favs.map((f) => rowHtml(f, list, showingDeleted, withIndex ? letterOf(f.title) : null)).join('');
+    if (withIndex) {
+      const have = new Set(favs.map((f) => letterOf(f.title)));
+      const bar = AZ_LETTERS.map((l) => `<span data-az="${l}" class="${have.has(l) ? '' : 'off'}">${l}</span>`).join('');
+      body = `<div class="mu-listwrap"><div class="tvz-scroll mu-list">${rows}</div><div class="mu-az" aria-label="Jump to letter">${bar}</div><div class="mu-az-bubble" id="muAzBubble"></div></div>`;
+    } else {
+      body = `<div class="tvz-scroll mu-list">${rows}</div>`;
+    }
   }
   const hint = !list && !showingDeleted && liveLists().length === 0
     ? `<p class="mu-hint muted">Press and hold a station to save it to a favorites list.</p>` : '';
+  // Keep the list where it was when it redraws (a station change redraws it).
+  const oldList = box.querySelector('.mu-list');
+  const keepTop = oldList ? oldList.scrollTop : 0;
   box.innerHTML = header + hint + body + sheetHtml();
+  const newList = box.querySelector('.mu-list');
+  if (newList && keepTop) newList.scrollTop = keepTop;
 }
 
-function rowHtml(f, list, showingDeleted) {
+// ---- A–Z bar -----------------------------------------------------------
+const AZ_LETTERS = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
+// "*NSync Radio" files under N and "The Weeknd Radio" under T; anything
+// starting with a number goes under #.
+function sortKey(title) { return String(title || '').replace(/^[^a-z0-9]+/i, ''); }
+function letterOf(title) {
+  const c = sortKey(title).charAt(0).toUpperCase();
+  return c >= 'A' && c <= 'Z' ? c : '#';
+}
+function azJump(letter) {
+  const list = document.querySelector('#muStations .mu-list');
+  if (!list) return;
+  const i = AZ_LETTERS.indexOf(letter);
+  for (let k = i; k < AZ_LETTERS.length; k += 1) {
+    const row = list.querySelector(`.mu-row[data-l="${AZ_LETTERS[k] === '#' ? '#' : AZ_LETTERS[k]}"]`);
+    if (row) {
+      if (list.scrollHeight > list.clientHeight + 4) list.scrollTop = row.offsetTop - list.offsetTop;
+      else row.scrollIntoView({ block: 'start' });
+      break;
+    }
+  }
+  const bubble = document.getElementById('muAzBubble');
+  if (bubble) { bubble.textContent = letter; bubble.classList.add('on'); clearTimeout(azJump.t); azJump.t = setTimeout(() => bubble.classList.remove('on'), 600); }
+}
+let azDragging = false;
+function azAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  const span = el && el.closest && el.closest('.mu-az [data-az]');
+  if (span && span.dataset.az !== azAt.last) { azAt.last = span.dataset.az; azJump(span.dataset.az); }
+}
+document.addEventListener('pointerdown', (e) => {
+  if (!e.target.closest('.mu-az')) return;
+  e.preventDefault();
+  azDragging = true; azAt.last = null;
+  azAt(e.clientX, e.clientY);
+});
+document.addEventListener('pointermove', (e) => { if (azDragging) { e.preventDefault(); azAt(e.clientX, e.clientY); } });
+['pointerup', 'pointercancel'].forEach((ev) => document.addEventListener(ev, () => { azDragging = false; }));
+
+function rowHtml(f, list, showingDeleted, letter) {
   const m = MUSIC || {};
   const now = f.id && m.currentFavoriteId && f.id === m.currentFavoriteId;
   const busy = MUSIC_BUSY === f.id;
@@ -209,7 +263,7 @@ function rowHtml(f, list, showingDeleted) {
   const playable = !!f.id && !f.missing && !showingDeleted;
   // A div, not a button: the star / restore buttons live inside the row and
   // a button can't contain buttons (the parser would split them apart).
-  return `<div role="button" tabindex="0" class="mu-row${now ? ' now' : ''}${busy ? ' busy' : ''}${f.missing ? ' missing' : ''}" data-uri="${escapeHtml(f.uri)}" data-id="${escapeHtml(f.id || '')}" data-title="${escapeHtml(f.title)}" ${playable ? `onclick="rowTap(this)"` : ''}>
+  return `<div role="button" tabindex="0" class="mu-row${now ? ' now' : ''}${busy ? ' busy' : ''}${f.missing ? ' missing' : ''}"${letter ? ` data-l="${letter}"` : ''} data-uri="${escapeHtml(f.uri)}" data-id="${escapeHtml(f.id || '')}" data-title="${escapeHtml(f.title)}" ${playable ? `onclick="rowTap(this)"` : ''}>
     <span class="mu-row-art">${f.art ? `<img src="${escapeHtml(f.art)}" alt="" onerror="this.remove()">` : '<span class="blank"></span>'}</span>
     <span class="mu-row-name">${escapeHtml(f.title)}${f.missing ? ' <small>no longer in My Sonos</small>' : ''}</span>
     ${right}
