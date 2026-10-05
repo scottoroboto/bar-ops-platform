@@ -130,6 +130,22 @@ app.use('/api/scenes', requireStaffPin);
 app.use('/api/attention', requireStaffPin);
 app.use('/api/music', requireStaffPin);
 app.use('/api/lights', requireStaffPin);
+app.use('/api/manager', requireStaffPin);
+
+// Manager button on the staff pages (bar iPads): list the owner + managers
+// at this bar, check a PIN through the cloud, hand back their short pass.
+app.get('/api/manager/people', async (req, res) => {
+  try { res.json({ people: await sync.managerList() }); }
+  catch (err) { res.status(502).json({ error: `Manager sign-in needs the internet: ${err.message}` }); }
+});
+app.post('/api/manager/sign-in', async (req, res) => {
+  const { personId, pin } = req.body || {};
+  try {
+    const r = await sync.managerPass(personId, pin);
+    activity.record('manager.sign_in', { actor: r.name, targetType: 'staff', targetId: null, detail: { on: req.vcActor } });
+    res.json(r);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
 
 // ---------------- Lights (lib/lights.js, cloud patch_049) ----------------
 // The Lights tab: every named plug with live on/off + watts, the routines
@@ -884,7 +900,7 @@ app.get('/api/layouts', (req, res) => {
   res.json(layouts.listLayouts());
 });
 
-app.post('/api/layouts/:id/apply', async (req, res) => {
+app.post('/api/layouts/:id/apply', requireManagerSoon, async (req, res) => {
   try {
     const result = await layouts.apply(req.params.id);
     const ok = result.results.filter((r) => r.ok).length;
@@ -903,7 +919,7 @@ app.post('/api/layouts/:id/apply', async (req, res) => {
 // isn't re-run through those individual routes), so the log shows the
 // apply and lets a human infer the undo from a following "layout.undo"
 // entry recorded here instead.
-app.post('/api/layouts/replay', async (req, res) => {
+app.post('/api/layouts/replay', requireManagerSoon, async (req, res) => {
   try {
     const { items, label } = req.body || {};
     const result = await layouts.replay(items);
@@ -924,6 +940,9 @@ app.post('/api/layouts/replay', async (req, res) => {
 // Staff can list, Apply now and End (a plain confirm on the page, no PIN).
 // Capturing, editing and deleting is for the owner or a manager -- the
 // pass from the Bar Ops app says which (server/tvpass.js actor).
+// Routines and Events are for the owner and managers only (Scotto,
+// 2026-10-05): staff and bar iPads don't see those tabs, and can't run them.
+function requireManagerSoon(req, res, next) { return requireManager(req, res, next); }
 function isManager(req) {
   return req.vcActor === 'admin' || (req.vcPass && (req.vcPass.actor === 'admin' || req.vcPass.actor === 'manager'));
 }
@@ -940,7 +959,7 @@ app.get('/api/events', (req, res) => {
     is_manager: isManager(req),
   });
 });
-app.post('/api/events/:id/apply', async (req, res) => {
+app.post('/api/events/:id/apply', requireManagerSoon, async (req, res) => {
   try {
     const result = await events.applyEvent(req.params.id, { actor: req.vcActor, choice: (req.body || {}).choice, source: 'manual' });
     if (result.started) activity.record('event.apply', { actor: req.vcActor, targetType: 'event', targetId: result.event_id, detail: { name: result.name, ok: result.results.filter((r) => r.ok).length, total: result.results.length } });
@@ -949,7 +968,7 @@ app.post('/api/events/:id/apply', async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
-app.post('/api/events/:id/end', async (req, res) => {
+app.post('/api/events/:id/end', requireManagerSoon, async (req, res) => {
   try {
     const result = await events.endEvent(req.params.id, { actor: req.vcActor, reason: 'ended early' });
     activity.record('event.end', { actor: req.vcActor, targetType: 'event', targetId: result.event_id, detail: { name: result.name, how: result.how } });

@@ -1502,6 +1502,53 @@ lightsRoute(req, res, async (client) => ({ routine: await vclights.saveRoutine(c
 app.post('/api/venue-control/sites/:locationId/lights/routines/:routineId/delete', auth.requireSession('light'), requireOwnerSite(), (req, res) =>
 lightsRoute(req, res, async (client) => { await vclights.deleteRoutine(client, req.vcSiteId, Number(req.params.routineId)); return {}; }));
 
+// ---- Manager sign-in on a bar iPad (Scotto, 2026-10-05) -----------------
+// The bar iPad is signed in as itself (no Routines, Events or Power). The
+// Manager button by the logo lets the owner or a manager at this bar pick
+// their name and enter their PIN (the same PIN as Cash Out); the box relays
+// it here with its agent token and gets back a short pass in that person's
+// name. 30 minutes at most; the page also signs them out after 5 minutes
+// without a tap.
+const MANAGER_PASS_MINUTES = 30;
+async function managersAt(client, locationId) {
+  const { rows } = await client.query(
+    `SELECT p.id, p.name, p.role FROM people p
+      WHERE p.status = 'active' AND p.pin_hash IS NOT NULL
+        AND (p.role = 'owner' OR (p.role = 'manager' AND (p.location_id = $1
+             OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.person_id = p.id AND el.location_id = $1))))
+      ORDER BY (p.role = 'owner') DESC, p.name`,
+    [locationId]
+  );
+  return rows;
+}
+app.get('/api/venue/agent/managers', requireAgentAuth(), async (req, res) => {
+const people = await withServiceClient((client) => managersAt(client, req.vcSite.location_id));
+res.json({ people: people.map((p) => ({ id: p.id, name: p.name })) });
+});
+app.post('/api/venue/agent/manager-pass', requireAgentAuth(), async (req, res) => {
+const { personId, pin } = req.body || {};
+try {
+  await auth.throttleIp(clientPublicIp(req) || req.ip);
+  const out = await withServiceClient(async (client) => {
+    const allowed = await managersAt(client, req.vcSite.location_id);
+    const who = allowed.find((p) => String(p.id) === String(personId));
+    if (!who) throw Object.assign(new Error('Pick your name from the list.'), { status: 400 });
+    const { rows } = await client.query(auth.PERSON_WITH_LOCATIONS + ' WHERE p.id = $1', [who.id]);
+    const check = await auth.checkPin(client, rows[0], pin, clientPublicIp(req) || req.ip, 'Wrong PIN.');
+    if (!check.ok) throw Object.assign(new Error(check.message || check.error), { status: 401 });
+    const token = (req.get('authorization') || '').slice(7);
+    const agentTokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const expiresAt = new Date(Date.now() + MANAGER_PASS_MINUTES * 60 * 1000);
+    const pass = tvpass.mintPass({
+      agentTokenHash, siteId: req.vcSite.site_id, locationId: req.vcSite.location_id,
+      person: { id: who.id, name: who.name }, actor: who.role === 'owner' ? 'admin' : 'manager', expiresAt,
+    });
+    return { pass, name: who.name, expiresAt: expiresAt.toISOString() };
+  });
+  res.json(out);
+} catch (err) { res.status(err.status || err.statusCode || 400).json({ error: err.message }); }
+});
+
 // ---- Bar iPads (patch_053) ----------------------------------------------
 // The iPad behind the bar stays signed in to the TV pages: the owner opens
 // TV Admin on that iPad, names it ("Main Bar" -> "T1-Main Bar"), and gets

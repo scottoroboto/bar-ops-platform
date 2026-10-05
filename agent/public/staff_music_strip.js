@@ -3,7 +3,8 @@
 // api(); it only draws the strip once the page has let the person in. Now
 // playing, play / pause, skip, and STATIONS -> the Music page. No volume.
 (function () {
-  if (!/staff_(sources|tvs|layouts|events|power)\.html$/.test(location.pathname)) return;
+  // Not on TVs: it covered Capture routine / Change TVs (Scotto, 2026-10-05).
+  if (!/staff_(sources|layouts|events|power)\.html$/.test(location.pathname)) return;
   let stripEl = null;
   let last = null;
   let busy = null;

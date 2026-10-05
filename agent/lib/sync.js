@@ -97,6 +97,23 @@ async function reportScheduleResult(scheduleId, resultText) {
 // patch_040: staff favorites lists live in the cloud; the box writes
 // through here and re-pulls its config right after so the iPad's next
 // refresh already has the change. Throws with the cloud's message.
+// Manager sign-in on a bar iPad: who can, and their PIN checked by the cloud
+// (which returns a short pass in their name). Needs the internet.
+async function managerList() {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/managers`, { headers: authHeaders() });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `couldn't reach Bar Ops (${res.status})`);
+  return data.people || [];
+}
+async function managerPass(personId, pin) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/manager-pass`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ personId, pin }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `couldn't reach Bar Ops (${res.status})`);
+  return data;
+}
+
 async function musicWrite(path, body) {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/music${path}`, {
     method: 'POST', headers: authHeaders(), body: JSON.stringify(body || {}),
@@ -454,7 +471,7 @@ function stop() {
 }
 
 module.exports = {
-  musicWrite,
+  musicWrite, managerList, managerPass,
   pushPlugsSeen, pushPlugStatus, plugScheduleWrite,
   pushWans,
   pullAttention, clearAlert, serviceCall,

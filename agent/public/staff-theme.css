@@ -1338,3 +1338,23 @@ body.staff {
 /* TVs: a zone's ALL ON / ALL OFF beside its name */
 .staff .tvz-header button.tvz-pw { height: 26px; padding: 0 10px; font-size: 11px; }
 .staff .tvz-header button.tvz-pw.on { margin-left: 6px; }
+/* Long-press on an iPad shouldn't select text or pop the copy menu
+   (hold-to-confirm buttons, press-and-hold on stations). Typing still works. */
+body.staff { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.staff input, body.staff textarea, body.staff select, body.staff [contenteditable] { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+/* Manager button by the logo + its sign-in sheet (bar iPads) */
+.staff-topbar button.tb-mgr { margin: 0 0 0 12px; height: 34px; padding: 0 14px; width: auto; min-height: 0; border-radius: 10px; background: transparent; border: 1px solid var(--border-strong); color: var(--muted-strong); font: 800 13px/1 inherit; font-family: inherit; letter-spacing: .03em; box-shadow: none; }
+.staff-topbar button.tb-mgr.on { border-color: var(--amber, #F5A623); color: var(--amber, #F5A623); }
+.staff .mgr-back { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; }
+.staff .mgr-card { width: 360px; max-width: calc(100vw - 32px); background: var(--box, #15151C); border: 1px solid var(--border-mid, #2A2A36); border-radius: 18px; padding: 18px; }
+.staff .mgr-title { font-size: 20px; font-weight: 800; }
+.staff .mgr-sub { font-size: 14px; color: var(--muted-strong); margin: 6px 0 12px; }
+.staff .mgr-names { display: flex; flex-direction: column; gap: 8px; }
+.staff .mgr-names button, .staff .mgr-pad button { margin: 0; width: 100%; height: 52px; border-radius: 12px; font: 800 18px/1 inherit; font-family: inherit; background: var(--card-raised, #1E1E28); color: #fff; border: 1px solid var(--border-mid, #2A2A36); box-shadow: none; }
+.staff .mgr-dots { display: flex; justify-content: center; gap: 14px; margin: 4px 0 14px; }
+.staff .mgr-dots span { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--muted); }
+.staff .mgr-dots span.f { background: var(--neon-cyan); border-color: var(--neon-cyan); }
+.staff .mgr-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.staff .mgr-msg { margin-top: 10px; color: #FFB3BC; font-weight: 700; font-size: 14px; }
+.staff .mgr-note { margin-top: 12px; font-size: 12px; color: var(--muted); }
+.staff button.mgr-cancel { margin: 12px 0 0; width: 100%; height: 44px; border-radius: 12px; background: transparent; border: 1px solid var(--border-strong); color: var(--muted-strong); font: 700 15px/1 inherit; font-family: inherit; box-shadow: none; }
