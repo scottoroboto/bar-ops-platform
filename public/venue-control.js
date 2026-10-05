@@ -80,8 +80,10 @@ function populateDeviceLocationSelect() {
   const select = document.getElementById('deviceLocation');
   if (!select) return;
   const prevValue = select.value;
-  select.innerHTML = SITES.map((s) => `<option value="${s.location_id}">${escapeHtml(s.location_name)}</option>`).join('');
-  const stillValid = SITES.some((s) => String(s.location_id) === prevValue);
+  // Only bars that are open and have Venue Control on (not Maintenance or T3).
+  const usable = SITES.filter((s) => s.location_active && s.site_enabled);
+  select.innerHTML = usable.map((s) => `<option value="${s.location_id}">${escapeHtml(s.location_name)}</option>`).join('');
+  const stillValid = usable.some((s) => String(s.location_id) === prevValue);
   if (stillValid) select.value = prevValue;
 }
 
@@ -157,8 +159,11 @@ async function loadSites() {
 
 function renderSitesList() {
   const el = document.getElementById('sitesList');
-  if (!SITES.length) { el.innerHTML = '<p class="muted">No locations yet.</p>'; return; }
-  el.innerHTML = SITES.map(s => {
+  // Archived locations with Venue Control off (Maintenance, Ticket 3) stay
+  // out of the way; one that still has it on is shown so it can be turned off.
+  const shown = SITES.filter((s) => s.location_active || s.site_enabled);
+  if (!shown.length) { el.innerHTML = '<p class="muted">No locations yet.</p>'; return; }
+  el.innerHTML = shown.map(s => {
     const on = !!s.site_enabled;
     return `
       <div class="list-row">
