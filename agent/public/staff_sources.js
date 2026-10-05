@@ -271,19 +271,23 @@ function sourceCardHtml(s) {
     }
     if (live.active === false) {
       return `
-        <button type="button" class="source-card sc-asleep" onclick="cardTap(${slot}, '${s.kind}')" title="Tap to wake">
+        <button type="button" class="source-card sc-asleep" data-slot="${slot}" data-kind="directv" onclick="cardTap(${slot}, '${s.kind}')" title="Tap to wake">
           <div class="sc-top"><span class="sc-slot">${escapeHtml(s.qam_channel)}</span><span class="sc-count">${tvCountLabel(slot, false)}</span></div>
           <div class="sc-headline">Asleep</div>
           <div class="sc-meta"><span class="sc-callsign">${escapeHtml(s.label)}</span><span class="sc-sub">tap to wake</span></div>
         </button>`;
     }
     const t = SOURCE_TITLES.get(slot) || {};
-    const headline = t.title || s.label;
+    // The game it's showing and any game set to come on (staff_games.js).
+    const gi = typeof sourceGameInfo === 'function' ? sourceGameInfo(slot) : null;
+    const headline = (gi && gi.headline) || t.title || s.label;
     const callsign = t.callsign || s.label;
     return `
-      <button type="button" class="source-card" onclick="cardTap(${slot}, '${s.kind}')">
+      <button type="button" class="source-card${gi && gi.headline ? ' sc-game' : ''}" data-slot="${slot}" data-kind="directv" onclick="cardTap(${slot}, '${s.kind}')">
         <div class="sc-top"><span class="sc-slot">${escapeHtml(s.qam_channel)}</span><span class="sc-count">${tvCountLabel(slot, false)}</span></div>
         <div class="sc-headline">${escapeHtml(headline)}</div>
+        ${gi && gi.line ? `<div class="sc-gameline">${escapeHtml(gi.line)}</div>` : ''}
+        ${gi && gi.plan ? `<div class="sc-plan">${escapeHtml(gi.plan)}</div>` : ''}
         <div class="sc-meta"><span class="sc-callsign">${escapeHtml(callsign)}</span><span class="sc-sub">${escapeHtml(formatChannel(live))}</span></div>
       </button>`;
   }

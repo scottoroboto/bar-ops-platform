@@ -92,8 +92,12 @@ function getTuned(ip, port = DEFAULT_PORT) {
 // Reads any channel's program info without tuning to it (§2's second
 // finding) -- major is required, minor is omitted for satellite channels
 // per §7.1's "minor is omitted for satellite channels."
-function getProgInfo(ip, port, major, minor) {
-  const q = minor != null ? `?major=${encodeURIComponent(major)}&minor=${encodeURIComponent(minor)}` : `?major=${encodeURIComponent(major)}`;
+// `time` (optional, epoch seconds) asks the guide what's on that channel at
+// that moment instead of now -- the sports strip uses it to check a game's
+// channel before the game starts.
+function getProgInfo(ip, port, major, minor, time) {
+  let q = minor != null ? `?major=${encodeURIComponent(major)}&minor=${encodeURIComponent(minor)}` : `?major=${encodeURIComponent(major)}`;
+  if (time != null) q += `&time=${encodeURIComponent(Math.floor(time))}`;
   return queuedGet(ip, port, `/tv/getProgInfo${q}`);
 }
 

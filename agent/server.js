@@ -14,6 +14,7 @@ const health = require('./lib/health');
 const speedtest = require('./lib/speedtest');
 const sonos = require('./lib/sonos');
 const pandora = require('./lib/pandora');
+const sports = require('./lib/sports');
 const lights = require('./lib/lights');
 const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
@@ -122,6 +123,7 @@ next();
 }
 app.use('/api/sources', requireStaffPin);
 app.use('/api/favorites', requireStaffPin);
+app.use('/api/sports', requireStaffPin);
 app.use('/api/tvs', requireStaffPin);
 app.use('/api/zones', requireStaffPin);
 app.use('/api/layouts', requireStaffPin);
@@ -619,6 +621,103 @@ app.get('/api/favorites', (req, res) => {
   res.json(config.favorites || []);
 });
 
+// ---------------------------------------------------------------------
+// Games strip on the Sources page (lib/sports.js): ESPN's scores plus the
+// receivers' own guide. Anyone who can tune can put a game on a receiver,
+// now or when it starts; channel numbers and My Teams are owner/manager.
+// ---------------------------------------------------------------------
+async function tuneSlots(slots, major, minor, via, actor) {
+  const list = (Array.isArray(slots) ? slots : []).map(Number).filter((n) => Number.isFinite(n));
+  const results = await Promise.all(list.map(async (slot) => {
+    try {
+      const source = requireKind(findSource(slot), 'directv', 'tune');
+      await directv.tune(source.ip, source.port || 8080, major, minor);
+      await poller.pollNow(source.slot).catch(() => {});
+      activity.record('source.tune', { actor: actor || 'staff', targetType: 'source', targetId: source.slot, detail: { major, minor, via } });
+      return { slot, ok: true };
+    } catch (err) {
+      return { slot, ok: false, error: err.message };
+    }
+  }));
+  const ok = results.filter((r) => r.ok).length;
+  const fail = results.find((r) => !r.ok);
+  return { ok, total: results.length, results, text: `${ok}/${results.length} receiver${results.length === 1 ? '' : 's'} on ${major}${minor != null ? `-${minor}` : ''}${fail ? ` (${fail.error})` : ''}` };
+}
+
+function sportsReceivers() {
+  const config = cache.get('config') || {};
+  const live = new Map(poller.getAllState().map((s) => [Number(s.slot), s]));
+  return (config.sources || []).filter((s) => s.kind === 'directv' && s.ip && (live.get(Number(s.slot)) || {}).ok);
+}
+
+app.get('/api/sports', (req, res) => {
+  if (req.query.v && Number(req.query.v) === sports.version()) return res.json({ v: sports.version(), same: true, canEdit: isManager(req) });
+  res.json({ ...sports.view(), canEdit: isManager(req) });
+});
+
+app.post('/api/sports/tune', async (req, res) => {
+  const { gameId, slots, major, minor } = req.body || {};
+  if (!(Number(major) > 0)) return res.status(400).json({ error: 'This game has no channel yet.' });
+  if (!Array.isArray(slots) || !slots.length) return res.status(400).json({ error: 'Pick at least one receiver.' });
+  const g = gameId ? sports.gameById(gameId) : null;
+  const r = await tuneSlots(slots, Number(major), minor != null && minor !== '' ? Number(minor) : null, g ? `game: ${g.name}` : 'game', req.vcActor);
+  res.json({ ok: true, ...r });
+});
+
+app.post('/api/sports/plans', (req, res) => {
+  try {
+    const plan = sports.addPlan({ ...(req.body || {}), by: req.vcActor });
+    activity.record('sports.plan', { actor: req.vcActor, targetType: 'source', targetId: null, detail: { game: plan.title, slots: plan.slots, major: plan.major, at: plan.startAt } });
+    res.json({ ok: true, plan });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/sports/plans/:id/cancel', (req, res) => {
+  try {
+    const plan = sports.cancelPlan(req.params.id);
+    activity.record('sports.plan_cancel', { actor: req.vcActor, targetType: 'source', targetId: null, detail: { game: plan.title } });
+    res.json({ ok: true, plan });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/sports/channels', requireManager, (req, res) => {
+  res.json({ channels: sports.channelList(), scanExtra: sports.scanExtra() });
+});
+
+app.post('/api/sports/channel', requireManager, (req, res) => {
+  try {
+    const { network, gameId, value } = req.body || {};
+    if (gameId) sports.setGameChannel(String(gameId), value);
+    else sports.setNetworkChannel(network, value);
+    activity.record('sports.channel', { actor: req.vcActor, targetType: 'source', targetId: null, detail: { network: network || null, gameId: gameId || null, value: value == null ? null : String(value) } });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/sports/team', requireManager, (req, res) => {
+  const { league, teamId, on } = req.body || {};
+  if (!league || !teamId) return res.status(400).json({ error: 'Which team?' });
+  sports.setMyTeam(String(league), String(teamId), !!on);
+  res.json({ ok: true });
+});
+
+app.post('/api/sports/scan', requireManager, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const extra = b.extra != null ? sports.setScanExtra(b.extra) : sports.scanExtra();
+    const g = b.now ? await sports.scanGuide() : null;
+    res.json({ ok: true, scanExtra: extra, guide: g ? { entries: g.entries.length, receivers: g.receivers, channels: g.channels, error: g.error } : null });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Read-only passthrough so the staff TVs tab can group/label TVs by zone
 // name without a second admin-only endpoint -- same shape as /api/favorites.
 app.get('/api/zones', (req, res) => {
@@ -1092,6 +1191,12 @@ app.listen(config.PORT, () => {
   speedtest.start();
   sonos.start();
   pandora.start();
+  sports.start({
+    receivers: sportsReceivers,
+    tune: (slots, major, minor, via, actor) => tuneSlots(slots, major, minor, via, actor),
+    favorites: () => (cache.get('config') || {}).favorites || [],
+    timezone: () => { const c = cache.get('config') || {}; return (c.site && c.site.timezone) || 'America/Chicago'; },
+  });
   lights.start();
   scheduler.start();
   activity.start();
