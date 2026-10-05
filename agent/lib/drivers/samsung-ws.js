@@ -21,6 +21,8 @@ const HTTP_TIMEOUT_MS = 3000; // a genuinely off TV drops off the network fast -
 const WS_TIMEOUT_MS = 8000; // generous: first-ever pairing waits on a human tapping "Allow" on the TV screen
 const APP_NAME = 'TSB Venue Control';
 
+const CHANNEL_KEY_GAP_MS = 700;
+
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 // Maps a raw low-level connection error (Node's net/ws internals -- things
@@ -223,7 +225,11 @@ async function selectChannel(tv, qamChannel) {
     throw new Error(`TV control_method "${tv.control_method}" can't select a channel -- needs samsung_ws_token or samsung_ws_plain (SmartThings is not a reliable channel path per §7.2).`);
   }
   const keys = keysForQamChannel(qamChannel);
-  const res = await sendKeySequence(tv, keys, { interKeyDelayMs: 200 });
+  // 0.7s between keys: at 200ms TV 8 at T1 tuned to "1" then "1000"
+  // instead of 12-1, and 700ms worked (2026-10-06). Every set gets the
+  // slower pace; TVs switch in parallel, so it adds ~2s to a change, not
+  // 2s per TV.
+  const res = await sendKeySequence(tv, keys, { interKeyDelayMs: CHANNEL_KEY_GAP_MS });
   return { ok: true, requested: qamChannel, method: 'ws', keysSent: keys, token: res.token };
 }
 
