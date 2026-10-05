@@ -1506,3 +1506,6 @@ body.gm-dragging, body.gm-dragging * { cursor: grabbing !important; }
 .staff .gm-sheet .mu-sheet-go:disabled { opacity: 1; background: var(--border-strong); color: var(--muted-strong); }
 .staff .gm-sheet .mu-sheet-cancel:disabled { opacity: .35; }
 .staff .source-card.sc-game .sc-headline { font-size: 19px; }
+/* TV Remote as an icon button, left of ALL TVs ON (2026-10-05). */
+.staff-topbar .tva-btn.tva-remote-icon { padding: 7px 10px; }
+.staff-topbar .tva-remote-icon svg { display: block; }
