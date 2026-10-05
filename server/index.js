@@ -2071,26 +2071,46 @@ res.status(err.status || 400).json({ error: err.message });
 
 app.post('/api/venue-control/tvs/:id/update', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const { zoneId, name, tag, brand, model, ip, mac, controlMethod, wsPort, stDeviceId, wolEnabled,
-powerCapable, channelCapable, volumeCapable, defaultSourceSlot, notes, resetToken } = req.body || {};
+// Only the fields sent are changed. (Before 2026-10-05 every column was
+// written, so a bulk "Move to zone" or the edit form -- which doesn't send
+// tag/model/ports/notes -- blanked whatever it left out.)
+const b = req.body || {};
+const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
+const cols = [
+  ['zoneId', 'zone_id', (v) => v || null],
+  ['name', 'name', (v) => { const t = String(v || '').trim(); if (!t) throw Object.assign(new Error('Name is required.'), { status: 400 }); return t; }],
+  ['tag', 'tag', (v) => v || null],
+  ['brand', 'brand', (v) => v || null],
+  ['model', 'model', (v) => v || null],
+  ['ip', 'ip', (v) => v || null],
+  ['mac', 'mac', (v) => v || null],
+  ['controlMethod', 'control_method', (v) => v || null],
+  ['wsPort', 'ws_port', (v) => v || null],
+  ['stDeviceId', 'st_device_id', (v) => v || null],
+  ['wolEnabled', 'wol_enabled', (v) => !!v],
+  ['powerCapable', 'power_capable', (v) => !!v],
+  ['channelCapable', 'channel_capable', (v) => !!v],
+  ['volumeCapable', 'volume_capable', (v) => !!v],
+  ['defaultSourceSlot', 'default_source_slot', (v) => (v === '' || v == null ? null : Number(v))],
+  ['notes', 'notes', (v) => v || null],
+];
 try {
+const sets = [];
+const vals = [req.params.id];
+for (const [key, col, fix] of cols) {
+  if (!has(key) || b[key] === undefined) continue;
+  vals.push(fix(b[key]));
+  sets.push(`${col} = $${vals.length}`);
+}
+if (b.resetToken) sets.push('ws_token = NULL');
+if (!sets.length) return res.status(400).json({ error: 'Nothing to change.' });
 const { rows } = await withServiceClient((client) => client.query(
-`UPDATE vc_tvs SET
-   zone_id = $1, name = COALESCE($2, name), tag = $3, brand = COALESCE($4, brand), model = $5,
-   ip = $6, mac = $7, control_method = COALESCE($8, control_method), ws_port = $9, st_device_id = $10,
-   wol_enabled = COALESCE($11, wol_enabled), power_capable = COALESCE($12, power_capable),
-   channel_capable = COALESCE($13, channel_capable), volume_capable = COALESCE($14, volume_capable),
-   default_source_slot = $15, notes = $16,
-   ws_token = CASE WHEN $17 THEN NULL ELSE ws_token END,
-   updated_at = now()
-   WHERE id = $18 RETURNING *`,
-[zoneId ?? null, name ? name.trim() : null, tag || null, brand || null, model || null, ip || null, mac || null,
- controlMethod || null, wsPort || null, stDeviceId || null, wolEnabled, powerCapable, channelCapable, volumeCapable,
- defaultSourceSlot ?? null, notes || null, !!resetToken, req.params.id]
+  `UPDATE vc_tvs SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 RETURNING *`, vals
 ));
 if (!rows[0]) return res.status(404).json({ error: 'TV not found.' });
 res.json({ ok: true, tv: rows[0] });
 } catch (err) {
+if (err.status) return res.status(err.status).json({ error: err.message });
 if (err.code === '23505') return res.status(400).json({ error: 'That MAC address is already used by another TV at this location.' });
 if (err.code === '23514' && err.constraint === 'vc_tvs_control_chk') return res.status(400).json({ error: 'Not a recognized control method.' });
 res.status(400).json({ error: err.message });
