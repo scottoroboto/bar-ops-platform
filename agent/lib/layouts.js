@@ -23,7 +23,7 @@ const poller = require('./poller');
 const tvPoller = require('./tv-poller');
 const sync = require('./sync');
 
-const CONCURRENCY = 4; // matches every other bulk operation in this app (§7.2)
+const CONCURRENCY = 64; // every device at once (was 4 at a time)
 
 function currentConfig() {
   return cache.get('config') || {};
@@ -139,23 +139,29 @@ async function runOneItem(item) {
   return { ok: false, error: `Unknown target_type "${item.target_type}".` };
 }
 
-// Runs items grouped by step_order -- each group in parallel (concurrency
-// 4), groups themselves run in ascending step_order so a layout that,
-// say, tunes receivers in step 0 and turns TVs on in step 1 does so in
-// that order, while items that share a step (e.g. every TV in the room)
-// fan out together instead of one-at-a-time.
+// Every device works at once, each through its own steps in step_order:
+// a TV that's on in 3s gets its channel then, instead of waiting for the
+// slowest TV in the room to finish powering on (Scotto, 2026-10-06).
+// Results come back in the original step order.
 async function runItems(items) {
-  const groups = new Map();
-  for (const item of items) {
-    const key = item.step_order || 0;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(item);
-  }
-  const results = [];
-  for (const key of [...groups.keys()].sort((a, b) => a - b)) {
-    results.push(...(await mapWithConcurrency(groups.get(key), CONCURRENCY, runOneItem)));
-  }
-  return results;
+  const chains = new Map();
+  items.forEach((item, i) => {
+    const key = `${item.target_type}:${item.target_id}`;
+    if (!chains.has(key)) chains.set(key, []);
+    chains.get(key).push({ item, i });
+  });
+  const out = new Array(items.length);
+  await mapWithConcurrency([...chains.values()], CONCURRENCY, async (chain) => {
+    chain.sort((x, y) => (x.item.step_order || 0) - (y.item.step_order || 0) || x.i - y.i);
+    for (let k = 0; k < chain.length; k += 1) {
+      const { item, i } = chain[k];
+      out[i] = await runOneItem(item);
+      // A set that just came on ignores keys for a moment: give it 3s
+      // before typing its channel.
+      if (item.action && item.action.op === 'power' && item.action.state === 'on' && k < chain.length - 1) await new Promise((r) => setTimeout(r, 3000));
+    }
+  });
+  return out;
 }
 
 // Captures "what were these targets doing right before" for exactly the

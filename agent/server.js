@@ -778,6 +778,12 @@ app.get('/api/tvs', (req, res) => {
 // Promise.all -- ~50 TVs all opening WS connections at once is exactly the
 // kind of burst the concurrency cap exists to avoid. No zone_id/tv_ids ->
 // whole site, matching §8.2's own route shape.
+// Every TV gets its command at once, then each is checked on its own
+// (Scotto, 2026-10-06: "send out all instructions, then go back to
+// check"). Power-on and channel typing are mostly waiting on the set, so
+// batching them 4 at a time only made a room take 4x as long.
+const ALL_AT_ONCE = 64;
+
 async function mapWithConcurrency(items, limit, fn) {
   const results = new Array(items.length);
   let next = 0;
@@ -817,7 +823,7 @@ app.post('/api/tvs/bulk/power', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.flushHeaders();
   }
-  const results = await mapWithConcurrency(targets, 16, /* power-on is mostly waiting on the set; don't queue a zone 4 at a time */ async (tv) => {
+  const results = await mapWithConcurrency(targets, ALL_AT_ONCE, async (tv) => {
     let out;
     try {
       const result = await driverFor(tv).setPower(tv, state);
@@ -864,7 +870,7 @@ app.post('/api/tvs/bulk/volume', async (req, res) => {
   const config = cache.get('config') || {};
   const ids = new Set(tv_ids.map(Number));
   const targets = (config.tvs || []).filter((t) => t.enabled !== false && t.ip && ids.has(Number(t.id)));
-  const results = await mapWithConcurrency(targets, 4, async (tv) => {
+  const results = await mapWithConcurrency(targets, ALL_AT_ONCE, async (tv) => {
     try {
       const result = await driverFor(tv).setVolume(tv, op);
       maybeReportToken(tv, result);
@@ -914,7 +920,7 @@ app.post('/api/tvs/bulk/key', async (req, res) => {
   const ids = new Set(tv_ids.map(Number));
   const targets = (config.tvs || []).filter((t) => t.enabled !== false && t.ip && ids.has(Number(t.id))
     && KEY_METHODS.has(t.control_method));
-  const results = await mapWithConcurrency(targets, 4, async (tv) => {
+  const results = await mapWithConcurrency(targets, ALL_AT_ONCE, async (tv) => {
     try {
       const result = await driverFor(tv).sendKeySequence(tv, keySeq);
       maybeReportToken(tv, result);
@@ -976,7 +982,7 @@ app.post('/api/tvs/bulk/slot', async (req, res) => {
   } else if (zone_id != null) {
     targets = targets.filter((t) => Number(t.zone_id) === Number(zone_id));
   }
-  const results = await mapWithConcurrency(targets, 4, async (tv) => {
+  const results = await mapWithConcurrency(targets, ALL_AT_ONCE, async (tv) => {
     try {
       const result = await selectTvSlot(tv, slot);
       activity.record('tv.slot', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, slot: Number(slot) }, result: result.ok ? 'ok' : 'failed' });

@@ -28,7 +28,7 @@ const layouts = require('./layouts');
 const events = require('./events');
 
 const TICK_MS = 30 * 1000; // sub-minute so a minute is never skipped even with a little jitter
-const BULK_TV_CONCURRENCY = 4; // docs/venue-control.md §7.2: "Bulk operations run with concurrency 4"
+const BULK_TV_CONCURRENCY = 64; // every TV at once, then each checked on its own (was 4 at a time)
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
