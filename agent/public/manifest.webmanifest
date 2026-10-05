@@ -1,0 +1,9 @@
+{
+  "name": "Ticket TVs",
+  "short_name": "Ticket TVs",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#07070A",
+  "theme_color": "#07070A",
+  "icons": [{ "src": "/ticket-logo.png", "sizes": "420x227", "type": "image/png", "purpose": "any" }]
+}
