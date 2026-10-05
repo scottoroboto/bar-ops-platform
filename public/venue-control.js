@@ -947,6 +947,9 @@ function renderTvsList() {
           <label class="toggle-row" style="gap:8px;"><span class="label">Channel capable (can select a source, Phase 4)</span>
             <span class="switch"><input type="checkbox" id="editTvChannelCapable" ${t.channel_capable ? 'checked' : ''}><span class="slider"></span></span>
           </label>
+          <label class="toggle-row" style="gap:8px;"><span class="label">Slow channel typing (for sets that stop at the first digit)</span>
+            <span class="switch"><input type="checkbox" id="editTvSlowKeys" ${t.slow_channel_keys ? 'checked' : ''}><span class="slider"></span></span>
+          </label>
           <p class="muted" style="margin:-4px 0 0;">Channel selection sends key codes exactly like the remote and can't be verified automatically (docs/venue-control.md §7.2) -- try "Change source" on the agent's TVs tab once, confirm visually, then turn this on.</p>
           <label class="toggle-row" style="gap:8px;"><span class="label">Force re-pair (clear saved token)</span>
             <span class="switch"><input type="checkbox" id="editTvResetToken"><span class="slider"></span></span>
@@ -961,7 +964,7 @@ function renderTvsList() {
       <div class="list-row">
         <input type="checkbox" class="vc-tv-row-check" ${TV_SELECTED.has(String(t.id)) ? 'checked' : ''} onchange="toggleTvSelect('${t.id}', this.checked)">
         <div class="name">${escapeHtml(t.name)} <span class="badge ${t.enabled ? 'on' : 'off'}">${t.enabled ? 'active' : 'archived'}</span> ${tvStateBadge(t)}
-          <div class="sub">${escapeHtml(zoneName(t.zone_id))} · ${escapeHtml(t.control_method)}${t.ip ? ' · ' + escapeHtml(t.ip) : ''}${t.wol_enabled ? ' · WoL' : ''}${t.channel_capable ? ' · channel-capable' : ''}${t.default_source_slot != null ? ` · default slot ${t.default_source_slot}` : ''}</div>
+          <div class="sub">${escapeHtml(zoneName(t.zone_id))} · ${escapeHtml(t.control_method)}${t.ip ? ' · ' + escapeHtml(t.ip) : ''}${t.wol_enabled ? ' · WoL' : ''}${t.channel_capable ? ' · channel-capable' : ''}${t.slow_channel_keys ? ' · slow channel typing' : ''}${t.default_source_slot != null ? ` · default slot ${t.default_source_slot}` : ''}</div>
         </div>
         <div class="stack-actions" style="margin-top:0;">
           ${(() => { const z = inZone(t); const i = z.findIndex((x) => x.id === t.id); return `<button class="small ghost" title="Move up in ${escapeHtml(zoneName(t.zone_id))}" onclick="moveTv('${t.id}','up')" ${i <= 0 ? 'disabled' : ''}>&#9650;</button><button class="small ghost" title="Move down in ${escapeHtml(zoneName(t.zone_id))}" onclick="moveTv('${t.id}','down')" ${i === z.length - 1 ? 'disabled' : ''}>&#9660;</button>`; })()}
@@ -1034,6 +1037,7 @@ async function saveEditTv(id) {
   const defaultSourceSlotRaw = document.getElementById('editTvDefaultSlot').value;
   const wolEnabled = document.getElementById('editTvWol').checked;
   const channelCapable = document.getElementById('editTvChannelCapable').checked;
+  const slowChannelKeys = document.getElementById('editTvSlowKeys').checked;
   const resetToken = document.getElementById('editTvResetToken').checked;
   if (!name) { showTvMsg('Name is required.', 'error'); return; }
   try {
@@ -1042,7 +1046,7 @@ async function saveEditTv(id) {
       body: {
         name, zoneId: zoneId || null, ip: ip || null, mac: mac || null, controlMethod,
         defaultSourceSlot: defaultSourceSlotRaw === '' ? null : Number(defaultSourceSlotRaw),
-        wolEnabled, channelCapable, resetToken,
+        wolEnabled, channelCapable, slowChannelKeys, resetToken,
       },
     }));
     editingTvId = null;

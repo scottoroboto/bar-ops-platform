@@ -2090,6 +2090,7 @@ const cols = [
   ['wolEnabled', 'wol_enabled', (v) => !!v],
   ['powerCapable', 'power_capable', (v) => !!v],
   ['channelCapable', 'channel_capable', (v) => !!v],
+  ['slowChannelKeys', 'slow_channel_keys', (v) => !!v],
   ['volumeCapable', 'volume_capable', (v) => !!v],
   ['defaultSourceSlot', 'default_source_slot', (v) => (v === '' || v == null ? null : Number(v))],
   ['notes', 'notes', (v) => v || null],

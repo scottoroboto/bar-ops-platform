@@ -22,6 +22,7 @@ const WS_TIMEOUT_MS = 8000; // generous: first-ever pairing waits on a human tap
 const APP_NAME = 'TSB Venue Control';
 
 const CHANNEL_KEY_GAP_MS = 700;
+const SLOW_CHANNEL_KEY_GAP_MS = 1200; // TV Admin "Slow channel typing" (TV 24, 27 at T1)
 const PRESS_SETTLE_MS = 25000; // never press Power for "on" twice within this
 const WOKE_GRACE_MS = 6000;    // a set woken by WoL gets this long to light up by itself
 const lastOnPress = new Map(); // ip -> when we last pressed Power to turn it on
@@ -232,7 +233,7 @@ async function selectChannel(tv, qamChannel) {
   // instead of 12-1, and 700ms worked (2026-10-06). Every set gets the
   // slower pace; TVs switch in parallel, so it adds ~2s to a change, not
   // 2s per TV.
-  const res = await sendKeySequence(tv, keys, { interKeyDelayMs: CHANNEL_KEY_GAP_MS });
+  const res = await sendKeySequence(tv, keys, { interKeyDelayMs: tv.slow_channel_keys ? SLOW_CHANNEL_KEY_GAP_MS : CHANNEL_KEY_GAP_MS });
   return { ok: true, requested: qamChannel, method: 'ws', keysSent: keys, token: res.token };
 }
 
