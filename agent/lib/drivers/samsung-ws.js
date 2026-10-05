@@ -312,7 +312,17 @@ async function setPower(tv, desiredState) {
   let after = before;
   if (tv.control_method === 'samsung_ws_token' || tv.control_method === 'samsung_ws_plain') {
     try {
-      const res = await sendKey(tv, 'KEY_POWER');
+      let res;
+      try {
+        res = await sendKey(tv, 'KEY_POWER');
+      } catch (err) {
+        // The press didn't get through (TV 4 at T1, 2026-10-06: worked
+        // on the next try). Retry once -- but only if the set still says
+        // it's on, so a press that did land is never undone.
+        await sleep(1500);
+        if (await getPowerState(tv, 1500) !== 'on') throw err;
+        res = await sendKey(tv, 'KEY_POWER');
+      }
       token = res.token;
       method = 'ws';
       // Some sets take a few seconds to report "off". Watch up to 8s;
