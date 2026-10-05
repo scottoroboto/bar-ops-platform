@@ -8,8 +8,10 @@
     try { return JSON.parse(atob(String(pass).split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))); } catch (e) { return null; }
   }
   let pass = '';
+  const q = (location.search || '').match(/[?&]barpass=([^&]+)/);
   const m = (location.hash || '').match(/[#&]pass=([^&]+)/);
-  if (m) pass = decodeURIComponent(m[1]);
+  if (q) pass = decodeURIComponent(q[1]);
+  else if (m) pass = decodeURIComponent(m[1]);
   if (!pass) try { pass = localStorage.getItem('vc_staff_pass') || ''; } catch (e) { /* private mode */ }
   const data = pass ? info(pass) : null;
   if (!data || data.actor !== 'device') return;

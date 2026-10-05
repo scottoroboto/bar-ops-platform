@@ -17,6 +17,10 @@ let toastTimer = null;
 // ---- getting in: identical to the other staff pages (signed pass in #pass=, kept in localStorage)
 const PASS_KEY = 'vc_staff_pass';
 function readPassFromUrl() {
+  // A bar iPad's permanent pass rides in the query (?barpass=): Add to Home
+  // Screen keeps that part of the address for certain (patch_053).
+  const q = (location.search || '').match(/[?&]barpass=([^&]+)/);
+  if (q) return decodeURIComponent(q[1]);
   const m = (location.hash || '').match(/[#&]pass=([^&]+)/);
   if (!m) return null;
   // A bar iPad's permanent pass stays in the address so Add to Home Screen

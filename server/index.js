@@ -1549,7 +1549,8 @@ const out = await withServiceClient(async (client) => {
     person: { id: null, name }, actor: 'device', deviceId: ipad.id,
     expiresAt: new Date(Date.now() + 10 * 365 * 24 * 3600e3),
   });
-  return { ipad, url: `http://${lanIp}:8088/staff_tvs.html#pass=${pass}` };
+  // In the query, not the #fragment: Add to Home Screen keeps the query for certain.
+  return { ipad, url: `http://${lanIp}:8088/staff_tvs.html?barpass=${encodeURIComponent(pass)}` };
 });
 res.json(out);
 } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
