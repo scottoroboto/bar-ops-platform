@@ -1,25 +1,41 @@
-// SmartThings cloud fallback (docs/venue-control.md §7.2): "Genuinely good at
-// discrete power (switch/on, switch/off -- a real discrete command, not a
-// toggle) and volume. Weak and inconsistent at tuning the built-in cable
-// tuner to a sub-channel. Used as the power fallback and never as the
-// primary channel path." So this module only ever does power + volume --
-// there is no tune/channel function here, deliberately.
+// SmartThings cloud (docs/venue-control.md §7.2): discrete power (switch
+// on/off -- a real discrete command, not a toggle) and volume. Never used
+// for channels.
 //
-// Needs a personal access token (SmartThings PAT, capability:switch and
-// capability:audioVolume/audioMute scopes) in SMARTTHINGS_TOKEN. Same
-// "simulated/no-op until configured" shape as the rest of this platform's
-// optional integrations (see notify.js's Twilio gate in the main repo) --
-// every function below throws a clear, catchable "not configured" error
-// rather than silently doing nothing, because the caller (samsung-ws.js)
-// needs to know whether this fallback is actually usable before deciding
-// whether a power/volume operation truly failed.
+// Power-on through SmartThings is how the TVs that ignore Wake-on-LAN over
+// Wi-Fi get turned on (TV 6, the Patio TVs and Putt Putt at T1, 2026-10-06:
+// the SmartThings app turns TV 6 on when the Pi's wake-up can't). Samsung's
+// servers keep a line to the set while it's off.
+//
+// Sign-in: SmartThings website tokens (PATs) made after 2024 expire in 24
+// hours, so the box signs in once with an OAuth app (tools/smartthings.js)
+// and keeps the session itself: the access token lasts 24h, the refresh
+// token 30 days and is replaced on every refresh, so the box refreshes at
+// least weekly even when nobody uses a TV. A PAT in SMARTTHINGS_TOKEN
+// still works for a quick test.
+//
+// Which SmartThings device is which TV: tv.st_device_id from TV Admin, or
+// the box's own list matched by tools/smartthings.js (cache
+// "smartthingsDevices", Bar Ops TV id -> SmartThings device id).
+const cache = require('../cache');
 const { SMARTTHINGS_TOKEN } = require('../../config');
 
-const BASE_URL = 'https://api.smartthings.com/v1';
+const ROOT = process.env.SMARTTHINGS_ROOT || 'https://api.smartthings.com'; // override only for tests
+const BASE_URL = `${ROOT}/v1`;
+const OAUTH_URL = `${ROOT}/oauth`;
+const REDIRECT_URI = 'https://httpbin.org/get'; // the code shows up on that page for copying
+const SCOPES = 'r:devices:* x:devices:*';
 const TIMEOUT_MS = 6000; // cloud round-trip, more slack than the LAN drivers get
+const REFRESH_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 
-function configured() {
-  return !!SMARTTHINGS_TOKEN;
+function auth() { return cache.get('smartthingsAuth') || null; } // { clientId, clientSecret, access, refresh, expiresAt, refreshedAt }
+function configured() { return !!((auth() && auth().refresh) || SMARTTHINGS_TOKEN); }
+
+function deviceIdFor(tv) {
+  if (!tv) return null;
+  if (tv.st_device_id) return tv.st_device_id;
+  const map = cache.get('smartthingsDevices') || {};
+  return map[String(tv.id)] || null;
 }
 
 function fetchWithTimeout(url, opts = {}, timeoutMs = TIMEOUT_MS) {
@@ -28,63 +44,124 @@ function fetchWithTimeout(url, opts = {}, timeoutMs = TIMEOUT_MS) {
   return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
-function requireConfigured() {
-  if (!configured()) {
-    throw new Error('SmartThings is not configured (SMARTTHINGS_TOKEN unset) -- this fallback path is unavailable.');
-  }
+async function tokenRequest(a, form) {
+  const res = await fetchWithTimeout(`${OAUTH_URL}/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${a.clientId}:${a.clientSecret}`).toString('base64')}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ ...form, client_id: a.clientId }).toString(),
+  }, 12000);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) throw new Error(`SmartThings sign-in: ${data.error_description || data.error || `HTTP ${res.status}`}`);
+  const next = {
+    ...a,
+    access: data.access_token,
+    refresh: data.refresh_token || a.refresh, // single-use: always keep the new one
+    expiresAt: Date.now() + (Number(data.expires_in) || 86400) * 1000,
+    refreshedAt: Date.now(),
+  };
+  cache.set('smartthingsAuth', next);
+  return next;
 }
 
-async function sendCommand(deviceId, capability, command, args = []) {
-  requireConfigured();
-  if (!deviceId) throw new Error('No SmartThings device id configured for this TV.');
-  const res = await fetchWithTimeout(`${BASE_URL}/devices/${encodeURIComponent(deviceId)}/commands`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${SMARTTHINGS_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ commands: [{ component: 'main', capability, command, arguments: args }] }),
+// Link URL for the one-time sign-in (tools/smartthings.js).
+function authorizeUrl(clientId) {
+  const q = new URLSearchParams({ client_id: clientId, response_type: 'code', redirect_uri: REDIRECT_URI, scope: SCOPES });
+  return `${OAUTH_URL}/authorize?${q.toString()}`;
+}
+
+async function signIn(clientId, clientSecret, code) {
+  return tokenRequest({ clientId, clientSecret }, { grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI });
+}
+
+let refreshing = null;
+async function refresh() {
+  const a = auth();
+  if (!a || !a.refresh) throw new Error('SmartThings is not signed in on this box (node tools/smartthings.js).');
+  if (!refreshing) refreshing = tokenRequest(a, { grant_type: 'refresh_token', refresh_token: a.refresh }).finally(() => { refreshing = null; });
+  return refreshing;
+}
+
+async function accessToken() {
+  const a = auth();
+  if (a && a.refresh) {
+    if (a.access && a.expiresAt - Date.now() > 5 * 60 * 1000) return a.access;
+    return (await refresh()).access;
+  }
+  if (SMARTTHINGS_TOKEN) return SMARTTHINGS_TOKEN;
+  throw new Error('SmartThings is not set up on this box -- this power-on path is unavailable.');
+}
+
+// Keep the 30-day refresh token alive even if nobody turns a TV on.
+setInterval(() => {
+  const a = auth();
+  if (a && a.refresh && Date.now() - (a.refreshedAt || 0) > REFRESH_EVERY_MS) {
+    refresh().catch((err) => console.warn('[smartthings] refresh:', err.message));
+  }
+}, 6 * 60 * 60 * 1000).unref();
+
+async function api(path, opts = {}) {
+  const res = await fetchWithTimeout(`${BASE_URL}${path}`, {
+    ...opts,
+    headers: { Authorization: `Bearer ${await accessToken()}`, 'Content-Type': 'application/json', ...(opts.headers || {}) },
   });
-  if (!res.ok) throw new Error(`SmartThings ${capability}/${command} -> HTTP ${res.status} ${await res.text().catch(() => '')}`.trim());
+  if (res.status === 401 && auth() && auth().refresh) {
+    await refresh(); // token pulled early; one retry with a fresh one
+    return api(path, opts);
+  }
+  if (!res.ok) throw new Error(`SmartThings ${path} -> HTTP ${res.status} ${await res.text().catch(() => '')}`.trim());
   return res.json().catch(() => ({}));
 }
 
-async function getSwitchState(deviceId) {
-  requireConfigured();
-  if (!deviceId) throw new Error('No SmartThings device id configured for this TV.');
-  const res = await fetchWithTimeout(`${BASE_URL}/devices/${encodeURIComponent(deviceId)}/components/main/capabilities/switch/status`, {
-    headers: { Authorization: `Bearer ${SMARTTHINGS_TOKEN}` },
+async function sendCommand(deviceId, capability, command, args = []) {
+  if (!deviceId) throw new Error('No SmartThings device for this TV.');
+  return api(`/devices/${encodeURIComponent(deviceId)}/commands`, {
+    method: 'POST',
+    body: JSON.stringify({ commands: [{ component: 'main', capability, command, arguments: args }] }),
   });
-  if (!res.ok) throw new Error(`SmartThings switch status -> HTTP ${res.status}`);
-  const data = await res.json();
+}
+
+async function getSwitchState(deviceId) {
+  if (!deviceId) throw new Error('No SmartThings device for this TV.');
+  const data = await api(`/devices/${encodeURIComponent(deviceId)}/components/main/capabilities/switch/status`);
   return data && data.switch && data.switch.value; // 'on' | 'off'
 }
 
-// audioMute status readback -- this is what makes mute/unmute a real
-// discrete operation over SmartThings instead of a blind toggle, the same
-// way getSwitchState (above) could for power. 'muted' | 'unmuted' | null
-// (capability not reported, e.g. this device doesn't expose audioMute).
+// 'muted' | 'unmuted' | null (capability not reported for this device).
 async function getMuteState(deviceId) {
-  requireConfigured();
-  if (!deviceId) throw new Error('No SmartThings device id configured for this TV.');
-  const res = await fetchWithTimeout(`${BASE_URL}/devices/${encodeURIComponent(deviceId)}/components/main/capabilities/audioMute/status`, {
-    headers: { Authorization: `Bearer ${SMARTTHINGS_TOKEN}` },
-  });
-  if (!res.ok) throw new Error(`SmartThings audioMute status -> HTTP ${res.status}`);
-  const data = await res.json();
-  return (data && data.mute && data.mute.value) || null; // 'muted' | 'unmuted'
+  if (!deviceId) throw new Error('No SmartThings device for this TV.');
+  const data = await api(`/devices/${encodeURIComponent(deviceId)}/components/main/capabilities/audioMute/status`);
+  return (data && data.mute && data.mute.value) || null;
+}
+
+// Every TV on the SmartThings account: [{ deviceId, label, name }].
+async function listTvs() {
+  const out = [];
+  let path = '/devices?capability=switch';
+  while (path) {
+    const data = await api(path);
+    for (const d of data.items || []) {
+      const tv = (d.ocf && /tv/i.test(d.ocf.deviceType || '')) || /tv/i.test(`${d.deviceTypeName || ''} ${d.name || ''}`)
+        || (d.components || []).some((c) => (c.categories || []).some((k) => /television/i.test(k.name)));
+      if (tv) out.push({ deviceId: d.deviceId, label: d.label || d.name, name: d.name });
+    }
+    const next = data._links && data._links.next && data._links.next.href;
+    path = next ? next.replace(BASE_URL, '') : null;
+  }
+  return out;
 }
 
 function switchOn(deviceId) { return sendCommand(deviceId, 'switch', 'on'); }
 function switchOff(deviceId) { return sendCommand(deviceId, 'switch', 'off'); }
 function volumeUp(deviceId) { return sendCommand(deviceId, 'audioVolume', 'volumeUp'); }
 function volumeDown(deviceId) { return sendCommand(deviceId, 'audioVolume', 'volumeDown'); }
-// The audioMute capability has discrete mute/unmute commands (not just a
-// toggle) -- setMute() below only ever sent 'mute' regardless of which way
-// the caller wanted to go, which was a real bug in samsung-ws.js's volume
-// dispatch, not a SmartThings limitation. Kept as an alias for the one
-// existing caller; new code should call mute()/unmute() directly.
 function mute(deviceId) { return sendCommand(deviceId, 'audioMute', 'mute'); }
 function unmute(deviceId) { return sendCommand(deviceId, 'audioMute', 'unmute'); }
 function setMute(deviceId) { return mute(deviceId); }
 
 module.exports = {
-  configured, getSwitchState, getMuteState, switchOn, switchOff, volumeUp, volumeDown, mute, unmute, setMute,
+  configured, deviceIdFor, authorizeUrl, signIn, refresh, listTvs, REDIRECT_URI,
+  getSwitchState, getMuteState, switchOn, switchOff, volumeUp, volumeDown, mute, unmute, setMute,
 };

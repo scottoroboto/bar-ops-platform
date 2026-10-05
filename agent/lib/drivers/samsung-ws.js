@@ -265,6 +265,20 @@ async function setPower(tv, desiredState) {
     // toggle them off. Wake-on-LAN only while a set doesn't answer at all
     // (network asleep); once it answers dark, give it a few seconds to
     // light up on its own before pressing.
+    // A TV with a SmartThings device gets SmartThings "on" right away: it's
+    // a discrete on (never a toggle), and it's what wakes the sets that
+    // ignore Wake-on-LAN over Wi-Fi. It counts as a press, so the local
+    // Power key waits 25s and can't undo it.
+    const stId = samsungSt.configured() && samsungSt.deviceIdFor(tv);
+    let stSent = false;
+    if (stId) {
+      try {
+        await samsungSt.switchOn(stId);
+        stSent = true;
+        lastOnPress.set(tv.ip, Date.now());
+        method = 'smartthings';
+      } catch (err) { /* local wake below still runs */ }
+    }
     const deadline = Date.now() + 60000;
     let presses = 0;
     let standbySince = before === 'standby' ? 0 : null; // 0: dark from the start, press now
@@ -295,9 +309,9 @@ async function setPower(tv, desiredState) {
       after = await getPowerState(tv, 1500);
     }
     if (after !== 'on') after = await getPowerState(tv);
-    if (after !== 'on' && samsungSt.configured() && tv.st_device_id) {
+    if (after !== 'on' && !stSent && samsungSt.configured() && samsungSt.deviceIdFor(tv)) {
       try {
-        await samsungSt.switchOn(tv.st_device_id);
+        await samsungSt.switchOn(samsungSt.deviceIdFor(tv));
         method = method === 'none' ? 'smartthings' : `${method}+smartthings`;
         await sleep(1500);
         after = await getPowerState(tv);
@@ -335,9 +349,9 @@ async function setPower(tv, desiredState) {
       }
     } catch (err) { /* fall through to ST below */ }
   }
-  if (after === 'on' && samsungSt.configured() && tv.st_device_id) {
+  if (after === 'on' && samsungSt.configured() && samsungSt.deviceIdFor(tv)) {
     try {
-      await samsungSt.switchOff(tv.st_device_id);
+      await samsungSt.switchOff(samsungSt.deviceIdFor(tv));
       method = method === 'none' ? 'smartthings' : `${method}+smartthings`;
       await sleep(1500);
       after = await getPowerState(tv);
@@ -356,9 +370,9 @@ async function setVolume(tv, op) {
     const res = await sendKey(tv, key);
     return { ok: true, method: 'ws', token: res.token };
   }
-  if (samsungSt.configured() && tv.st_device_id) {
-    if (op === 'up') await samsungSt.volumeUp(tv.st_device_id);
-    else await samsungSt.volumeDown(tv.st_device_id);
+  if (samsungSt.configured() && samsungSt.deviceIdFor(tv)) {
+    if (op === 'up') await samsungSt.volumeUp(samsungSt.deviceIdFor(tv));
+    else await samsungSt.volumeDown(samsungSt.deviceIdFor(tv));
     return { ok: true, method: 'smartthings' };
   }
   throw new Error(`No volume control path available for this TV (control_method="${tv.control_method}"${samsungSt.configured() ? ', and no SmartThings device id set' : ', SmartThings not configured'}).`);
@@ -388,16 +402,16 @@ async function setVolume(tv, op) {
 const wsMuteCache = new Map(); // tv id -> boolean (true = believed muted)
 
 async function setMute(tv, desiredMuted) {
-  if (samsungSt.configured() && tv.st_device_id) {
+  if (samsungSt.configured() && samsungSt.deviceIdFor(tv)) {
     try {
-      const before = await samsungSt.getMuteState(tv.st_device_id); // 'muted' | 'unmuted' | null
+      const before = await samsungSt.getMuteState(samsungSt.deviceIdFor(tv)); // 'muted' | 'unmuted' | null
       const beforeMuted = before === 'muted' ? true : before === 'unmuted' ? false : null;
       if (beforeMuted === desiredMuted) {
         return { ok: true, muted: desiredMuted, changed: false, confirmed: true, method: 'none' };
       }
-      if (desiredMuted) await samsungSt.mute(tv.st_device_id);
-      else await samsungSt.unmute(tv.st_device_id);
-      const after = await samsungSt.getMuteState(tv.st_device_id);
+      if (desiredMuted) await samsungSt.mute(samsungSt.deviceIdFor(tv));
+      else await samsungSt.unmute(samsungSt.deviceIdFor(tv));
+      const after = await samsungSt.getMuteState(samsungSt.deviceIdFor(tv));
       const afterMuted = after === 'muted' ? true : after === 'unmuted' ? false : desiredMuted;
       return { ok: afterMuted === desiredMuted, muted: afterMuted, changed: afterMuted !== beforeMuted, confirmed: after != null, method: 'smartthings' };
     } catch (err) {
