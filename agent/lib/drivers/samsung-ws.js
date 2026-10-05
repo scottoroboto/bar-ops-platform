@@ -245,7 +245,24 @@ async function setPower(tv, desiredState) {
   if (desiredState === 'on') {
     if (before === 'on') return { ok: true, requested: desiredState, state: 'on', changed: false, method: 'none' };
     let after = before;
-    if (tv.wol_enabled && tv.mac) {
+    const canKey = tv.control_method === 'samsung_ws_token' || tv.control_method === 'samsung_ws_plain';
+    // A set whose network is awake but screen is off answers the Pi with
+    // PowerState "off" (we call it standby). Wake-on-LAN does nothing for
+    // that -- it needs the power key, sent once and given time to land
+    // (KEY_POWER toggles, so never twice in quick succession). This was the
+    // "takes 2-4 presses / never comes on" at T1 (2026-10-05).
+    let lastKeyAt = 0;
+    const pressPowerIfStandby = async (state) => {
+      if (!canKey || state !== 'standby' || Date.now() - lastKeyAt < 8000) return false;
+      lastKeyAt = Date.now();
+      try { const r = await sendKey(tv, 'KEY_POWER'); if (r && r.token) token = r.token; } catch (e) { return false; }
+      method = method === 'none' ? 'ws' : (method.includes('ws') ? method : `${method}+ws`);
+      return true;
+    };
+    if (await pressPowerIfStandby(before)) {
+      for (let i = 0; i < 4 && after !== 'on'; i += 1) { await sleep(1500); after = await getPowerState(tv); }
+    }
+    if (after !== 'on' && tv.wol_enabled && tv.mac) {
       // A Samsung coming up from network standby takes anywhere from ~5s
       // to ~20s before it answers on :8001 -- the old fixed 3s wait meant
       // a wake that WORKED was still reported as a failure almost every
@@ -258,13 +275,19 @@ async function setPower(tv, desiredState) {
       // succeeded on the second press, i.e. the second packet is what
       // woke it. Repeating during the wait makes the first press do that.
       try {
-        method = 'wol';
-        const deadline = Date.now() + 30000;
+        method = method === 'none' ? 'wol' : `${method}+wol`;
+        const deadline = Date.now() + 40000;
         while (Date.now() < deadline) {
           await wol.sendMagicPacket(tv.mac, { ip: tv.ip }).catch(() => {});
           await sleep(2000);
           after = await getPowerState(tv);
           if (after === 'on') break;
+          // Woken on the network but the screen stayed off: press power.
+          if (await pressPowerIfStandby(after)) {
+            await sleep(2500);
+            after = await getPowerState(tv);
+            if (after === 'on') break;
+          }
         }
       } catch (err) { /* fall through to ST below */ }
     }
@@ -277,7 +300,7 @@ async function setPower(tv, desiredState) {
         after = await getPowerState(tv);
       } catch (err) { /* report whatever we actually achieved */ }
     }
-    return { ok: after === 'on', requested: desiredState, state: after, changed: after !== before, method };
+    return { ok: after === 'on', requested: desiredState, state: after, changed: after !== before, method, token };
   }
 
   // desiredState === 'off'

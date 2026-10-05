@@ -709,7 +709,7 @@ app.post('/api/tvs/bulk/power', async (req, res) => {
   } else if (zone_id != null) {
     targets = targets.filter((t) => Number(t.zone_id) === Number(zone_id));
   }
-  const results = await mapWithConcurrency(targets, 4, async (tv) => {
+  const results = await mapWithConcurrency(targets, 16, /* power-on is mostly waiting on the set; don't queue a zone 4 at a time */ async (tv) => {
     try {
       const result = await driverFor(tv).setPower(tv, state);
       maybeReportToken(tv, result);

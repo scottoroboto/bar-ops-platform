@@ -63,6 +63,8 @@ function sendOnce(socket, packet, port, address) {
 // expected to have already gated that behind the UI's disruptive-test
 // confirmation per §9.2.
 async function sendMagicPacket(mac, { port = 9, ip = null, rounds = 3 } = {}) {
+  // Port 9 and port 7: some sets only listen on one of them.
+  const ports = port === 9 ? [9, 7] : [port];
   const packet = buildMagicPacket(mac);
   const targets = new Set(['255.255.255.255', ...localBroadcastAddresses()]);
   if (ip && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) targets.add(ip);
@@ -75,7 +77,7 @@ async function sendMagicPacket(mac, { port = 9, ip = null, rounds = 3 } = {}) {
   try {
     for (let round = 0; round < rounds; round++) {
       for (const address of targets) {
-        if (await sendOnce(socket, packet, port, address)) delivered++;
+        for (const p of ports) if (await sendOnce(socket, packet, p, address)) delivered++;
       }
       if (round < rounds - 1) await new Promise((r) => setTimeout(r, 100));
     }
