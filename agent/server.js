@@ -813,7 +813,7 @@ app.post('/api/tvs/bulk/power', async (req, res) => {
       const result = await driverFor(tv).setPower(tv, state);
       maybeReportToken(tv, result);
       const live = await tvPoller.pollNow(tv.id).catch(() => null);
-      activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, state }, result: result.ok ? 'ok' : 'failed' });
+      activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, state, method: result.method, ended: result.state }, result: result.ok ? 'ok' : 'failed' });
       return { id: tv.id, name: tv.name, ok: result.ok, state: result.state, method: result.method, live };
     } catch (err) {
       return { id: tv.id, name: tv.name, ok: false, error: err.message };
@@ -830,7 +830,7 @@ app.post('/api/tvs/:id/power', async (req, res) => {
     const result = await driverFor(tv).setPower(tv, state);
     maybeReportToken(tv, result);
     const live = await tvPoller.pollNow(tv.id);
-    activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, state }, result: result.ok ? 'ok' : 'failed' });
+    activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, state, method: result.method, ended: result.state }, result: result.ok ? 'ok' : 'failed' });
     res.json({ ok: true, result, live });
   } catch (err) {
     res.status(400).json({ error: err.message });

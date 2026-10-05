@@ -22,6 +22,9 @@ const WS_TIMEOUT_MS = 8000; // generous: first-ever pairing waits on a human tap
 const APP_NAME = 'TSB Venue Control';
 
 const CHANNEL_KEY_GAP_MS = 700;
+const PRESS_SETTLE_MS = 25000; // never press Power for "on" twice within this
+const WOKE_GRACE_MS = 6000;    // a set woken by WoL gets this long to light up by itself
+const lastOnPress = new Map(); // ip -> when we last pressed Power to turn it on
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
@@ -252,50 +255,41 @@ async function setPower(tv, desiredState) {
     if (before === 'on') return { ok: true, requested: desiredState, state: 'on', changed: false, method: 'none' };
     let after = before;
     const canKey = tv.control_method === 'samsung_ws_token' || tv.control_method === 'samsung_ws_plain';
-    // A set whose network is awake but screen is off answers the Pi with
-    // PowerState "off" (we call it standby). Wake-on-LAN does nothing for
-    // that -- it needs the power key, sent once and given time to land
-    // (KEY_POWER toggles, so never twice in quick succession). This was the
-    // "takes 2-4 presses / never comes on" at T1 (2026-10-05).
-    let lastKeyAt = 0;
-    const pressPowerIfStandby = async (state) => {
-      if (!canKey || state !== 'standby' || Date.now() - lastKeyAt < 8000) return false;
-      lastKeyAt = Date.now();
-      try { const r = await sendKey(tv, 'KEY_POWER'); if (r && r.token) token = r.token; } catch (e) { return false; }
-      method = method === 'none' ? 'ws' : (method.includes('ws') ? method : `${method}+ws`);
-      return true;
-    };
-    if (await pressPowerIfStandby(before)) {
-      for (let i = 0; i < 4 && after !== 'on'; i += 1) { await sleep(1500); after = await getPowerState(tv); }
-    }
-    if (after !== 'on' && tv.wol_enabled && tv.mac) {
-      // A Samsung coming up from network standby takes anywhere from ~5s
-      // to ~20s before it answers on :8001 -- the old fixed 3s wait meant
-      // a wake that WORKED was still reported as a failure almost every
-      // time (Scotto's home TV, 2026-09-18: off -> on took ~12s). Poll
-      // every 2s for up to 25s and stop the moment it answers.
-      // ...and keep RE-SENDING the wake every 2s while waiting, not just
-      // once up front. A Samsung's WiFi radio in standby listens in duty
-      // cycles, so a burst of packets can all land in one gap -- Scotto's
-      // first real test: single Power On failed every time, "All TVs on"
-      // succeeded on the second press, i.e. the second packet is what
-      // woke it. Repeating during the wait makes the first press do that.
-      try {
-        method = method === 'none' ? 'wol' : `${method}+wol`;
-        const deadline = Date.now() + 40000;
-        while (Date.now() < deadline) {
-          await wol.sendMagicPacket(tv.mac, { ip: tv.ip }).catch(() => {});
-          await sleep(2000);
-          after = await getPowerState(tv);
-          if (after === 'on') break;
-          // Woken on the network but the screen stayed off: press power.
-          if (await pressPowerIfStandby(after)) {
-            await sleep(2500);
-            after = await getPowerState(tv);
-            if (after === 'on') break;
-          }
+    // Power is a toggle, so the danger is pressing it twice: a set that's
+    // booting can say "off" (standby) for 10-20s after the press, and a
+    // second press turns it right back off. That was ALL ON failing for
+    // TVs 1, 2, 4-7 at T1 and working on the second tap (2026-10-06).
+    // So: at most two presses, at least 25s apart -- remembered across
+    // requests, so tapping ALL ON again while sets are starting doesn't
+    // toggle them off. Wake-on-LAN only while a set doesn't answer at all
+    // (network asleep); once it answers dark, give it a few seconds to
+    // light up on its own before pressing.
+    const deadline = Date.now() + 60000;
+    let presses = 0;
+    let standbySince = before === 'standby' ? 0 : null; // 0: dark from the start, press now
+    while (Date.now() < deadline) {
+      if (after === 'on') break;
+      if (after === 'standby') {
+        if (standbySince == null) standbySince = Date.now();
+        const last = lastOnPress.get(tv.ip) || 0;
+        if (canKey && presses < 2 && Date.now() - standbySince >= WOKE_GRACE_MS && Date.now() - last >= PRESS_SETTLE_MS) {
+          try {
+            const r = await sendKey(tv, 'KEY_POWER');
+            if (r && r.token) token = r.token;
+            lastOnPress.set(tv.ip, Date.now());
+            presses += 1;
+            method = method === 'none' ? 'ws' : (method.includes('ws') ? method : `${method}+ws`);
+          } catch (e) { /* not answering the remote yet; try again next round */ }
         }
-      } catch (err) { /* fall through to ST below */ }
+      } else {
+        standbySince = null;
+        if (tv.wol_enabled && tv.mac) {
+          await wol.sendMagicPacket(tv.mac, { ip: tv.ip }).catch(() => {});
+          if (!method.includes('wol')) method = method === 'none' ? 'wol' : `${method}+wol`;
+        }
+      }
+      await sleep(2000);
+      after = await getPowerState(tv);
     }
     if (after !== 'on') after = await getPowerState(tv);
     if (after !== 'on' && samsungSt.configured() && tv.st_device_id) {
