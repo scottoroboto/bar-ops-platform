@@ -557,18 +557,47 @@ async function zonePower(key, state) {
   const targets = zoneTvs(key);
   if (!targets.length) return;
   const label = `${key === 'unassigned' ? 'Unassigned' : zoneName(Number(key))} — ${state === 'on' ? 'On' : 'Off'}`;
-  renderBulkProgress(label, targets.map((t) => ({ id: t.id, name: t.tag || t.name, status: 'working' })));
+  await runBulkPower(label, targets, { state, tv_ids: targets.map((t) => t.id) }, () => zonePower(key, state));
+}
+
+// Runs ALL ON / ALL OFF (all TVs or one zone) over the streaming bulk
+// route: each TV's tile turns green (or red) the moment that set is done,
+// not when the slowest one finishes.
+async function runBulkPower(label, targets, body, retry) {
+  const rows = new Map(targets.map((t) => [Number(t.id), { id: t.id, name: t.tag || t.name, status: 'working' }]));
+  renderBulkProgress(label, [...rows.values()]);
   try {
-    const { results } = await api('/api/tvs/bulk/power', { method: 'POST', body: JSON.stringify({ state, tv_ids: targets.map((t) => t.id) }) });
-    const rows = targets.map((t) => {
-      const r = results.find((rr) => Number(rr.target_id ?? rr.id) === Number(t.id));
-      if (!r) return { id: t.id, name: t.tag || t.name, status: 'failed', error: 'No result reported.' };
-      return { id: t.id, name: r.name || t.tag || t.name, status: r.ok ? 'done' : 'failed', error: r.error };
+    const res = await fetch('/api/tvs/bulk/power?stream=1', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-staff-pass': STAFF_PASS },
+      body: JSON.stringify(body),
     });
-    renderBulkProgress(label, rows, () => zonePower(key, state));
+    if (res.status === 401) { forgetPass(); STAFF_PASS = ''; showGate('Your TV session has ended. Open TV Staff from the Bar Ops app again.'); return; }
+    if (!res.ok || !res.body) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `${res.status} ${res.statusText}`); }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        let r;
+        try { r = JSON.parse(line); } catch (e) { continue; }
+        if (r.done || !rows.has(Number(r.id))) continue;
+        rows.set(Number(r.id), { id: r.id, name: r.name || rows.get(Number(r.id)).name, status: r.ok ? 'done' : 'failed', error: r.error });
+        renderBulkProgress(label, [...rows.values()], retry);
+      }
+    }
+    for (const r of rows.values()) if (r.status === 'working') Object.assign(r, { status: 'failed', error: 'No result reported.' });
+    renderBulkProgress(label, [...rows.values()], retry);
     await refreshAll();
   } catch (e) {
-    renderBulkProgress(label, targets.map((t) => ({ id: t.id, name: t.tag || t.name, status: 'failed', error: e.message })), () => zonePower(key, state));
+    renderBulkProgress(label, targets.map((t) => ({ id: t.id, name: t.tag || t.name, status: 'failed', error: e.message })), retry);
   }
 }
 
@@ -727,19 +756,7 @@ function renderBulkProgress(title, rows, retry) {
 // ---------------------------------------------------------------------
 async function bulkPower(state) {
   const targets = TVS.filter((t) => !!t.ip);
-  renderBulkProgress(`All TVs — ${state === 'on' ? 'On' : 'Off'}`, targets.map((t) => ({ id: t.id, name: t.tag || t.name, status: 'working' })));
-  try {
-    const { results } = await api('/api/tvs/bulk/power', { method: 'POST', body: JSON.stringify({ state }) });
-    const rows = targets.map((t) => {
-      const r = results.find((rr) => Number(rr.target_id ?? rr.id) === Number(t.id));
-      if (!r) return { id: t.id, name: t.tag || t.name, status: 'failed', error: 'No result reported.' };
-      return { id: t.id, name: r.name || t.tag || t.name, status: r.ok ? 'done' : 'failed', error: r.error };
-    });
-    renderBulkProgress(`All TVs — ${state === 'on' ? 'On' : 'Off'}`, rows, () => bulkPower(state));
-    await refreshAll();
-  } catch (e) {
-    renderBulkProgress(`All TVs — ${state === 'on' ? 'On' : 'Off'}`, targets.map((t) => ({ id: t.id, name: t.tag || t.name, status: 'failed', error: e.message })), () => bulkPower(state));
-  }
+  await runBulkPower(`All TVs — ${state === 'on' ? 'On' : 'Off'}`, targets, { state }, () => bulkPower(state));
 }
 
 // Press-and-hold (ALL TVs OFF, §6: press-and-hold, not a plain tap).

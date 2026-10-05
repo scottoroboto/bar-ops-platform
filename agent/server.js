@@ -808,18 +808,31 @@ app.post('/api/tvs/bulk/power', async (req, res) => {
   } else if (zone_id != null) {
     targets = targets.filter((t) => Number(t.zone_id) === Number(zone_id));
   }
+  // ?stream=1: one JSON line per TV the moment it's done, so the TVs page
+  // can light each tile as its set comes on instead of waiting for the
+  // slowest one (Scotto, 2026-10-06: "speed up the process").
+  const stream = req.query.stream === '1';
+  if (stream) {
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.flushHeaders();
+  }
   const results = await mapWithConcurrency(targets, 16, /* power-on is mostly waiting on the set; don't queue a zone 4 at a time */ async (tv) => {
+    let out;
     try {
       const result = await driverFor(tv).setPower(tv, state);
       maybeReportToken(tv, result);
       const live = await tvPoller.pollNow(tv.id).catch(() => null);
       activity.record('tv.power', { actor: req.vcActor, targetType: 'tv', targetId: tv.id, detail: { name: tv.name, state, method: result.method, ended: result.state }, result: result.ok ? 'ok' : 'failed' });
-      return { id: tv.id, name: tv.name, ok: result.ok, state: result.state, method: result.method, live };
+      out = { id: tv.id, name: tv.name, ok: result.ok, state: result.state, method: result.method, live };
     } catch (err) {
-      return { id: tv.id, name: tv.name, ok: false, error: err.message };
+      out = { id: tv.id, name: tv.name, ok: false, error: err.message };
     }
+    if (stream) res.write(`${JSON.stringify(out)}\n`);
+    return out;
   });
-  res.json({ ok: true, results });
+  if (stream) res.end(`${JSON.stringify({ done: true, count: results.length })}\n`);
+  else res.json({ ok: true, results });
 });
 
 app.post('/api/tvs/:id/power', async (req, res) => {

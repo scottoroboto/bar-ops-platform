@@ -77,10 +77,10 @@ async function identify(tv) {
 // "unreachable" covers a fully network-dead set as well as a genuine
 // connectivity problem -- the discrete-power algorithm below treats both
 // the same way (not already-on, can't confirm already-off either).
-async function getPowerState(tv) {
+async function getPowerState(tv, timeoutMs) {
   if (!tv.ip) return 'unreachable';
   try {
-    const res = await fetchWithTimeout(`http://${tv.ip}:8001/api/v2/`);
+    const res = await fetchWithTimeout(`http://${tv.ip}:8001/api/v2/`, {}, timeoutMs || HTTP_TIMEOUT_MS);
     if (!res.ok) return 'unreachable';
     const data = await res.json().catch(() => null);
     const device = data && (data.device || data);
@@ -288,8 +288,10 @@ async function setPower(tv, desiredState) {
           if (!method.includes('wol')) method = method === 'none' ? 'wol' : `${method}+wol`;
         }
       }
-      await sleep(2000);
-      after = await getPowerState(tv);
+      // Check every second (a quick 1.5s look while it's asleep) so a set
+      // is reported on about as soon as it lights up.
+      await sleep(1000);
+      after = await getPowerState(tv, 1500);
     }
     if (after !== 'on') after = await getPowerState(tv);
     if (after !== 'on' && samsungSt.configured() && tv.st_device_id) {
