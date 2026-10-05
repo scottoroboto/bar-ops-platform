@@ -311,47 +311,72 @@ async function autoSaveStation() {
 // in the cache so a restart doesn't forget them. Until one has been seen,
 // Sonos's usual values are tried (sid 236, sn 1).
 let pandoraTpl = cache.get('sonosPandoraTemplate') || null;
+if (pandoraTpl && !pandoraTpl.didl) pandoraTpl = null; // older guessed-settings format: learn again
+// Keep a real Pandora station exactly as this Sonos wrote it (its URI and
+// metadata). Playing another station copies that and swaps in the new
+// station id and name, so whatever this Sonos expects (account number,
+// service token, item id format, class) comes along unchanged.
 function learnPandora(uri, didl) {
-  if (!pandoraStationId(uri) || !didl) return false;
-  const q = new URLSearchParams(String(uri).split('?')[1] || '');
-  const desc = (/<desc\b[^>]*>([\s\S]*?)<\/desc>/.exec(didl) || [])[1];
-  const itemPrefix = (/<item\b[^>]*\bid="([0-9a-fA-F]{8})ST/.exec(didl) || [])[1];
-  const tpl = {
-    sid: q.get('sid') || '236', flags: q.get('flags') || '8300', sn: q.get('sn') || '1',
-    desc: desc || 'SA_RINCON60423_X_#Svc60423-0-Token', itemPrefix: itemPrefix || '100c206c',
-  };
-  if (JSON.stringify(tpl) !== JSON.stringify(pandoraTpl)) { pandoraTpl = tpl; cache.set('sonosPandoraTemplate', tpl); }
+  const id = pandoraStationId(uri);
+  if (!id || !didl || !/<item\b/.test(didl)) return false;
+  const tpl = { uri: String(uri), didl: String(didl), id: id.slice(3) };
+  if (!pandoraTpl || pandoraTpl.uri !== tpl.uri || pandoraTpl.didl !== tpl.didl) { pandoraTpl = tpl; cache.set('sonosPandoraTemplate', tpl); }
   return true;
 }
 
+function swapId(text, oldId, newId) {
+  // The id shows up plain, URL-encoded after "ST%3a"/"ST%3A", and as "ST:<id>".
+  return String(text).split(oldId).join(newId);
+}
+
 function pandoraUri(stationId) {
-  const t = pandoraTpl || { sid: '236', flags: '8300', sn: '1' };
-  return `x-sonosapi-radio:ST%3a${encodeURIComponent(stationId)}?sid=${t.sid}&flags=${t.flags}&sn=${t.sn}`;
+  if (pandoraTpl && pandoraTpl.uri) return swapId(pandoraTpl.uri, pandoraTpl.id, stationId);
+  return `x-sonosapi-radio:ST%3a${encodeURIComponent(stationId)}?sid=236&flags=8300&sn=1`;
+}
+
+function pandoraDidl({ stationId, name, art }) {
+  if (pandoraTpl && pandoraTpl.didl) {
+    let d = swapId(pandoraTpl.didl, pandoraTpl.id, stationId);
+    d = d.replace(/<dc:title>[\s\S]*?<\/dc:title>/, `<dc:title>${esc(name)}</dc:title>`);
+    d = art ? d.replace(/<upnp:albumArtURI>[\s\S]*?<\/upnp:albumArtURI>/, `<upnp:albumArtURI>${esc(art)}</upnp:albumArtURI>`)
+      : d.replace(/<upnp:albumArtURI>[\s\S]*?<\/upnp:albumArtURI>/, '');
+    return d;
+  }
+  return '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
+    + 'xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+    + `<item id="100c206cST%3a${esc(encodeURIComponent(stationId))}" parentID="0" restricted="true">`
+    + `<dc:title>${esc(name)}</dc:title>`
+    + '<upnp:class>object.item.audioItem.audioBroadcast.#station</upnp:class>'
+    + '<desc id="cdudn" nameSpace="urn:schemas-rinconnetworks-com:metadata-1-0/">SA_RINCON60423_X_#Svc60423-0-Token</desc>'
+    + '</item></DIDL-Lite>';
 }
 
 async function playPandoraStation({ stationId, name, art }) {
   const p = await ensurePlayer();
   if (!p) throw new Error('No Sonos found on this network.');
-  const t = pandoraTpl || { desc: 'SA_RINCON60423_X_#Svc60423-0-Token', itemPrefix: '100c206c' };
   const uri = pandoraUri(stationId);
-  const didl = '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
-    + 'xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
-    + `<item id="${t.itemPrefix}ST%3a${esc(encodeURIComponent(stationId))}" parentID="0" restricted="true">`
-    + `<dc:title>${esc(name)}</dc:title>`
-    + '<upnp:class>object.item.audioItem.audioBroadcast.#station</upnp:class>'
-    + (art ? `<upnp:albumArtURI>${esc(art)}</upnp:albumArtURI>` : '')
-    + `<desc id="cdudn" nameSpace="urn:schemas-rinconnetworks-com:metadata-1-0/">${esc(t.desc)}</desc>`
-    + '</item></DIDL-Lite>';
+  const didl = pandoraDidl({ stationId, name, art });
   try {
     await soap(p.ip, 'AVTransport', 'SetAVTransportURI', { InstanceID: 0, CurrentURI: uri, CurrentURIMetaData: didl });
-    await soap(p.ip, 'AVTransport', 'Play', { InstanceID: 0, Speed: 1 });
+    try {
+      await soap(p.ip, 'AVTransport', 'Play', { InstanceID: 0, Speed: 1 });
+    } catch (err) {
+      // 701 right after a new station: the stream isn't ready yet. One retry.
+      if (!/701/.test(err.message)) throw err;
+      await new Promise((r) => setTimeout(r, 1500));
+      await soap(p.ip, 'AVTransport', 'Play', { InstanceID: 0, Speed: 1 });
+    }
   } catch (err) {
+    console.warn(`[sonos] Pandora station ${stationId} wouldn't start: ${err.message} (uri ${uri}; learned from a real station: ${!!pandoraTpl})`);
     if (!pandoraTpl) throw new Error(`The Sonos wouldn't start it (${err.message}). Play any Pandora station once from the Sonos app so the box learns this account's settings, then try again.`);
-    throw err;
+    throw new Error(`The Sonos wouldn't start it (${err.message}). Play it once from the Sonos app; it'll work from here after that.`);
   }
   await readState().catch(() => {});
   return { state, station: name };
 }
+
+function pandoraTemplate() { return pandoraTpl; }
+function forgetPandoraTemplate() { pandoraTpl = null; cache.set('sonosPandoraTemplate', null); }
 
 // What's playing, as a key the station list can match: "ST:<id>" for a
 // Pandora station, else the URI without its query string.
@@ -380,5 +405,5 @@ function start() {
 
 module.exports = {
   start, getState, getFavorites, readFavorites, currentFavoriteId, transport, playFavorite, readState, removeFavorite,
-  autoSaveStation, pandoraStationId, playPandoraStation, currentStationKey, learnPandora,
+  autoSaveStation, pandoraStationId, playPandoraStation, currentStationKey, learnPandora, pandoraTemplate, forgetPandoraTemplate, ensurePlayer, soap,
 };
