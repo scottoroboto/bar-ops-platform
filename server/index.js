@@ -1538,7 +1538,10 @@ const out = await withServiceClient(async (client) => {
   if (!s || !s.agent_token_hash) throw Object.assign(new Error('This bar’s box has no agent token yet.'), { status: 400 });
   const lanIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(s.lan_ip || '') ? s.lan_ip : null;
   if (!lanIp) throw Object.assign(new Error('This bar’s box hasn’t reported its address yet. Make sure it’s online.'), { status: 400 });
-  const name = `${await barIpadPrefix(client, req.vcSiteId)}-${label}`;
+  // "T1-Main Bar" typed in full doesn't become "T1-T1-Main Bar".
+  const prefix = await barIpadPrefix(client, req.vcSiteId);
+  const bare = label.replace(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*-?\\s*`, 'i'), '').trim() || label;
+  const name = `${prefix}-${bare}`;
   const { rows } = await client.query(
     'INSERT INTO vc_bar_ipads (site_id, name, created_by) VALUES ($1, $2, $3) RETURNING id, name, created_at',
     [req.vcSiteId, name, req.person.name || req.person.username || null]

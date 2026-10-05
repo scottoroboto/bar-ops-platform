@@ -26,7 +26,10 @@ const { driverFor, KEY_METHODS } = require('./lib/drivers'); // Samsung or LG pe
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// no-cache: iPads check for a newer copy on every load (a quick 304 when
+// nothing changed), so a git pull reaches the bar iPad at once instead of
+// Safari reusing old page code for days.
+app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 const START_TIME = Date.now();
 
