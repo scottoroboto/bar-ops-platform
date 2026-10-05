@@ -586,6 +586,8 @@ function chipHtml(t) {
   const pickedOn = !TV_REMOTE_OPEN && PICKED_SLOT != null && info.slot === PICKED_SLOT;
 
   const classes = ['tv-chip'];
+  const work = TV_WORK.get(Number(t.id));
+  if (work) classes.push(`work-${work.status}`);
   if (dead) classes.push('dead-source');
   if (pickedOn && !selected) classes.push('picked-on');
   if (selected || aimed) classes.push('remote-target');
@@ -600,7 +602,8 @@ function chipHtml(t) {
   else sourceLine = `${callsignForSlot(info.slot)} ${qam}`.trim();
 
   const onclick = TV_REMOTE_OPEN ? `toggleRemoteTarget(${t.id})` : `toggleTvSelected(${t.id})`;
-  return `<button type="button" class="${classes.join(' ')}" onclick="${onclick}">
+  const badge = work ? `<span class="chip-work" title="${escapeHtml(work.status === 'failed' ? (work.error || 'Didn’t answer') : work.status === 'done' ? 'Done' : 'Working…')}">${work.status === 'done' ? '&#10003;' : work.status === 'failed' ? '!' : ''}</span>` : '';
+  return `<button type="button" class="${classes.join(' ')}" onclick="${onclick}">${badge}
     <span class="chip-qam">${escapeHtml(qam)}</span>
     <span class="chip-tag">${escapeHtml(tag)}</span>
     <span class="chip-source">${escapeHtml(sourceLine)}</span>
@@ -682,39 +685,39 @@ async function commitSlotChange() {
 
 // Generic named-results progress card, reused for both source-slot commits
 // and the topbar's ALL TVs ON/OFF (§9: never a blanket success/fail alert).
+// Progress shows on the TV tiles themselves (Scotto, 2026-10-05: no list
+// popping up): a tile pulses while its TV is being switched, flashes a
+// check when it confirms, and turns red if it doesn't answer. Only when
+// some fail does one line appear, with Retry.
+const TV_WORK = new Map(); // tv id -> { status: 'working' | 'done' | 'failed', error, at }
+let tvWorkTimer = null;
 function renderBulkProgress(title, rows, retry) {
+  const now = Date.now();
+  for (const r of rows) TV_WORK.set(Number(r.id), { status: r.status, error: r.error || null, at: now });
+  renderTvsColumn();
   const box = document.getElementById('bulkProgress');
-  const done = rows.filter((r) => r.status === 'done').length;
+  const working = rows.some((r) => r.status === 'working');
   const failed = rows.filter((r) => r.status === 'failed');
-  const working = rows.filter((r) => r.status === 'working').length;
-  const summary = working
-    ? `${title}…`
-    : `${done} of ${rows.length} confirmed${failed.length ? `, ${failed.length} failed` : ''}.`;
-
-  box.innerHTML = `
-    <div class="card" style="margin-top:12px;">
-      <h2 style="margin:0 0 8px;">${escapeHtml(title)}</h2>
-      <div class="progress-list">
-        ${rows.map((r) => `
-          <div class="progress-row">
-            <span>${escapeHtml(r.name || `TV ${r.id}`)}</span>
-            <span class="pstate ${r.status}">${r.status === 'working' ? 'Sending…' : r.status === 'done' ? 'Done' : 'Failed' + (r.error ? `: ${escapeHtml(r.error)}` : '')}</span>
-          </div>`).join('')}
-      </div>
-      <div class="progress-summary">${summary}</div>
-      ${failed.length && working === 0 ? `
-      <div class="failure-banner">
-        <span class="text">${failed.length} TV${failed.length === 1 ? '' : 's'} didn't confirm.</span>
-        <div class="actions">
-          ${retry ? `<button class="small" id="bulkRetryBtn">Retry</button>` : ''}
-          <button class="small" onclick="document.getElementById('bulkProgress').innerHTML=''">Dismiss</button>
-        </div>
-      </div>` : ''}
-    </div>`;
-  if (retry && failed.length && working === 0) {
+  if (working || !failed.length) { box.innerHTML = ''; }
+  else {
+    const names = failed.map((r) => r.name || `TV ${r.id}`);
+    box.innerHTML = `<div class="tv-fail-line"><span>${failed.length} TV${failed.length === 1 ? '' : 's'} didn't answer: ${escapeHtml(names.slice(0, 6).join(', '))}${names.length > 6 ? '…' : ''}</span>
+      ${retry ? '<button class="small" id="bulkRetryBtn">Retry</button>' : ''}
+      <button class="small ghost" onclick="document.getElementById('bulkProgress').innerHTML=''">Dismiss</button></div>`;
     const btn = document.getElementById('bulkRetryBtn');
-    if (btn) btn.onclick = retry;
+    if (btn && retry) btn.onclick = retry;
   }
+  // Checks fade after 3s, red marks after 30s.
+  clearTimeout(tvWorkTimer);
+  tvWorkTimer = setTimeout(function sweep() {
+    const t = Date.now();
+    let changed = false;
+    for (const [id, w] of TV_WORK) {
+      if ((w.status === 'done' && t - w.at > 3000) || (w.status === 'failed' && t - w.at > 30000)) { TV_WORK.delete(id); changed = true; }
+    }
+    if (changed) renderTvsColumn();
+    if ([...TV_WORK.values()].some((w) => w.status !== 'working')) tvWorkTimer = setTimeout(sweep, 1000);
+  }, 1000);
 }
 
 // ---------------------------------------------------------------------
