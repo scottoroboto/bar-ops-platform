@@ -93,16 +93,42 @@ async function visibleInput(page, selectors) {
   return null;
 }
 
-async function looksSignedOut(page) {
-  return !!(await visibleInput(page, ['input[type="password"]']));
+// SpotOn's reports site signs in through Okta: the form loads a moment
+// after the page, and asks for the email first, then the password, then
+// maybe a code. "Signed in" = not on a sign-in page.
+async function onSignInPage(page) {
+  if (/\/login\b|okta|\/signin/i.test(page.url())) return true;
+  if (/sign in/i.test(await page.title().catch(() => ''))) return true;
+  return !!(await visibleInput(page, ['input[type="password"]', 'input[name="identifier"]', '#okta-sign-in input']));
+}
+
+async function waitForForm(page, ms = 25000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const box = await visibleInput(page, ['input[name="identifier"]', 'input[type="email"]', 'input[type="password"]', 'input[name*="user" i]', 'input[id*="user" i]', 'input[name*="email" i]']);
+    if (box) return box;
+    await page.waitForTimeout(500);
+  }
+  return null;
+}
+
+async function inputsSeen(page) {
+  return page.$$eval('input', (els) => els.filter((e) => e.type !== 'hidden').map((e) => `${e.type || 'text'}${e.name ? ' name=' + e.name : ''}${e.placeholder ? ' "' + e.placeholder + '"' : ''}`).join(' | ')).catch(() => '');
+}
+
+async function clickIf(page, selectorsOrText) {
+  for (const s of selectorsOrText) {
+    const loc = s.startsWith('text=') ? page.getByText(new RegExp(s.slice(5), 'i')).first() : page.locator(s).first();
+    if (await loc.count() && await loc.isVisible().catch(() => false)) { await loc.click().catch(() => {}); return s; }
+  }
+  return null;
 }
 
 async function codePrompt(page) {
-  const sel = ['input[autocomplete="one-time-code"]', 'input[name*="code" i]', 'input[id*="code" i]', 'input[placeholder*="code" i]', 'input[name*="otp" i]', 'input[inputmode="numeric"]'];
+  const sel = ['input[autocomplete="one-time-code"]', 'input[name*="passcode" i]', 'input[name*="code" i]', 'input[id*="code" i]', 'input[placeholder*="code" i]', 'input[name*="otp" i]', 'input[inputmode="numeric"]'];
   const input = await visibleInput(page, sel);
-  if (input) return input;
-  const text = (await page.textContent('body').catch(() => '')) || '';
-  return /verification code|enter the code|sent (you )?a code|one-time|security code/i.test(text) ? (await visibleInput(page, ['input:not([type="hidden"])'])) : null;
+  if (input && !(await visibleInput(page, ['input[type="password"]']))) return input;
+  return null;
 }
 
 (async () => {
@@ -155,33 +181,64 @@ async function codePrompt(page) {
   await settle(page);
   let askedForCode = false;
 
-  if (await looksSignedOut(page)) {
+  if (await onSignInPage(page)) {
     console.log(`Sign-in page: ${page.url()}`);
-    const userBox = await visibleInput(page, ['input[type="email"]', 'input[name*="user" i]', 'input[name*="email" i]', 'input[id*="user" i]', 'input[id*="email" i]', 'input[type="text"]']);
-    const passBox = await visibleInput(page, ['input[type="password"]']);
-    if (!userBox) { console.log('Could not find the username box. Saving a picture: spoton-capture/login.png'); await page.screenshot({ path: path.join(CAPTURE_DIR, 'login.png') }); }
-    else {
-      await userBox.fill(user);
-      // Some sign-ins ask for the email first, then show the password box.
-      if (!(await passBox.isVisible().catch(() => false))) { await userBox.press('Enter'); await settle(page, 4000); }
-      const pb = await visibleInput(page, ['input[type="password"]']);
-      if (pb) { await pb.fill(pass); await pb.press('Enter'); }
+    let box = await waitForForm(page);
+    if (!box) {
+      await page.screenshot({ path: path.join(CAPTURE_DIR, 'login.png') });
+      console.log(`Could not find the sign-in form after 25s. Inputs seen: ${await inputsSeen(page) || 'none'}. Picture: spoton-capture/login.png`);
+      await browser.close(); rl.close(); process.exit(1);
     }
-    await settle(page, 10000);
-
-    const code = await codePrompt(page);
-    if (code) {
+    console.log(`   form inputs: ${await inputsSeen(page)}`);
+    // Step 1: email (Okta asks for it first, with a Next button).
+    const passNow = await visibleInput(page, ['input[type="password"]']);
+    if (!passNow || (await box.getAttribute('type')) !== 'password') {
+      await box.fill(user);
+      if (passNow) { await passNow.fill(pass); await passNow.press('Enter'); }
+      else { if (!(await clickIf(page, ['input[type="submit"]', 'button[type="submit"]', 'text=^next$', 'text=^sign in$']))) await box.press('Enter'); }
+      await settle(page, 8000);
+    }
+    // Step 2: password, if it wasn't on the first screen.
+    if (!passNow) {
+      const pb = await waitForForm(page, 15000);
+      const pw = pb && (await pb.getAttribute('type')) === 'password' ? pb : await visibleInput(page, ['input[type="password"]']);
+      if (pw) {
+        console.log(`   password step: ${await inputsSeen(page)}`);
+        await pw.fill(pass);
+        if (!(await clickIf(page, ['input[type="submit"]', 'button[type="submit"]', 'text=^verify$', 'text=^sign in$']))) await pw.press('Enter');
+        await settle(page, 10000);
+      } else {
+        console.log(`   no password box appeared. Inputs seen: ${await inputsSeen(page) || 'none'}`);
+      }
+    }
+    // Step 3: a second factor. If Okta offers a choice, pick email (or text).
+    for (let round = 0; round < 2; round += 1) {
+      let code = await codePrompt(page);
+      if (!code) {
+        const picked = await clickIf(page, ['text=email', 'text=text message|sms|phone']);
+        if (!picked) break;
+        console.log(`   picked a verification method: ${picked.replace('text=', '')}`);
+        await settle(page, 6000);
+        await clickIf(page, ['text=send me|send code|send an email|send']);
+        await settle(page, 6000);
+        code = await codePrompt(page);
+        if (!code) break;
+      }
       askedForCode = true;
       console.log('\nSpotOn asked for a sign-in code (text or email).');
       const c = await ask('Type the code here: ');
       await code.fill(c);
-      await code.press('Enter');
+      if (!(await clickIf(page, ['input[type="submit"]', 'button[type="submit"]', 'text=^verify$']))) await code.press('Enter');
       await settle(page, 10000);
+      if (!(await onSignInPage(page))) break;
     }
-    if (await looksSignedOut(page)) {
+    await page.goto(SITE, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+    await settle(page, 8000);
+    if (await onSignInPage(page)) {
       await page.screenshot({ path: path.join(CAPTURE_DIR, 'login-failed.png') });
-      const msg = ((await page.textContent('body').catch(() => '')) || '').replace(/\s+/g, ' ').slice(0, 300);
-      console.log(`\nStill on the sign-in page: ${page.url()}\nPage says: ${msg}\nPicture saved: spoton-capture/login-failed.png`);
+      const msg = ((await page.evaluate(() => document.body.innerText).catch(() => '')) || '').replace(/\s+/g, ' ').slice(0, 400);
+      console.log(`\nStill on a sign-in page: ${page.url()}\nInputs: ${await inputsSeen(page) || 'none'}\nPage says: ${msg}\nPicture saved: spoton-capture/login-failed.png`);
+      if (fs.existsSync(SESSION_FILE)) fs.unlinkSync(SESSION_FILE);
       await browser.close(); rl.close(); process.exit(1);
     }
     console.log(`Signed in. Now at ${page.url()}`);
@@ -203,6 +260,7 @@ async function codePrompt(page) {
   await page.goto(etUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await settle(page, 12000);
   await page.screenshot({ path: path.join(CAPTURE_DIR, 'employee-time.png'), fullPage: true });
+  if (await onSignInPage(page)) console.log('   !! the report page bounced to a sign-in page -- the session did not stick');
   const onClock = ((await page.textContent('body').catch(() => '')) || '').match(/(\d+) on the Clock/i);
   console.log(`   page title: ${await page.title()}   ${onClock ? `(${onClock[1]} on the clock)` : ''}   ${captured.length - before} data responses`);
 
