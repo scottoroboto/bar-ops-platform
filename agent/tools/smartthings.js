@@ -53,6 +53,10 @@ async function setup() {
   console.log('It is only used right now, to create the Bar Ops app on your SmartThings account.');
   const token = await ask('Paste the token: ');
   if (!token) { console.log('No token.'); return; }
+  // Check what the token can do before trying, so a missing tick shows plainly.
+  const perms = await fetch('https://api.smartthings.com/v1/apps', { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.status).catch(() => 0);
+  if (perms === 401) { console.log('SmartThings says that token is expired or wrong. Make a new one.'); return; }
+  if (perms === 403) { console.log('That token can\'t see apps. Make a new one with every box under Apps ticked (List, See and Manage all apps).'); return; }
   const site = (cache.get('config') || {}).site || {};
   const app = await st.createApp(token, site.name || 'box');
   cache.set('smartthingsAuth', { clientId: app.clientId, clientSecret: app.clientSecret }); // the box keeps these; no need to copy them

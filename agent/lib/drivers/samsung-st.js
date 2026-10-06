@@ -93,7 +93,10 @@ async function createApp(websiteToken, label) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.oauthClientId) {
     const why = (data.error && (data.error.message || JSON.stringify(data.error.details || data.error))) || `HTTP ${res.status}`;
-    throw new Error(`SmartThings didn't create the app: ${why}`);
+    const hint = res.status === 403 || res.status === 401
+      ? ' -- the token needs every box under Apps ticked, including "Manage all apps" (w:apps). Make a new one with all boxes ticked.'
+      : '';
+    throw new Error(`SmartThings didn't create the app (HTTP ${res.status}): ${why}${hint}\nFull answer: ${JSON.stringify(data).slice(0, 600)}`);
   }
   return { clientId: data.oauthClientId, clientSecret: data.oauthClientSecret, appId: data.app && data.app.appId };
 }
