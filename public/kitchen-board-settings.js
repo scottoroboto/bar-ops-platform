@@ -63,9 +63,17 @@ async function makeDevice() {
     await loadAll();
     document.getElementById('deviceSteps').innerHTML = `<div class="msg success" style="margin-top:8px;">
       <b>${escapeHtml(r.device.name)}</b> is set up. This link is shown once -- copy it now:<br>
-      <input value="${escapeHtml(r.url)}" readonly onclick="this.select()" style="width:100%; margin:8px 0; font-size:12px;">
-      On the TV's computer: open Chrome, paste the link, press F11 for full screen. Double-click the board to go full screen too.</div>`;
+      <div style="display:flex; gap:6px; margin:8px 0;"><input id="kbTvLink" value="${escapeHtml(r.url)}" readonly onclick="this.select()" style="flex:1; margin:0; font-size:12px;"><button class="small" style="margin:0;" onclick="copyTvLink(this)">Copy</button></div>
+      On the TV's computer: Settings → Accounts → Set up a kiosk → Microsoft Edge → digital sign → paste this link. Or open it in a browser and press F11.</div>`;
   } catch (e) { showMsg(e.message, 'error'); }
+}
+
+async function copyTvLink(btn) {
+  const input = document.getElementById('kbTvLink');
+  input.select();
+  try { await navigator.clipboard.writeText(input.value); } catch (e) { document.execCommand('copy'); }
+  btn.textContent = 'Copied';
+  setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
 }
 
 async function removeDevice(id, name) {
