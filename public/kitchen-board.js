@@ -94,11 +94,19 @@ function screenA() {
   const sc = VIEW.sevenCheck;
   const check = sc ? `<div class="check"><span class="k">7 PM CHECK</span><span>${money(sc.foodAt7)} by 7:00 PM — ${sc.keep ? 'above' : 'below'} the ${money(sc.line)} slow-night line.</span><span class="${sc.keep ? 'blue' : 'amber'}">${sc.keep ? 'KEEP THE SCHEDULE' : 'CUT NIGHT B EARLY'}</span></div>` : '';
   const week = VIEW.week.map((d) => `<div class="day ${d.state}"><div class="w">${d.day}</div><div class="p">${d.pct == null ? '—' : d.pct + '%'}</div><div class="r">${d.state === 'hit' ? 'HIT' : d.state === 'missed' ? 'MISSED' : d.state === 'live' ? '● LIVE' : '&nbsp;'}</div></div>`).join('');
+  const goalW = VIEW.labor.weekGoal;
+  const per = VIEW.periods || {};
+  const perTile = (label, p) => {
+    if (!p || p.pct == null) return `<div class="per"><div class="w">${label}</div><div class="p dim">—</div><div class="r">&nbsp;</div></div>`;
+    const hit = p.pct <= goalW;
+    return `<div class="per ${hit ? 'hit' : 'missed'}"><div class="w">${label}</div><div class="p">${p.pct}%</div><div class="r">${hit ? 'HIT' : 'OVER'} · goal ${goalW}% · ${money(p.food)} food</div></div>`;
+  };
+  const periods = `<div class="periods">${perTile('WEEK TO DATE', per.week)}${perTile('MONTH TO DATE', per.month)}${perTile(`YEAR TO DATE${per.year && per.year.since && per.year.since.slice(5) !== '01-01' ? ' · since ' + new Date(per.year.since + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}`, per.year)}</div>`;
   return head('Scoreboard') + tilesHtml(false) + `
     <div class="row2">
       <div class="panel"><h3><span>On the clock now · ${VIEW.onClock.length}</span><span>in → scheduled off</span></h3><table>${on}</table></div>
       <div class="panel"><h3><span>Off plan today</span><span>extra</span></h3><table>${offBody}</table></div>
-    </div>${check}<div class="week">${week}</div><div class="dots"><span class="on"></span><span></span></div>`;
+    </div>${check}<div class="week">${week}</div>${periods}<div class="dots"><span class="on"></span><span></span></div>`;
 }
 
 function screenB() {

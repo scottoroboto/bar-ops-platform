@@ -5132,6 +5132,12 @@ res.status(400).json({ error: err.message });
 }
 });
 
+app.get('/api/venue/agent/kitchen/have', requireAgentAuth(), async (req, res) => {
+const ok = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+if (!ok(req.query.from) || !ok(req.query.to)) return res.status(400).json({ error: 'from and to as YYYY-MM-DD' });
+res.json({ dates: await kitchenboard.haveDates(req.vcSite.location_id, req.query.from, req.query.to) });
+});
+
 function kbManager(person, locationId) {
 return (person.role === 'owner' || person.role === 'manager') && atMyLocation(person, locationId);
 }

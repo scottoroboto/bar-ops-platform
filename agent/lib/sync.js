@@ -171,6 +171,12 @@ async function kitchenPull(payload) {
   return res.json().catch(() => ({}));
 }
 
+async function kitchenHave(from, to) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/kitchen/have?from=${from}&to=${to}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`kitchen have failed: ${res.status}`);
+  return (await res.json()).dates || [];
+}
+
 async function reportTvToken(tvId, wsToken) {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/tvs/${tvId}/token`, {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({ ws_token: wsToken }),
@@ -485,7 +491,7 @@ module.exports = {
   pushWans,
   pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
-  reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems, kitchenPull,
+  reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems, kitchenPull, kitchenHave,
   createScene, pushEvent, updateEvent, deleteEvent, reportEventState,
   takeBackupNow, listBackups, restoreBackup, pushActivity, pushHealth,
   pollCommands,

@@ -149,8 +149,13 @@ async function ingest(locationId, payload) {
       }
       return { ok: true, logged: true };
     }
-    const now = p.pulledAt ? new Date(p.pulledAt) : new Date();
-    const bdate = businessDate(now, tz, settings.day_start_hour);
+    // A backfill (tools/spoton-backfill.js) sends a whole past day at once:
+    // it names the business date, its snapshot sits at that day's close,
+    // and it isn't a "pull" for the stale banner or the owner's texts.
+    const backfill = !!(p.backfill && /^\d{4}-\d{2}-\d{2}$/.test(String(p.businessDate || '')));
+    const now = backfill ? new Date() : (p.pulledAt ? new Date(p.pulledAt) : new Date());
+    const bdate = backfill ? p.businessDate : businessDate(now, tz, settings.day_start_hour);
+    const snapAt = backfill ? new Date(dayStartUtc(bdate, tz, settings.day_start_hour).getTime() + 23 * 3600000) : now;
     const punches = Array.isArray(p.punches) ? p.punches : [];
     let kept = 0;
     for (const x of punches) {
@@ -170,10 +175,12 @@ async function ingest(locationId, payload) {
     // A punch that vanished from SpotOn's report (deleted by a manager) goes too.
     await client.query('DELETE FROM kb_punches WHERE location_id = $1 AND business_date = $2 AND last_seen_at < $3', [locationId, bdate, now]);
     const { food, total } = p.dsr ? foodFromSales(p.dsr.sales, settings.food_keys) : { food: null, total: null };
+    if (backfill) await client.query('DELETE FROM kb_sales_snapshots WHERE location_id = $1 AND business_date = $2', [locationId, bdate]);
     await client.query(
       'INSERT INTO kb_sales_snapshots (location_id, business_date, at, food_net, total_net, raw) VALUES ($1, $2, $3, $4, $5, $6)',
-      [locationId, bdate, now, food, total, JSON.stringify({ dsr: p.dsr || null, hourly: p.hourly || null }).slice(0, 400000)],
+      [locationId, bdate, snapAt, food, total, JSON.stringify({ dsr: p.dsr || null, hourly: p.hourly || null }).slice(0, 400000)],
     );
+    if (backfill) return { ok: true, businessDate: bdate, punches: kept, food, total, backfill: true };
     const { rows } = await client.query('INSERT INTO kb_pulls (location_id, ok, ms, punches) VALUES ($1, true, $2, $3) RETURNING id', [locationId, p.ms != null ? Math.round(p.ms) : null, kept]);
     // Keep the snapshot table tidy: 60 days.
     await client.query(`DELETE FROM kb_sales_snapshots WHERE location_id = $1 AND at < now() - interval '60 days'`, [locationId]);
@@ -333,6 +340,27 @@ async function view(locationId, { now = new Date() } = {}) {
       else week.push({ day: label, pct: food ? Math.round((labor / food) * 100) : null, goal, state: food ? (labor / food * 100 <= goal ? 'hit' : 'missed') : 'nodata' });
     }
 
+    // Week / month / year to date: SpotOn's labor $ over the last food
+    // snapshot of each day, today's so-far included. Only as far back as
+    // the board has been collecting.
+    const periods = {};
+    const firstDay = (await client.query('SELECT MIN(business_date) AS d FROM kb_sales_snapshots WHERE location_id = $1', [locationId])).rows[0];
+    const since = firstDay && firstDay.d ? toYmd(firstDay.d) : bdate;
+    for (const [key, from] of [['week', weekStart], ['month', `${bdate.slice(0, 7)}-01`], ['year', `${bdate.slice(0, 4)}-01-01`]]) {
+      const start = from > since ? from : since;
+      const r = (await client.query(
+        `WITH food AS (SELECT DISTINCT ON (business_date) business_date, food_net FROM kb_sales_snapshots
+                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL ORDER BY business_date, at DESC),
+              labor AS (SELECT business_date, SUM(labor_total) AS labor FROM kb_punches
+                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND lower(role_name) = ANY($4) GROUP BY business_date)
+         SELECT COALESCE(SUM(food.food_net), 0) AS food, COALESCE(SUM(labor.labor), 0) AS labor, COUNT(food.business_date) AS days
+           FROM food LEFT JOIN labor ON labor.business_date = food.business_date`,
+        [locationId, start, bdate, roles],
+      )).rows[0];
+      const food = num(r.food); const labor = num(r.labor);
+      periods[key] = { pct: food > 0 ? Math.round((labor / food) * 100) : null, food: Math.round(food), days: Number(r.days), since: start };
+    }
+
     const lastOkAt = lastOk ? new Date(lastOk.at) : null;
     return {
       location: loc ? loc.name : '', timezone: tz, businessDate: bdate, now: now.toISOString(),
@@ -344,7 +372,7 @@ async function view(locationId, { now = new Date() } = {}) {
       labor: { pctProjected: laborPctProjected, pctSoFar: laborPctSoFar, goal: laborGoal, hit: laborPctProjected == null ? null : laborPctProjected <= laborGoal, weekGoal: num(s.labor_goal_week) },
       hours: { actual: round1(actualHours), scheduledSoFar: round1(schedSoFar), scheduledTotal: round1(schedTotal), over: round1(actualHours - schedSoFar) },
       foodCost: null, // not set up yet (purchases / food inventory): shows "—"
-      onClock, offPlan, scheduledNotIn, sevenCheck, hoursByHour: hours, overNote, week,
+      onClock, offPlan, scheduledNotIn, sevenCheck, hoursByHour: hours, overNote, week, periods,
       scheduleKnown: shifts.length > 0,
     };
   });
@@ -375,8 +403,16 @@ async function locationForDevice(token) {
   });
 }
 
+// Business dates that already have a day's sales stored (backfill skips them).
+async function haveDates(locationId, from, to) {
+  return withServiceClient(async (client) => (await client.query(
+    'SELECT DISTINCT business_date FROM kb_sales_snapshots WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL ORDER BY business_date',
+    [locationId, from, to],
+  )).rows.map((r) => toYmd(r.business_date)));
+}
+
 async function recentPulls(locationId, limit = 12) {
   return withServiceClient(async (client) => (await client.query('SELECT at, ok, error, ms, punches FROM kb_pulls WHERE location_id = $1 ORDER BY at DESC LIMIT $2', [locationId, limit])).rows);
 }
 
-module.exports = { ingest, view, settingsFor, updateSettings, createDevice, listDevices, revokeDevice, locationForDevice, recentPulls, foodFromSales, businessDate };
+module.exports = { ingest, view, settingsFor, updateSettings, createDevice, listDevices, revokeDevice, locationForDevice, recentPulls, haveDates, foodFromSales, businessDate };

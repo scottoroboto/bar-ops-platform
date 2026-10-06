@@ -29,8 +29,8 @@ function dateParam(when, tz) {
   return `${p.month}-${p.day}-${p.year}`;
 }
 
-function reportUrl(template, locationKey, mmddyyyy) {
-  return `${SITE}/restaurant-reporting/interactive-reports/${template}/?location_key=${locationKey}&startDate=${mmddyyyy}&endDate=${mmddyyyy}`;
+function reportUrl(template, locationKey, start, end) {
+  return `${SITE}/restaurant-reporting/interactive-reports/${template}/?location_key=${locationKey}&startDate=${start}&endDate=${end || start}`;
 }
 
 async function settle(page, ms) {
@@ -178,15 +178,16 @@ class Session {
   }
 
   // Opens one report page and returns the JSON responses it loaded.
-  async fetchReport(template, locationKey, mmddyyyy, { retrySignIn = true } = {}) {
+  // start/end: MM-DD-YYYY (end defaults to start).
+  async fetchReport(template, locationKey, start, end, { retrySignIn = true } = {}) {
     if (!this.browser) await this.open();
     this.captured = [];
-    await this.page.goto(reportUrl(template, locationKey, mmddyyyy), { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await this.page.goto(reportUrl(template, locationKey, start, end), { waitUntil: 'domcontentloaded', timeout: 60000 });
     await settle(this.page, 12000);
     if (await onSignInPage(this.page)) {
       if (!retrySignIn) throw new Error('SpotOn bounced the report page to sign-in.');
       await this.ensureSignedIn();
-      return this.fetchReport(template, locationKey, mmddyyyy, { retrySignIn: false });
+      return this.fetchReport(template, locationKey, start, end, { retrySignIn: false });
     }
     return this.captured.slice();
   }
@@ -233,4 +234,4 @@ function hourlyRows(captured) {
   return null;
 }
 
-module.exports = { enabled, Session, signIn, settle, onSignInPage, dateParam, reportUrl, employeeTimeRows, dsrData, hourlyRows, SITE, SESSION_FILE, findChromium };
+module.exports = { enabled, Session, signIn, settle, onSignInPage, dateParam, reportUrl, LOCATION_KEY: process.env.SPOTON_LOCATION_KEY || '1215273229887737856', employeeTimeRows, dsrData, hourlyRows, SITE, SESSION_FILE, findChromium };
