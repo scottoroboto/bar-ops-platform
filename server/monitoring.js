@@ -464,12 +464,25 @@ function isSilenced(system) {
   return Number.isFinite(t) ? t > Date.now() : false;
 }
 
+// One history row per system per hour while nothing changes, plus a row
+// at every status change. The AV boxes report every TV and source every
+// 30 seconds; writing a row each time filled the database with 160,000
+// rows a day (Oct 2026) that nothing ever read past 24 hours. Unchanged
+// status inside the same hour just refreshes the newest row's time and
+// detail, so "checked 20s ago" stays accurate and the 24-hour drill-down
+// still shows every change.
 async function recordStatus({ systemId, status, detail }) {
   return withServiceClient(async (svc) => {
-    await svc.query(
-      'INSERT INTO system_status (system_id, status, detail) VALUES ($1,$2,$3)',
-      [systemId, status, detail ? JSON.stringify(detail) : null]
+    const detailJson = detail ? JSON.stringify(detail) : null;
+    const { rowCount } = await svc.query(
+      `WITH last AS (SELECT id, status, checked_at FROM system_status WHERE system_id = $1 ORDER BY checked_at DESC LIMIT 1)
+       UPDATE system_status s SET checked_at = now(), detail = $3 FROM last
+        WHERE s.id = last.id AND last.status = $2 AND date_trunc('hour', last.checked_at) = date_trunc('hour', now())`,
+      [systemId, status, detailJson]
     );
+    if (!rowCount) {
+      await svc.query('INSERT INTO system_status (system_id, status, detail) VALUES ($1,$2,$3)', [systemId, status, detailJson]);
+    }
 
     const { rows: openRows } = await svc.query(
       'SELECT * FROM system_alerts WHERE system_id = $1 AND closed_at IS NULL',
@@ -501,6 +514,25 @@ async function recordStatus({ systemId, status, detail }) {
       if (isSilenced(system)) return;
       await notifyAlert(svc, system, openAlert, 'closed').catch((err) => console.error('[monitoring] notify(closed) error', err));
     }
+  });
+}
+
+// History older than this is dropped (hourly, from server/index.js). The
+// page reads 24 hours; alerts live in system_alerts and are kept.
+const STATUS_HISTORY_DAYS = 14;
+async function pruneStatusHistory() {
+  return withServiceClient(async (svc) => {
+    let total = 0;
+    for (;;) { // in slices, so one big delete never sits on the table for long
+      const { rowCount } = await svc.query(
+        `DELETE FROM system_status WHERE id IN (
+           SELECT id FROM system_status WHERE checked_at < now() - ($1 || ' days')::interval LIMIT 20000)`,
+        [STATUS_HISTORY_DAYS]
+      );
+      total += rowCount;
+      if (rowCount < 20000) break;
+    }
+    return total;
   });
 }
 
@@ -1372,7 +1404,7 @@ module.exports = {
   getAttention, agentClear, agentServiceCall, setAvHours, withinAvHours, barParts,
   runDailySummaryIfDue, sendDailySummaries, setNotifySettings, modeFor, PREF_CATEGORIES,
   requireMonitoringAccess, listSystems, addSystem, updateSystem, archiveSystem, moveSystem,
-  listStatusHistory, listAlerts, recordStatus,
+  listStatusHistory, listAlerts, recordStatus, pruneStatusHistory,
   getNotifySettings, setNotifyChannel,
   listAlertRoutes, addAlertRoute, removeAlertRoute,
   pollUnifiSystems, unifiConfigured,

@@ -419,7 +419,7 @@ async function toggleHistory(systemId) {
     const rows = await api(`/api/monitoring/systems/${systemId}/history?hours=24`);
     el.dataset.loaded = '1';
     const table = rows.length
-      ? `<table><thead><tr><th>Checked</th><th>Status</th></tr></thead><tbody>
+      ? `<table><thead><tr><th>Last checked</th><th>Status</th></tr></thead><tbody>
           ${rows.map(r => `<tr><td>${fmtDateTime(r.checked_at)}</td><td><span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(r.status)}</span></td></tr>`).join('')}
         </tbody></table>`
       : '<p class="muted">No status checks in the last 24h yet.</p>';

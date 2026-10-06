@@ -5217,6 +5217,14 @@ setInterval(() => {
 monitoring.pollUnifiSystems().catch((err) => console.error('[monitoring] poll cycle error', err));
 }, 60 * 1000);
 
+// Drop monitoring history older than two weeks, once an hour (and once
+// shortly after boot). Nothing reads past 24 hours; alerts are kept.
+const pruneHistory = () => monitoring.pruneStatusHistory()
+.then((n) => { if (n) console.log(`[monitoring] dropped ${n} old status row(s)`); })
+.catch((err) => console.error('[monitoring] history prune error', err));
+setTimeout(pruneHistory, 90 * 1000);
+setInterval(pruneHistory, 60 * 60 * 1000);
+
 // One UniFi connection check shortly after boot, so a new key shows up
 // in Render's logs as "N console(s), M device(s)" without anyone signing in.
 setTimeout(() => { monitoring.logUnifiProbe().catch((err) => console.error('[monitoring] UniFi check error', err)); }, 8000);
