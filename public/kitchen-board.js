@@ -1,5 +1,6 @@
 // Kitchen board (patch_055). Opened by the kitchen TV with ?device=TOKEN,
-// or by a signed-in owner/manager (location picker + a Settings link).
+// or by the signed-in owner (location picker + Settings) or a manager
+// where the owner has turned it on for them (patch_057).
 // Flips screen A (scoreboard) and B (hour by hour) on a timer, refreshes
 // the numbers every 60 seconds, shows a stale banner when the newest
 // SpotOn pull is more than 15 minutes old. No labor dollars anywhere.
@@ -127,9 +128,11 @@ function screenB() {
 
 function toolbar() {
   if (DEVICE) return '';
-  const locs = (typeof getPerson === 'function' && getPerson()) ? (JSON.parse(localStorage.getItem('bp_locations') || '[]')) : [];
+  const person = typeof getPerson === 'function' ? getPerson() : null;
+  const locs = person ? (JSON.parse(localStorage.getItem('bp_locations') || '[]')) : [];
   const opts = locs.map((l) => `<option value="${esc(l.id)}" ${String(l.id) === String(LOCATION_ID) ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
-  return `<div class="toolbar">${opts ? `<select onchange="switchLocation(this.value)">${opts}</select>` : ''}<a href="/kitchen-board-settings.html${LOCATION_ID ? `?location_id=${encodeURIComponent(LOCATION_ID)}` : ''}">Settings</a><a href="/dashboard.html">Dashboard</a><button onclick="flip()">Flip</button></div>`;
+  const settings = person && person.role === 'owner' ? `<a href="/kitchen-board-settings.html${LOCATION_ID ? `?location_id=${encodeURIComponent(LOCATION_ID)}` : ''}">Settings</a>` : '';
+  return `<div class="toolbar">${opts ? `<select onchange="switchLocation(this.value)">${opts}</select>` : ''}${settings}<a href="/dashboard.html">Dashboard</a><button onclick="flip()">Flip</button></div>`;
 }
 
 function render() {

@@ -254,10 +254,15 @@ async function employeesReviewCount(person) {
     tiles.push(tileHtml({ icon: ICONS.venue_control, label: 'TV Staff', href: '/tv-staff.html' }));
   }
 
-  // Kitchen board (patch_055): the kitchen TV's numbers, and its settings.
-  // Owner and managers.
-  if (person.role === 'owner' || person.role === 'manager') {
+  // Kitchen board (patch_055/057): the owner gets its settings; a manager
+  // gets the board itself, where the owner has turned that on.
+  if (person.role === 'owner') {
     tiles.push(tileHtml({ icon: ICONS.scheduling, label: 'Kitchen Board', href: '/kitchen-board-settings.html' }));
+  } else if (person.role === 'manager') {
+    try {
+      const kb = await api('/api/kitchen-board/access');
+      if (kb.view && kb.view.length) tiles.push(tileHtml({ icon: ICONS.scheduling, label: 'Kitchen Board', href: `/kitchen-board.html?location_id=${encodeURIComponent(kb.view[0])}` }));
+    } catch (e) { /* no tile */ }
   }
 
   // Cash Out (patch_046): the bar iPad's opening/closing count. On the

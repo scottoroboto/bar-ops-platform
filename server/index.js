@@ -5138,9 +5138,20 @@ if (!ok(req.query.from) || !ok(req.query.to)) return res.status(400).json({ erro
 res.json({ dates: await kitchenboard.haveDates(req.vcSite.location_id, req.query.from, req.query.to) });
 });
 
-function kbManager(person, locationId) {
-return (person.role === 'owner' || person.role === 'manager') && atMyLocation(person, locationId);
+// Settings and TV links: the owner. The board: the owner, and managers at
+// a location where the owner has turned it on for them (patch_057).
+async function kbCanView(person, locationId) {
+if (person.role === 'owner') return true;
+if (person.role !== 'manager' || !atMyLocation(person, locationId)) return false;
+return (await kitchenboard.managerViewLocations([locationId])).length > 0;
 }
+
+// Where this manager may open the board; the dashboard shows its tile from this.
+app.get('/api/kitchen-board/access', auth.requireSession('light'), async (req, res) => {
+if (req.person.role === 'owner') return res.json({ view: locationIdsOf(req.person), settings: true });
+if (req.person.role !== 'manager') return res.json({ view: [], settings: false });
+res.json({ view: await kitchenboard.managerViewLocations(locationIdsOf(req.person)), settings: false });
+});
 
 // The board itself: ?device=TOKEN (the kitchen TV) or a signed-in owner/manager.
 app.get('/api/kitchen-board/view', async (req, res) => {
@@ -5152,7 +5163,7 @@ const header = req.headers.authorization || '';
 if (!header.startsWith('Bearer ')) return res.status(401).json({ error: req.query.device ? 'This kitchen TV link has been removed.' : 'Not signed in.' });
 return auth.requireSession('light')(req, res, async () => {
 const loc = pickLocation(req.person, req.query.location_id);
-if (!loc || !kbManager(req.person, loc)) return res.status(403).json({ error: 'Managers and the owner only.' });
+if (!loc || !(await kbCanView(req.person, loc))) return res.status(403).json({ error: req.person.role === 'manager' ? 'The kitchen board is not turned on for managers here.' : 'Owner only.' });
 res.json(await kitchenboard.view(loc));
 });
 }
@@ -5163,14 +5174,14 @@ res.status(400).json({ error: err.message });
 });
 
 app.get('/api/kitchen-board/settings/:locationId', auth.requireSession('light'), async (req, res) => {
-if (!kbManager(req.person, req.params.locationId)) return res.status(403).json({ error: 'Managers and the owner only.' });
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 const settings = await withServiceClient((client) => kitchenboard.settingsFor(client, req.params.locationId));
-const devices = req.person.role === 'owner' ? await kitchenboard.listDevices(req.params.locationId) : [];
+const devices = await kitchenboard.listDevices(req.params.locationId);
 res.json({ settings, devices, pulls: await kitchenboard.recentPulls(req.params.locationId) });
 });
 
 app.post('/api/kitchen-board/settings/:locationId', auth.requireSession('full'), async (req, res) => {
-if (!kbManager(req.person, req.params.locationId)) return res.status(403).json({ error: 'Managers and the owner only.' });
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 try {
 res.json({ ok: true, settings: await kitchenboard.updateSettings(req.params.locationId, req.body, req.person.id) });
 } catch (err) {

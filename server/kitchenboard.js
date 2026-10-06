@@ -60,6 +60,17 @@ async function settingsFor(client, locationId) {
   return ins.rows[0];
 }
 
+// Which of these locations show managers the board (patch_057). A
+// location with no settings row yet counts as on, matching the default.
+async function managerViewLocations(locationIds) {
+  if (!locationIds.length) return [];
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query('SELECT location_id, managers_can_view FROM kb_settings WHERE location_id = ANY($1::uuid[])', [locationIds]);
+    const off = new Set(rows.filter((r) => !r.managers_can_view).map((r) => String(r.location_id)));
+    return locationIds.filter((id) => !off.has(String(id)));
+  });
+}
+
 async function siteTz(client, locationId) {
   const { rows } = await client.query('SELECT timezone FROM vc_sites WHERE location_id = $1', [locationId]);
   return (rows[0] && rows[0].timezone) || DEFAULT_TZ;
@@ -87,13 +98,15 @@ async function updateSettings(locationId, body, personId) {
       rotate_seconds: b.rotateSeconds != null ? Math.round(numIn(b.rotateSeconds, 10, 600)) : cur.rotate_seconds,
       day_start_hour: b.dayStartHour != null ? Math.round(numIn(b.dayStartHour, 0, 12)) : cur.day_start_hour,
       show_names: b.showNames != null ? !!b.showNames : cur.show_names,
+      managers_can_view: b.managersCanView != null ? !!b.managersCanView : cur.managers_can_view,
     };
     const { rows } = await client.query(
       `UPDATE kb_settings SET kitchen_roles = $2, food_keys = $3, food_goal_weekday = $4, food_goal_weekend = $5, labor_goal_weekday = $6,
          labor_goal_weekend = $7, labor_goal_week = $8, slow_night_line = $9, rotate_seconds = $10, day_start_hour = $11, show_names = $12,
-         updated_at = now(), updated_by = $13 WHERE location_id = $1 RETURNING *`,
+         managers_can_view = $14, updated_at = now(), updated_by = $13 WHERE location_id = $1 RETURNING *`,
       [locationId, next.kitchen_roles, next.food_keys, next.food_goal_weekday, next.food_goal_weekend, next.labor_goal_weekday,
-        next.labor_goal_weekend, next.labor_goal_week, next.slow_night_line, next.rotate_seconds, next.day_start_hour, next.show_names, personId || null],
+        next.labor_goal_weekend, next.labor_goal_week, next.slow_night_line, next.rotate_seconds, next.day_start_hour, next.show_names, personId || null,
+        next.managers_can_view],
     );
     return rows[0];
   });
@@ -415,4 +428,4 @@ async function recentPulls(locationId, limit = 12) {
   return withServiceClient(async (client) => (await client.query('SELECT at, ok, error, ms, punches FROM kb_pulls WHERE location_id = $1 ORDER BY at DESC LIMIT $2', [locationId, limit])).rows);
 }
 
-module.exports = { ingest, view, settingsFor, updateSettings, createDevice, listDevices, revokeDevice, locationForDevice, recentPulls, haveDates, foodFromSales, businessDate };
+module.exports = { ingest, view, settingsFor, updateSettings, managerViewLocations, createDevice, listDevices, revokeDevice, locationForDevice, recentPulls, haveDates, foodFromSales, businessDate };

@@ -10,7 +10,7 @@ function locId() { return document.getElementById('kbLocation').value; }
 function showMsg(text, kind) { document.getElementById('msgBox').innerHTML = text ? `<div class="msg ${kind || 'success'}">${escapeHtml(text)}</div>` : ''; }
 
 async function init() {
-  if (!person || !['owner', 'manager'].includes(person.role)) { document.getElementById('app').innerHTML = '<div class="card"><p>Managers and the owner only.</p></div>'; return; }
+  if (!person || person.role !== 'owner') { document.getElementById('app').innerHTML = '<div class="card"><p>Owner only. Managers open the board itself from the Dashboard when it is turned on for them.</p></div>'; return; }
   const locs = await api('/api/locations');
   LOCATIONS = (Array.isArray(locs) ? locs : []).filter((l) => person.role === 'owner' || myLocationIds(person).includes(String(l.id)));
   const sel = document.getElementById('kbLocation');
@@ -34,8 +34,8 @@ async function loadAll() {
     document.getElementById('kitchenRoles').value = (s.kitchen_roles || []).join(', ');
     document.getElementById('foodKeys').value = (s.food_keys || []).join(', ');
     document.getElementById('showNames').checked = !!s.show_names;
-    const dc = document.getElementById('devicesCard');
-    dc.style.display = person.role === 'owner' ? '' : 'none';
+    document.getElementById('managersCanView').checked = !!s.managers_can_view;
+    document.getElementById('devicesCard').style.display = '';
     document.getElementById('deviceList').innerHTML = (devices || []).map((d) => `<div class="kb-dev"><span><b>${escapeHtml(d.name)}</b> <span class="muted" style="font-size:12px;">since ${new Date(d.created_at).toLocaleDateString()}</span></span>
       <button class="small ghost" style="margin:0;" onclick="removeDevice('${d.id}', '${escapeHtml(d.name).replace(/'/g, '&#39;')}')">Remove</button></div>`).join('') || '<div class="muted" style="font-size:12px;">No TV links yet.</div>';
     document.getElementById('pulls').innerHTML = (pulls || []).map((p) => `<tr><td>${new Date(p.at).toLocaleString([], { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric' })}</td>
@@ -49,6 +49,7 @@ async function saveSettings() {
   body.kitchenRoles = document.getElementById('kitchenRoles').value;
   body.foodKeys = document.getElementById('foodKeys').value;
   body.showNames = document.getElementById('showNames').checked;
+  body.managersCanView = document.getElementById('managersCanView').checked;
   try {
     await withStepUp(() => api(`/api/kitchen-board/settings/${locId()}`, { method: 'POST', body }));
     showMsg('Saved. The board picks it up within a minute.');
