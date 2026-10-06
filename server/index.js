@@ -16,6 +16,7 @@ const cashout = require('./cashout');
 const vclights = require('./vclights');
 const inventorycontrol = require('./inventorycontrol');
 const amusement = require('./amusement');
+const kitchenboard = require('./kitchenboard');
 const notify = require('./notify');
 const jotform = require('./jotform');
 const multer = require('multer');
@@ -5115,6 +5116,74 @@ app.get('/api/amusement/report', auth.requireSession('light'), amusementRoute('o
   amusement.report(client, { days: req.query.days })));
 
 const PORT = process.env.PORT || 3001;
+
+// ---------------------------------------------------------------------
+// Kitchen board (patch_055, T2 Kitchen Display spec, Oct 2026). The box
+// posts SpotOn pulls; the kitchen TV reads the board with a device link;
+// owners and managers read it signed in and edit goals and device links.
+// view() never returns a labor dollar amount or a pay rate.
+// ---------------------------------------------------------------------
+app.post('/api/venue/agent/kitchen/pull', requireAgentAuth(), async (req, res) => {
+try {
+res.json(await kitchenboard.ingest(req.vcSite.location_id, req.body || {}));
+} catch (err) {
+console.error('[kitchen] ingest failed:', err.message);
+res.status(400).json({ error: err.message });
+}
+});
+
+function kbManager(person, locationId) {
+return (person.role === 'owner' || person.role === 'manager') && atMyLocation(person, locationId);
+}
+
+// The board itself: ?device=TOKEN (the kitchen TV) or a signed-in owner/manager.
+app.get('/api/kitchen-board/view', async (req, res) => {
+try {
+let locationId = null;
+if (req.query.device) locationId = await kitchenboard.locationForDevice(String(req.query.device));
+if (!locationId) {
+const header = req.headers.authorization || '';
+if (!header.startsWith('Bearer ')) return res.status(401).json({ error: req.query.device ? 'This kitchen TV link has been removed.' : 'Not signed in.' });
+return auth.requireSession('light')(req, res, async () => {
+const loc = pickLocation(req.person, req.query.location_id);
+if (!loc || !kbManager(req.person, loc)) return res.status(403).json({ error: 'Managers and the owner only.' });
+res.json(await kitchenboard.view(loc));
+});
+}
+res.json(await kitchenboard.view(locationId));
+} catch (err) {
+res.status(400).json({ error: err.message });
+}
+});
+
+app.get('/api/kitchen-board/settings/:locationId', auth.requireSession('light'), async (req, res) => {
+if (!kbManager(req.person, req.params.locationId)) return res.status(403).json({ error: 'Managers and the owner only.' });
+const settings = await withServiceClient((client) => kitchenboard.settingsFor(client, req.params.locationId));
+const devices = req.person.role === 'owner' ? await kitchenboard.listDevices(req.params.locationId) : [];
+res.json({ settings, devices, pulls: await kitchenboard.recentPulls(req.params.locationId) });
+});
+
+app.post('/api/kitchen-board/settings/:locationId', auth.requireSession('full'), async (req, res) => {
+if (!kbManager(req.person, req.params.locationId)) return res.status(403).json({ error: 'Managers and the owner only.' });
+try {
+res.json({ ok: true, settings: await kitchenboard.updateSettings(req.params.locationId, req.body, req.person.id) });
+} catch (err) {
+res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+// Device links: owner only (shown once, like bar iPads).
+app.post('/api/kitchen-board/devices/:locationId', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+const d = await kitchenboard.createDevice(req.params.locationId, (req.body || {}).name, req.person.id);
+const base = `${req.protocol}://${req.get('host')}`;
+res.json({ ok: true, device: { id: d.id, name: d.name, created_at: d.created_at }, url: `${base}/kitchen-board.html?device=${encodeURIComponent(d.token)}` });
+});
+app.post('/api/kitchen-board/devices/:id/remove', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+res.json({ ok: !!(await kitchenboard.revokeDevice(req.params.id, req.person.id)) });
+});
+
 app.listen(PORT, () => console.log(`Bar platform listening on http://localhost:${PORT}`));
 
 // Daily safety net, same idea as the Apps Script midnight trigger.

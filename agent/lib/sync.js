@@ -162,6 +162,15 @@ async function pushWans(wans) {
   return res.json().catch(() => ({}));
 }
 
+// Kitchen board (Oct 2026): one pull of SpotOn's reports, or a failure.
+async function kitchenPull(payload) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/kitchen/pull`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`kitchen pull push failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+  return res.json().catch(() => ({}));
+}
+
 async function reportTvToken(tvId, wsToken) {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/tvs/${tvId}/token`, {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({ ws_token: wsToken }),
@@ -476,7 +485,7 @@ module.exports = {
   pushWans,
   pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
-  reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems,
+  reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems, kitchenPull,
   createScene, pushEvent, updateEvent, deleteEvent, reportEventState,
   takeBackupNow, listBackups, restoreBackup, pushActivity, pushHealth,
   pollCommands,

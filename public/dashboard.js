@@ -254,6 +254,12 @@ async function employeesReviewCount(person) {
     tiles.push(tileHtml({ icon: ICONS.venue_control, label: 'TV Staff', href: '/tv-staff.html' }));
   }
 
+  // Kitchen board (patch_055): the kitchen TV's numbers, and its settings.
+  // Owner and managers.
+  if (person.role === 'owner' || person.role === 'manager') {
+    tiles.push(tileHtml({ icon: ICONS.scheduling, label: 'Kitchen Board', href: '/kitchen-board-settings.html' }));
+  }
+
   // Cash Out (patch_046): the bar iPad's opening/closing count. On the
   // trusted iPad itself, for the owner (who sets each iPad up once), and
   // for managers with drawers-and-bags Cash Handling access or above.

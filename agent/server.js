@@ -15,6 +15,7 @@ const speedtest = require('./lib/speedtest');
 const sonos = require('./lib/sonos');
 const pandora = require('./lib/pandora');
 const sports = require('./lib/sports');
+const kitchen = require('./lib/kitchen');
 const lights = require('./lib/lights');
 const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
@@ -48,6 +49,7 @@ app.get('/api/status', (req, res) => {
     lastConfigCheckAt: cache.get('lastConfigCheckAt'),
     lastHeartbeatAt: cache.get('lastHeartbeatAt'),
     lastHeartbeatOk: cache.get('lastHeartbeatOk'),
+    kitchen: kitchen.status(),
   });
 });
 
@@ -1210,6 +1212,7 @@ app.listen(config.PORT, () => {
   speedtest.start();
   sonos.start();
   pandora.start();
+  kitchen.start();
   sports.start({
     receivers: sportsReceivers,
     tune: (slots, major, minor, via, actor) => tuneSlots(slots, major, minor, via, actor),
