@@ -85,8 +85,12 @@ async function pullOnce() {
 }
 
 async function tick() {
-  if (running || !spoton.enabled()) return;
-  if (!openNow()) { if (session) { await session.close().catch(() => {}); session = null; } return; }
+  if (running || backfilling || !spoton.enabled()) return;
+  if (!openNow()) {
+    if (session && !backfilling) { await session.close().catch(() => {}); session = null; }
+    nightly().catch(() => {});
+    return;
+  }
   running = true;
   try {
     let payload;
@@ -113,8 +117,106 @@ async function tick() {
   }
 }
 
+// ---- history ---------------------------------------------------------------
+// Past days, read once so week / month / year to date are real. Runs by
+// itself overnight (2am-7am, after the kitchen's last pull) for any day
+// since BACKFILL_FROM the cloud doesn't have yet, and from
+// tools/spoton-backfill.js by hand.
+const BACKFILL_FROM = process.env.SPOTON_BACKFILL_FROM || `${new Date().getFullYear()}-01-01`;
+const NIGHT_FROM = 2 * 60;   // 2:00am
+const NIGHT_UNTIL = 7 * 60;  // 7:00am
+let backfilling = false;
+
+const ymdOk = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+function todayYmd() { return new Date().toLocaleDateString('en-CA', { timeZone: tz() }); }
+function addDays(ymd, n) { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function mmdd(ymd) { const [y, m, d] = ymd.split('-'); return `${m}-${d}-${y}`; }
+function monthEnd(ymd) { const [y, m] = ymd.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); }
+// A punch's business day: its clock-in day, with 12am-4am counting toward the day before.
+function bizDate(clockInLocal) {
+  const m = String(clockInLocal || '').match(/^(\d{4}-\d{2}-\d{2})T(\d{2})/);
+  if (!m) return null;
+  return Number(m[2]) < 4 ? addDays(m[1], -1) : m[1];
+}
+
+async function backfill({ from = BACKFILL_FROM, to = null, force = false, log = () => {}, stopWhen = () => false } = {}) {
+  to = to || addDays(todayYmd(), -1);
+  if (!ymdOk(from) || from > to) throw new Error('Bad backfill range.');
+  const have = force ? [] : await sync.kitchenHave(from, to);
+  const haveSet = new Set(have);
+  const days = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) if (!haveSet.has(d)) days.push(d);
+  const out = { planned: days.length, alreadyStored: have.length, done: 0, failed: 0, stopped: false };
+  if (!days.length) return out;
+  log(`${from} to ${to}: ${days.length} day(s) to read${have.length ? `, ${have.length} already stored` : ''}`);
+  const own = !session;
+  if (!session) session = new spoton.Session({ log: (m) => log(`  ${m}`) });
+  const t0 = Date.now();
+  try {
+    await session.ensureSignedIn();
+    for (let mStart = `${from.slice(0, 7)}-01`; mStart <= to && !out.stopped; mStart = addDays(monthEnd(mStart), 1)) {
+      const mEnd = monthEnd(mStart) < to ? monthEnd(mStart) : to;
+      const inMonth = days.filter((d) => d >= mStart && d <= mEnd);
+      if (!inMonth.length) continue;
+      const byDay = new Map();
+      try {
+        // A day either side too, so shifts past midnight land on the right day.
+        const cap = await session.fetchReport('employeetime', LOCATION_KEY, mmdd(addDays(mStart, -1)), mmdd(addDays(mEnd, 1)));
+        for (const p of punchesFrom(spoton.employeeTimeRows(cap) || [])) {
+          const d = bizDate(p.clockIn);
+          if (!d) continue;
+          if (!byDay.has(d)) byDay.set(d, []);
+          byDay.get(d).push(p);
+        }
+        log(`${mStart.slice(0, 7)}: ${[...byDay.values()].reduce((a, x) => a + x.length, 0)} shifts on SpotOn`);
+      } catch (err) {
+        log(`${mStart.slice(0, 7)}: Employee Time failed (${err.message}); this month's days will have no labor`);
+      }
+      for (const d of inMonth) {
+        if (stopWhen()) { out.stopped = true; log('stopping for now; the rest another time'); break; }
+        let dsr = null;
+        try {
+          const x = spoton.dsrData(await session.fetchReport('dsr', LOCATION_KEY, mmdd(d)));
+          dsr = x ? { sales: x.sales || [], labor: x.labor || [], daypart: x.daypart || [] } : null;
+        } catch (err) { log(`  ${d}: sales recap failed (${err.message})`); }
+        try {
+          const r = await sync.kitchenPull({ backfill: true, businessDate: d, reportDate: mmdd(d), punches: byDay.get(d) || [], dsr });
+          out.done += 1;
+          const left = Math.round(((Date.now() - t0) / out.done) * (days.length - out.done) / 60000);
+          log(`  ${d}: ${r.punches} shift(s), food ${r.food == null ? 'not found' : `$${Math.round(r.food)}`}   (${out.done}/${days.length}, ~${left} min left)`);
+        } catch (err) {
+          out.failed += 1;
+          log(`  ${d}: could not save (${err.message})`);
+        }
+      }
+    }
+  } finally {
+    if (own && session) { await session.close().catch(() => {}); session = null; }
+  }
+  return out;
+}
+
+// Overnight: once per night, between 2am and 7am, when the kitchen pulls are off.
+async function nightly() {
+  if (backfilling || running || !spoton.enabled()) return;
+  const m = minutesNow();
+  if (m < NIGHT_FROM || m >= NIGHT_UNTIL) return;
+  const today = todayYmd();
+  if (cache.get('kitchenBackfillNight') === today) return;
+  backfilling = true;
+  try {
+    const r = await backfill({ log: (x) => console.log(`[kitchen] history: ${x}`), stopWhen: () => minutesNow() >= NIGHT_UNTIL - 5 });
+    if (!r.stopped) cache.set('kitchenBackfillNight', today);
+    if (r.planned) console.log(`[kitchen] history: ${r.done} day(s) stored tonight, ${r.failed} failed${r.stopped ? ', more tomorrow night' : ''}`);
+  } catch (err) {
+    console.error('[kitchen] history failed:', err.message);
+  } finally {
+    backfilling = false;
+  }
+}
+
 function status() {
-  return { enabled: spoton.enabled(), open: openNow(), lastOkAt: lastOkAt ? new Date(lastOkAt).toISOString() : null, lastError, failures };
+  return { enabled: spoton.enabled(), open: openNow(), lastOkAt: lastOkAt ? new Date(lastOkAt).toISOString() : null, lastError, failures, backfilling, historyFrom: BACKFILL_FROM, lastHistoryNight: cache.get('kitchenBackfillNight') || null };
 }
 
 function start() {
@@ -130,4 +232,4 @@ function stop() {
   if (session) session.close().catch(() => {});
 }
 
-module.exports = { start, stop, tick, status, punchesFrom, pullOnce };
+module.exports = { start, stop, tick, status, punchesFrom, pullOnce, backfill, nightly };
