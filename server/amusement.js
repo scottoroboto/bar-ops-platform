@@ -112,6 +112,8 @@ async function listLocations(client, { includeInactive = false } = {}) {
             lastc.pos_status AS last_pos_status,
             draft.id AS draft_collection_id,
             draft.started_at AS draft_started_at,
+            behind.names AS behind_names,
+            behind.oldest_at AS oldest_game_collected_at,
             (SELECT count(*) FROM amusement_collections c WHERE c.location_id = al.id AND c.status = 'final' AND c.pos_status = 'queued')::int AS queued_pos_count
      FROM amusement_locations al
      LEFT JOIN locations l ON l.id = al.location_id
@@ -123,13 +125,26 @@ async function listLocations(client, { includeInactive = false } = {}) {
        SELECT id, started_at FROM amusement_collections c
        WHERE c.location_id = al.id AND c.status = 'draft' LIMIT 1
      ) draft ON true
+     LEFT JOIN LATERAL (
+       -- Each active game's own last emptying (partial visits, patch_058):
+       -- the one that has waited longest sets the location's clock, and
+       -- games skipped at the last visit are named.
+       SELECT min(gl.last_at) AS oldest_at,
+              array_remove(array_agg(gl.name ORDER BY gl.sort_order, gl.name) FILTER (WHERE lastc.finalized_at IS NOT NULL AND (gl.last_at IS NULL OR gl.last_at < lastc.finalized_at)), NULL) AS names
+       FROM amusement_games g2
+       JOIN LATERAL (
+         SELECT g2.name, g2.sort_order, (SELECT max(c3.finalized_at) FROM amusement_collection_items i3 JOIN amusement_collections c3 ON c3.id = i3.collection_id AND c3.status = 'final' WHERE i3.game_id = g2.id) AS last_at
+       ) gl ON true
+       WHERE g2.current_location_id = al.id AND g2.status = 'active'
+     ) behind ON true
      ${includeInactive ? '' : 'WHERE al.active = true'}
      ORDER BY al.is_storage, al.sort_order, al.name`
   );
   const now = Date.now();
   return rows.map((r) => {
-    const days = r.last_collected_at ? Math.floor((now - new Date(r.last_collected_at).getTime()) / 86400000) : null;
-    return { ...r, days_since: days, due: !r.is_storage && (days === null ? r.game_count > 0 : days >= r.collect_every_days) };
+    const since = r.oldest_game_collected_at || r.last_collected_at;
+    const days = since ? Math.floor((now - new Date(since).getTime()) / 86400000) : null;
+    return { ...r, days_since: days, behind_names: r.behind_names || [], due: !r.is_storage && (days === null ? r.game_count > 0 : days >= r.collect_every_days) };
   });
 }
 
@@ -191,7 +206,7 @@ async function listGames(client, { locationId = null, includeRetired = false } =
      LEFT JOIN LATERAL (
        SELECT count(*)::int AS collections_90d,
               COALESCE(sum(i.total), 0) AS earned_90d,
-              GREATEST(1, EXTRACT(EPOCH FROM (max(c.finalized_at) - min(COALESCE(c.period_start, c.started_at)))) / 86400)::numeric AS days_90d
+              GREATEST(1, EXTRACT(EPOCH FROM (max(c.finalized_at) - min(COALESCE(i.period_start, c.period_start, c.started_at)))) / 86400)::numeric AS days_90d
        FROM amusement_collection_items i
        JOIN amusement_collections c ON c.id = i.collection_id AND c.status = 'final'
        WHERE i.game_id = g.id AND c.finalized_at > now() - interval '90 days'
@@ -340,8 +355,8 @@ async function getGamePlacements(client, id) {
 // Per-game earnings history: every final collection line, newest first.
 async function getGameHistory(client, id, limit = 26) {
   const { rows } = await client.query(
-    `SELECT i.*, c.finalized_at, c.period_start, c.started_at, al.name AS location_name,
-            GREATEST(1, EXTRACT(EPOCH FROM (c.finalized_at - COALESCE(c.period_start, c.started_at))) / 86400)::numeric(8,2) AS period_days
+    `SELECT i.*, c.finalized_at, c.started_at, al.name AS location_name, COALESCE(i.period_start, c.period_start) AS period_start,
+            GREATEST(1, EXTRACT(EPOCH FROM (c.finalized_at - COALESCE(i.period_start, c.period_start, c.started_at))) / 86400)::numeric(8,2) AS period_days
      FROM amusement_collection_items i
      JOIN amusement_collections c ON c.id = i.collection_id AND c.status = 'final'
      JOIN amusement_locations al ON al.id = c.location_id
@@ -377,7 +392,9 @@ async function getCollectionSheet(client, id) {
             i.bills_1, i.bills_5, i.bills_10, i.bills_20, i.bills_flat_amount, i.bills_amount, i.total, i.meter_reading,
             i.condition, i.note, i.weight_photo_path, i.weight_read_value, i.weight_read_unit, i.entered_at, i.updated_at,
             i.screen_photo_path, i.screen_total, i.screen_cleared, i.bills_counted_amount,
-            eb.name AS entered_by_name
+            eb.name AS entered_by_name,
+            (SELECT max(c2.finalized_at) FROM amusement_collection_items i2 JOIN amusement_collections c2 ON c2.id = i2.collection_id AND c2.status = 'final'
+              WHERE i2.game_id = g.id AND c2.id <> $1) AS last_collected_at
      FROM amusement_games g
      LEFT JOIN amusement_collection_items i ON i.game_id = g.id AND i.collection_id = $1
      LEFT JOIN people eb ON eb.id = i.entered_by
@@ -481,13 +498,19 @@ async function upsertItem(client, collectionId, gameId, input, personId) {
     screenCleared = input.screenCleared;
     screenTotal = input.screenTotal === null || input.screenTotal === undefined || input.screenTotal === '' ? null : Math.max(0, num(input.screenTotal, 0));
   }
+  // This game's own period: since the last final sheet that emptied it
+  // (any location), else since the location's last visit (patch_058).
+  const { rows: prevRows } = await client.query(
+    `SELECT c.finalized_at FROM amusement_collection_items i JOIN amusement_collections c ON c.id = i.collection_id AND c.status = 'final'
+     WHERE i.game_id = $1 ORDER BY c.finalized_at DESC LIMIT 1`, [gameId]);
+  const periodStart = prevRows[0] ? prevRows[0].finalized_at : collection.period_start;
   const { rows } = await client.query(
     `INSERT INTO amusement_collection_items
        (collection_id, game_id, gross_weight, tare_weight, weight_unit, net_weight_g, quarter_weight_g, quarter_count, quarters_amount,
         bills_1, bills_5, bills_10, bills_20, bills_flat_amount, bills_amount, total, meter_reading, condition, note,
         weight_photo_path, weight_read_value, weight_read_unit, weight_confirmed_by, entered_by,
-        screen_photo_path, screen_total, screen_cleared, bills_counted_amount)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+        screen_photo_path, screen_total, screen_cleared, bills_counted_amount, period_start)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
      ON CONFLICT (collection_id, game_id) DO UPDATE SET
        screen_photo_path = COALESCE(EXCLUDED.screen_photo_path, amusement_collection_items.screen_photo_path),
        screen_total = EXCLUDED.screen_total, screen_cleared = EXCLUDED.screen_cleared, bills_counted_amount = EXCLUDED.bills_counted_amount,
@@ -503,7 +526,7 @@ async function upsertItem(client, collectionId, gameId, input, personId) {
     [collectionId, gameId, m.gross, m.tare, m.unit, m.netG, m.quarterG, m.coins, m.quarters,
       m.b1, m.b5, m.b10, m.b20, m.flat, m.bills, m.total, meter, condition, input.note || null,
       input.weightPhotoPath || null, readValue, input.weightReadUnit || null, personId, personId,
-      game.has_collection_screen ? (input.screenPhotoPath || null) : null, screenTotal, screenCleared, m.fromScreen ? m.billsCounted : null]
+      game.has_collection_screen ? (input.screenPhotoPath || null) : null, screenTotal, screenCleared, m.fromScreen ? m.billsCounted : null, periodStart]
   );
   await refreshTotals(client, collectionId);
   return rows[0];
@@ -547,17 +570,15 @@ async function updateCollectionNote(client, collectionId, note) {
   await client.query('UPDATE amusement_collections SET note = $2 WHERE id = $1', [collectionId, note || null]);
 }
 
-// Lock the sheet. Every active game at the location must have a line —
-// a game that genuinely produced nothing is recorded as $0 (weigh the
-// empty bucket, or type 0), not skipped, so the history is honest.
-async function finalizeCollection(client, collectionId, { finalizedBy, allowMissing = false }) {
+// Lock the sheet. A visit may empty only some of the games (patch_058):
+// the ones not on the sheet are simply not collected this time -- they
+// stay due, and their next line covers the whole period since they were
+// last emptied. A game that genuinely produced nothing is recorded as $0
+// (weigh the empty bucket, or type 0), never guessed.
+async function finalizeCollection(client, collectionId, { finalizedBy }) {
   const sheet = await getCollectionSheet(client, collectionId);
   if (!sheet) throw httpError('Collection not found.', 404);
   if (sheet.collection.status !== 'draft') return sheet.collection;
-  const missing = sheet.games.filter((g) => !g.item_id);
-  if (missing.length && !allowMissing) {
-    throw Object.assign(httpError(`${missing.length} game${missing.length === 1 ? '' : 's'} not weighed yet: ${missing.map((g) => g.name).join(', ')}.`), { missing: missing.map((g) => g.name) });
-  }
   if (!sheet.games.some((g) => g.item_id)) throw httpError('Nothing has been weighed on this sheet.');
   await refreshTotals(client, collectionId);
   const { rows } = await client.query(
@@ -616,7 +637,7 @@ async function report(client, { days = 90 } = {}) {
     `SELECT g.id, g.name, g.game_type, g.status, al.name AS location_name,
             count(i.id)::int AS collections, COALESCE(sum(i.total),0) AS earned,
             COALESCE(sum(i.quarters_amount),0) AS quarters, COALESCE(sum(i.bills_amount),0) AS bills,
-            COALESCE(sum(GREATEST(1, EXTRACT(EPOCH FROM (c.finalized_at - COALESCE(c.period_start, c.started_at))) / 86400)),0) AS days_covered,
+            COALESCE(sum(GREATEST(1, EXTRACT(EPOCH FROM (c.finalized_at - COALESCE(i.period_start, c.period_start, c.started_at))) / 86400)),0) AS days_covered,
             count(*) FILTER (WHERE i.condition = 'issue')::int AS issues
      FROM amusement_games g
      LEFT JOIN amusement_locations al ON al.id = g.current_location_id

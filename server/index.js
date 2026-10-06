@@ -4990,7 +4990,7 @@ app.post('/api/amusement/collections/:id/note', auth.requireSession('light'), am
   await amusement.updateCollectionNote(client, req.params.id, req.body.note);
 }));
 app.post('/api/amusement/collections/:id/finalize', auth.requireSession('light'), amusementRoute('collector', async (client, req) => ({
-  collection: await amusement.finalizeCollection(client, req.params.id, { finalizedBy: req.person.id, allowMissing: !!req.body.allowMissing }),
+  collection: await amusement.finalizeCollection(client, req.params.id, { finalizedBy: req.person.id }),
 })));
 // Multipart: an optional photo of the SpotOn ticket rides along with the
 // reference number, so a posted collection has proof at both ends.

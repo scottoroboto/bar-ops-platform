@@ -214,6 +214,7 @@ async function renderHome() {
       <div class="row"><div class="name">${escapeHtml(l.name)}</div>${status}</div>
       <div class="meta"><span>${l.game_count} game${l.game_count === 1 ? '' : 's'}</span>
         ${l.last_collected_at ? `<span>Last: ${fmtDay(l.last_collected_at)} · ${money(l.last_total)}</span>` : ''}
+        ${l.behind_names && l.behind_names.length ? `<span style="color:#f0c265;">Skipped last visit: ${escapeHtml(l.behind_names.join(', '))}</span>` : ''}
         ${l.queued_pos_count ? `<span style="color:#f0c265;">${l.queued_pos_count} not yet rung into SpotOn</span>` : ''}</div>
       ${cta}
     </div>`;
@@ -272,7 +273,7 @@ async function renderSheet(id) {
       ? (g.has_collection_screen && g.collection_from_screen
         ? `screen ${money(g.total)}${g.bills_counted_amount !== null && g.bills_counted_amount !== undefined ? ` · counted ${money(g.bills_counted_amount)} (audit)` : ''}${g.screen_cleared === false ? ' · <span style="color:#f0c265;">screen not cleared</span>' : ''}${g.condition === 'issue' ? ' · <span style="color:#f0c265;">issue</span>' : ''}`
         : `${g.gross_weight !== null ? `${num(g.gross_weight)} ${g.weight_unit} → ${money(g.quarters_amount)}` : 'no quarters'}${num(g.bills_amount) ? ` · bills ${money(g.bills_amount)}` : ''}${g.condition === 'issue' ? ' · <span style="color:#f0c265;">issue</span>' : ''}`)
-      : (isNext ? 'Tap to weigh' : 'Not weighed yet');
+      : `${isNext ? 'Tap to weigh' : 'Not collected yet'}${g.last_collected_at ? ` · last emptied ${daysAgo(g.last_collected_at)} d ago` : ' · never emptied'}`;
     return `<div class="am-game ${done ? 'done' : ''} ${g.condition === 'issue' ? 'issue' : ''} ${isNext ? 'next' : ''}" onclick="go('#weigh/${c.id}/${g.id}')">
       <span class="tick">${done ? ICON_TICK : ''}</span>
       <div class="body"><div class="name">${escapeHtml(g.name)} <span class="sub">· ${escapeHtml(g.tag_code)}${g.make || g.model ? ' · ' + escapeHtml([g.make, g.model].filter(Boolean).join(' ')) : ''}</span></div><div class="detail">${detail}</div></div>
@@ -307,7 +308,7 @@ async function renderSheet(id) {
         <div class="big">Total so far<div class="v">${money(sheet.totals.total)}</div></div>
       </div>
       <button class="primary" onclick="go('#review/${c.id}')" ${sheet.progress.done ? '' : 'disabled'}>Review &amp; finalize</button>
-      <div class="muted" style="text-align:center;">Draft saves as you go.${sheet.progress.total - sheet.progress.done > 0 ? ` ${sheet.progress.total - sheet.progress.done} game${sheet.progress.total - sheet.progress.done === 1 ? '' : 's'} still to weigh.` : ''}</div>
+      <div class="muted" style="text-align:center;">Draft saves as you go.${sheet.progress.total - sheet.progress.done > 0 ? ` ${sheet.progress.total - sheet.progress.done} game${sheet.progress.total - sheet.progress.done === 1 ? '' : 's'} not collected yet — finalize anyway if that's all for this visit; they stay due.` : ''}</div>
     </div></div>`;
 }
 
@@ -762,14 +763,15 @@ async function renderReview(collectionId) {
     <div class="card am-total"><div class="l">COLLECTION TOTAL</div><div class="n">${money(sheet.totals.total)}</div>
       <div class="meta"><span>Quarters ${money(sheet.totals.quarters)}</span><span>Bills ${money(sheet.totals.bills)}</span><span>${money(sheet.totals.total / days)} / day</span></div></div>
     ${c.scale_check_g !== null ? `<div class="muted" style="margin:-6px 0 12px; text-align:center;">Scale check: ${c.scale_check_expected_g !== null ? `${num(c.scale_check_expected_g)} g check weight` : 'the $10 roll'} read ${num(c.scale_check_g)} g${c.scale_check_ok ? ' ✓' : ' (out of tolerance)'}</div>` : ''}
-    ${missing.length && !isFinal ? `<div class="msg error">Not weighed yet: ${escapeHtml(missing.map((g) => g.name).join(', '))}. Finalize will record them as $0 if you continue.</div>` : ''}
+    ${missing.length && !isFinal ? `<div class="msg info">Not collected this visit: <strong>${escapeHtml(missing.map((g) => g.name).join(', '))}</strong>. That's fine — they stay due, and their next collection covers the whole time since they were last emptied. Go <a href="#collect/${c.id}">back to the sheet</a> if you meant to do them now.</div>` : ''}
+    ${missing.length && isFinal ? `<div class="muted" style="margin:-6px 0 12px; text-align:center;">Partial visit · not collected: ${escapeHtml(missing.map((g) => g.name).join(', '))}</div>` : ''}
     <div class="card" style="padding:4px 16px;"><table class="am-table"><thead><tr><th>Game</th><th class="r">Weight</th><th class="r">Bills</th><th class="r">Total</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${posBlock}
     ${isFinal && c.pos_photo_path ? `<div id="posPhotoBox"></div>` : ''}
     ${isFinal ? `<div class="card"><label for="cnote">Collection note</label><input id="cnote" value="${escapeHtml(c.note || '')}" placeholder="Anything to remember about this visit"><button class="secondary" onclick="saveNote('${c.id}')">Save note</button></div>` : ''}
     <div id="reviewStatus"></div>
     ${!isFinal ? `<div class="am-footer"><div class="inner">
-      <button class="primary" onclick="finalize('${c.id}', ${missing.length ? 'true' : 'false'})">Finalize · ${money(sheet.totals.total)}</button>
+      <button class="primary" onclick="finalize('${c.id}', ${missing.length})">Finalize${missing.length ? ` ${done.length} of ${sheet.games.length} games` : ''} · ${money(sheet.totals.total)}</button>
       <div class="am-grid2"><a class="secondary" style="text-align:center; padding:11px; border-radius:10px; border:1px solid var(--card-border); color:var(--muted); font-weight:600; font-size:14px; text-decoration:none;" href="#collect/${c.id}">Back to sheet</a><button class="ghost" style="margin:0; width:100%;" onclick="window.print()">Print / share</button></div>
     </div></div>` : ''}`;
   window.__posPhoto = null;
@@ -784,10 +786,10 @@ async function renderReview(collectionId) {
   }
 }
 
-async function finalize(id, hasMissing) {
-  if (hasMissing && !confirm('Some games haven\'t been weighed. Finalize anyway and record them as $0?')) return;
+async function finalize(id, missingCount) {
+  if (missingCount && !confirm(`Finalize with ${missingCount} game${missingCount === 1 ? '' : 's'} not collected this visit? ${missingCount === 1 ? 'It stays' : 'They stay'} due for next time.`)) return;
   try {
-    await api(`/api/amusement/collections/${id}/finalize`, { method: 'POST', body: { allowMissing: hasMissing } });
+    await api(`/api/amusement/collections/${id}/finalize`, { method: 'POST', body: {} });
     go('#review/' + id);
     route();
   } catch (e) { $('reviewStatus').innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
