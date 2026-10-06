@@ -72,6 +72,32 @@ function authorizeUrl(clientId) {
   return `${OAUTH_URL}/authorize?${q.toString()}`;
 }
 
+// Creates the box's OAuth app on the SmartThings account (what the
+// SmartThings CLI's "apps:create" -> OAuth-In App does), using a website
+// token that's only needed this once. Returns { clientId, clientSecret }.
+async function createApp(websiteToken, label) {
+  const name = `barops-${String(label || 'box').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Math.random().toString(36).slice(2, 7)}`;
+  const res = await fetchWithTimeout(`${BASE_URL}/apps`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${websiteToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      appName: name,
+      displayName: `Bar Ops ${label || ''}`.trim(),
+      description: 'Bar Ops venue control: turns TVs on and off.',
+      appType: 'API_ONLY',
+      classifications: ['CONNECTED_SERVICE'],
+      singleInstance: true,
+      oauth: { clientName: `Bar Ops ${label || ''}`.trim(), scope: SCOPES.split(' '), redirectUris: [REDIRECT_URI] },
+    }),
+  }, 15000);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.oauthClientId) {
+    const why = (data.error && (data.error.message || JSON.stringify(data.error.details || data.error))) || `HTTP ${res.status}`;
+    throw new Error(`SmartThings didn't create the app: ${why}`);
+  }
+  return { clientId: data.oauthClientId, clientSecret: data.oauthClientSecret, appId: data.app && data.app.appId };
+}
+
 async function signIn(clientId, clientSecret, code) {
   return tokenRequest({ clientId, clientSecret }, { grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI });
 }
@@ -162,6 +188,6 @@ function unmute(deviceId) { return sendCommand(deviceId, 'audioMute', 'unmute');
 function setMute(deviceId) { return mute(deviceId); }
 
 module.exports = {
-  configured, deviceIdFor, authorizeUrl, signIn, refresh, listTvs, REDIRECT_URI,
+  configured, deviceIdFor, authorizeUrl, createApp, signIn, refresh, listTvs, REDIRECT_URI,
   getSwitchState, getMuteState, switchOn, switchOff, volumeUp, volumeDown, mute, unmute, setMute,
 };

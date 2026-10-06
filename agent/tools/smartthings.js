@@ -2,7 +2,9 @@
 // SmartThings on this box: power-on for the TVs that ignore Wake-on-LAN
 // over Wi-Fi. One-time setup, then the box keeps its own sign-in.
 //   node tools/smartthings.js                 status: signed in? which TVs are linked?
-//   node tools/smartthings.js signin          sign in (needs the OAuth app's Client ID and Secret)
+//   node tools/smartthings.js setup           one-time: make the box's SmartThings app and sign in
+//                                             (asks for a temporary token from account.smartthings.com/tokens)
+//   node tools/smartthings.js signin          sign in again (uses the saved app)
 //   node tools/smartthings.js tvs             link SmartThings TVs to Bar Ops TVs (by name)
 //   node tools/smartthings.js test "TV 6" on  turn one TV on (or off) through SmartThings
 //   node tools/smartthings.js unlink "TV 6"   stop using SmartThings for one TV
@@ -26,20 +28,16 @@ async function status() {
   } else if (st.configured()) {
     console.log('Using SMARTTHINGS_TOKEN from .env (a website token: these expire after 24 hours). Run "signin" for a lasting one.');
   } else {
-    console.log('Not signed in. Run: node tools/smartthings.js signin');
+    console.log('Not signed in. Run: node tools/smartthings.js setup');
   }
   const m = map();
   const linked = tvs().filter((t) => m[String(t.id)] || t.st_device_id);
   console.log(linked.length ? `Linked TVs (power-on goes through SmartThings): ${linked.map((t) => t.name).join(', ')}` : 'No TVs linked yet. Run: node tools/smartthings.js tvs');
 }
 
-async function signin() {
-  console.log('You need the Client ID and Client Secret of your SmartThings OAuth app (see the steps you were given).');
-  const clientId = await ask('Client ID: ');
-  const clientSecret = await ask('Client Secret: ');
-  if (!clientId || !clientSecret) { console.log('Both are needed.'); return; }
+async function finishSignin(clientId, clientSecret) {
   console.log(`\n1. Open this link on your phone or computer and sign in with the Samsung account that has the TVs:\n\n${st.authorizeUrl(clientId)}\n`);
-  console.log(`2. Allow access. You'll land on a page at ${st.REDIRECT_URI} showing "code": "XXXXXX".`);
+  console.log(`2. Tap Allow. You'll land on a page at ${st.REDIRECT_URI} showing "code": "XXXXXX".`);
   const pasted = await ask('3. Paste the code here (or the whole address of that page): ');
   const m = pasted.match(/[?&]code=([^&\s]+)/) || pasted.match(/"code"\s*:\s*"([^"]+)"/);
   const code = m ? decodeURIComponent(m[1]) : pasted.replace(/"/g, '');
@@ -48,6 +46,25 @@ async function signin() {
   console.log('\nSigned in. The box keeps this session going by itself.');
   const list = await st.listTvs();
   console.log(`SmartThings sees ${list.length} TV(s). Next: node tools/smartthings.js tvs`);
+}
+
+async function setup() {
+  console.log('Make a temporary token at account.smartthings.com/tokens (tick everything under Apps and Devices).');
+  console.log('It is only used right now, to create the Bar Ops app on your SmartThings account.');
+  const token = await ask('Paste the token: ');
+  if (!token) { console.log('No token.'); return; }
+  const site = (cache.get('config') || {}).site || {};
+  const app = await st.createApp(token, site.name || 'box');
+  cache.set('smartthingsAuth', { clientId: app.clientId, clientSecret: app.clientSecret }); // the box keeps these; no need to copy them
+  console.log('Created the Bar Ops app on your SmartThings account.');
+  await finishSignin(app.clientId, app.clientSecret);
+  console.log('You can delete the temporary token now at account.smartthings.com/tokens.');
+}
+
+async function signin() {
+  const saved = cache.get('smartthingsAuth') || {};
+  if (saved.clientId && saved.clientSecret) return finishSignin(saved.clientId, saved.clientSecret);
+  console.log('No SmartThings app on this box yet. Run: node tools/smartthings.js setup');
 }
 
 async function link() {
@@ -87,6 +104,7 @@ async function test(who, op) {
 (async () => {
   const [cmd, a, b] = process.argv.slice(2);
   if (!cmd) await status();
+  else if (cmd === 'setup') await setup();
   else if (cmd === 'signin') await signin();
   else if (cmd === 'tvs') await link();
   else if (cmd === 'test') await test(a, b);
@@ -94,7 +112,7 @@ async function test(who, op) {
     const tv = tvs().find((t) => squash(t.name) === squash(a));
     const m = map();
     if (tv) { delete m[String(tv.id)]; cache.set('smartthingsDevices', m); console.log(`${tv.name} unlinked.`); } else console.log(`No Bar Ops TV named "${a}".`);
-  } else console.log('Commands: (none) | signin | tvs | test "TV 6" on|off | unlink "TV 6"');
+  } else console.log('Commands: (none) | setup | signin | tvs | test "TV 6" on|off | unlink "TV 6"');
   rl.close();
   process.exit(0);
 })().catch((err) => { console.error('Failed:', err.message); process.exit(1); });
