@@ -11,6 +11,8 @@
 //   node tools/spoton-test.js --sales none     skip the Daily Sales Recap
 //   node tools/spoton-test.js --show        also print the first row's VALUES on this screen (don't paste)
 //   node tools/spoton-test.js --fresh       forget the saved sign-in and log in again
+//   node tools/spoton-test.js --keys 28     field names (no values) of saved capture #28
+//   node tools/spoton-test.js --reports     the site's report list (names and ids)
 //
 // SPOTON_USER / SPOTON_PASS in agent/.env (asked for and saved if missing).
 // The sign-in is kept in agent/.spoton-session.json; captures go to
@@ -151,6 +153,42 @@ async function codePrompt(page) {
   const input = await visibleInput(page, sel);
   if (input && !(await visibleInput(page, ['input[type="password"]']))) return input;
   return null;
+}
+
+// Field names (no values) of one saved capture, every level, for working
+// out the data layout:  node tools/spoton-test.js --keys 28
+function keyTree(v, prefix, out, depth) {
+  if (depth > 6 || out.length > 400) return;
+  if (Array.isArray(v)) { out.push(`${prefix}[] (${v.length} items)`); if (v.length) keyTree(v[0], `${prefix}[]`, out, depth + 1); return; }
+  if (v && typeof v === 'object') {
+    for (const k of Object.keys(v)) {
+      const x = v[k];
+      const t = Array.isArray(x) ? 'array' : x === null ? 'null' : typeof x;
+      if (t === 'object' || t === 'array') keyTree(x, `${prefix}.${k}`, out, depth + 1);
+      else out.push(`${prefix}.${k}: ${t}`);
+    }
+  }
+}
+const keysArg = opt('--keys');
+if (keysArg) {
+  const f = fs.readdirSync(CAPTURE_DIR).find((n) => n.startsWith(`${String(keysArg).padStart(2, '0')}-`));
+  if (!f) { console.log(`No capture #${keysArg} in spoton-capture/. Run the test first.`); process.exit(1); }
+  const saved = JSON.parse(fs.readFileSync(path.join(CAPTURE_DIR, f), 'utf8'));
+  const out = [];
+  keyTree(saved.body, '', out, 0);
+  console.log(`================ PASTE FROM HERE ================\n#${keysArg} ${saved.url.replace(/^https?:\/\/[^/]+/, '').split('?')[0]} -- field names only:\n${out.join('\n')}\n================= PASTE TO HERE =================`);
+  process.exit(0);
+}
+// The site's report list (names and ids, no bar data):  --reports
+if (flag('--reports')) {
+  const found = [];
+  for (const f of fs.readdirSync(CAPTURE_DIR).filter((n) => n.endsWith('.json'))) {
+    const saved = JSON.parse(fs.readFileSync(path.join(CAPTURE_DIR, f), 'utf8'));
+    const q = saved.body && saved.body.data && saved.body.data.queries;
+    if (Array.isArray(q) && q.length > found.length) found.splice(0, found.length, ...q.map((x) => `${String(x.templateName).padEnd(34)} ${String(x.displayName).padEnd(40)} ${x._id || ''}  ${x.reportType || ''}`));
+  }
+  console.log(found.length ? `================ PASTE FROM HERE ================\n${found.join('\n')}\n================= PASTE TO HERE =================` : 'No report list in spoton-capture/. Run the test first.');
+  process.exit(0);
 }
 
 (async () => {
@@ -318,7 +356,7 @@ async function codePrompt(page) {
   for (const l of reportLinks.slice(0, 40)) console.log(`  ${l}`);
   console.log(`\nData responses (${captured.length}):`);
   for (const c of captured) {
-    const p = c.url.replace(/^https?:\/\/[^/]+/, '').replace(/location_key=\d+/, 'location_key=…').replace(/([?&](token|key|auth)[^&]*)/gi, '…');
+    const p = c.url.replace(/^https?:\/\/[^/]+/, '').replace(/location_key=\d+/, 'location_key=…').replace(/([?&](token|key|auth)[^&]*)/gi, '…').replace(/\/contexts\/[^/?]+/, '/contexts/…');
     console.log(`\n#${c.n} [${c.phase}] ${c.method} ${p.slice(0, 160)} -> ${c.status}, ${(c.size / 1024).toFixed(1)} KB`);
     console.log(`   ${shape(c.body).slice(0, 900)}`);
   }
