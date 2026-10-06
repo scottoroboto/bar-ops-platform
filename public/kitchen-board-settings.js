@@ -64,7 +64,9 @@ async function makeDevice() {
     document.getElementById('deviceSteps').innerHTML = `<div class="msg success" style="margin-top:8px;">
       <b>${escapeHtml(r.device.name)}</b> is set up. This link is shown once -- copy it now:<br>
       <div style="display:flex; gap:6px; margin:8px 0;"><input id="kbTvLink" value="${escapeHtml(r.url)}" readonly onclick="this.select()" style="flex:1; margin:0; font-size:12px;"><button class="small" style="margin:0;" onclick="copyTvLink(this)">Copy</button></div>
-      On the TV's computer: Settings → Accounts → Set up a kiosk → Microsoft Edge → digital sign → paste this link. Or open it in a browser and press F11.</div>`;
+      <b>Windows TV computer:</b> <button class="small secondary" style="margin:0 4px;" onclick="downloadTvSetup()">Download the setup file</button> then double-click it (Windows may ask twice: Keep, then More info → Run anyway).
+      It opens the board full screen now and at every start-up, and sets the computer to never sleep. At start-up it waits 20 seconds first; close that small window to get to the desktop instead.<br>
+      <span class="muted">Anything else: open the link in a browser and press F11.</span></div>`;
   } catch (e) { showMsg(e.message, 'error'); }
 }
 
@@ -74,6 +76,41 @@ async function copyTvLink(btn) {
   try { await navigator.clipboard.writeText(input.value); } catch (e) { document.execCommand('copy'); }
   btn.textContent = 'Copied';
   setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+}
+
+// A Windows batch file with the TV link baked in: copies itself into the
+// account's Startup folder, turns off sleep, and opens Edge in kiosk mode.
+// Built here in the browser, nothing stored on the server.
+function downloadTvSetup() {
+  const url = document.getElementById('kbTvLink').value;
+  const lines = [
+    '@echo off',
+    'title Kitchen TV board',
+    'set "ME=%~f0"',
+    'set "STARTUP=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"',
+    'if /I not "%~dp0"=="%STARTUP%\\" (',
+    '  copy /Y "%ME%" "%STARTUP%\\KitchenTV.bat" >nul',
+    '  powercfg -change -monitor-timeout-ac 0',
+    '  powercfg -change -standby-timeout-ac 0',
+    '  powercfg -change -hibernate-timeout-ac 0',
+    '  echo Installed. The board will open at every start-up.',
+    '  timeout /t 3 >nul',
+    ') else (',
+    '  echo Opening the kitchen board in 20 seconds...',
+    '  echo Close this window now if you need the desktop instead.',
+    '  timeout /t 20',
+    ')',
+    'set "EDGE=C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"',
+    'if not exist "%EDGE%" set "EDGE=C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"',
+    `start "" "%EDGE%" --kiosk "${url}" --edge-kiosk-type=fullscreen --no-first-run --disable-session-crashed-bubble`,
+    '',
+  ];
+  const blob = new Blob([lines.join('\r\n')], { type: 'application/octet-stream' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'Install Kitchen TV.bat';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
 async function removeDevice(id, name) {
