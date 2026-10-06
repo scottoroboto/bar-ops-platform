@@ -54,7 +54,7 @@ async function tokenRequest(a, form) {
     body: new URLSearchParams({ ...form, client_id: a.clientId }).toString(),
   }, 12000);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.access_token) throw new Error(`SmartThings sign-in: ${data.error_description || data.error || `HTTP ${res.status}`}`);
+  if (!res.ok || !data.access_token) throw new Error(`SmartThings sign-in: ${data.error_description || data.error || `HTTP ${res.status}`} (HTTP ${res.status}, ${JSON.stringify(data).slice(0, 300)})`);
   const next = {
     ...a,
     access: data.access_token,

@@ -37,12 +37,23 @@ async function status() {
 
 async function finishSignin(clientId, clientSecret) {
   console.log(`\n1. Open this link on your phone or computer and sign in with the Samsung account that has the TVs:\n\n${st.authorizeUrl(clientId)}\n`);
-  console.log(`2. Tap Allow. You'll land on a page at ${st.REDIRECT_URI} showing "code": "XXXXXX".`);
-  const pasted = await ask('3. Paste the code here (or the whole address of that page): ');
-  const m = pasted.match(/[?&]code=([^&\s]+)/) || pasted.match(/"code"\s*:\s*"([^"]+)"/);
-  const code = m ? decodeURIComponent(m[1]) : pasted.replace(/"/g, '');
+  console.log(`2. Tap Allow. You'll land on a page at ${st.REDIRECT_URI}. Right away, copy the whole address from the`);
+  console.log('   browser\'s address bar (it has ?code=... in it). The code only works for a few minutes, and only once.');
+  const pasted = await ask('3. Paste that address here: ');
+  // Whatever was copied -- the address-bar link, the "code": "..." line, or
+  // just the code with stray quotes/commas -- keep only the code itself.
+  const m = pasted.match(/[?&]code=([^&\s"]+)/) || pasted.match(/"code"\s*:\s*"([^"]+)"/);
+  const code = (m ? decodeURIComponent(m[1]) : pasted).replace(/^["'\s,]+|["'\s,}]+$/g, '').replace(/^code\s*[:=]\s*["']?/i, '');
   if (!code) { console.log('No code.'); return; }
-  await st.signIn(clientId, clientSecret, code);
+  console.log(`Using code ${code.length > 6 ? `${code.slice(0, 3)}...${code.slice(-3)}` : code} (${code.length} characters).`);
+  try {
+    await st.signIn(clientId, clientSecret, code);
+  } catch (err) {
+    console.log(`\n${err.message}`);
+    console.log('A code works once and only for a few minutes. Run "node tools/smartthings.js signin" for a fresh link,');
+    console.log('tap Allow, then right away copy the whole address from the browser\'s address bar and paste it here.');
+    return;
+  }
   console.log('\nSigned in. The box keeps this session going by itself.');
   const list = await st.listTvs();
   console.log(`SmartThings sees ${list.length} TV(s). Next: node tools/smartthings.js tvs`);
