@@ -8,7 +8,7 @@
 //
 //   sudo apt-get install -y chromium        (once; the browser it drives)
 //   node tools/spoton-test.js               sign in, pull today's Employee Time
-//   node tools/spoton-test.js --sales "https://restaurantreports.spoton.com/...recap..."
+//   node tools/spoton-test.js --sales none     skip the Daily Sales Recap
 //   node tools/spoton-test.js --show        also print the first row's VALUES on this screen (don't paste)
 //   node tools/spoton-test.js --fresh       forget the saved sign-in and log in again
 //
@@ -124,6 +124,28 @@ async function clickIf(page, selectorsOrText) {
   return null;
 }
 
+// What Okta answered (its IDX replies name the next step and any error).
+function oktaHints(list) {
+  const out = [];
+  for (const c of list) {
+    const b = c.body || {};
+    if (!/\/idp\/idx|\/oauth2|\/api\/v1\/authn/.test(c.url)) continue;
+    const bits = [];
+    if (b.remediation && Array.isArray(b.remediation.value)) bits.push(`next: ${b.remediation.value.map((r) => r.name).join(', ')}`);
+    if (b.messages && Array.isArray(b.messages.value)) bits.push(`says: ${b.messages.value.map((m) => m.message).join(' / ')}`);
+    if (b.currentAuthenticator && b.currentAuthenticator.value) bits.push(`authenticator: ${b.currentAuthenticator.value.displayName || b.currentAuthenticator.value.type}`);
+    if (b.authenticators && Array.isArray(b.authenticators.value)) bits.push(`choices: ${b.authenticators.value.map((a) => a.displayName || a.type).join(', ')}`);
+    if (b.success || b.successWithInteractionCode) bits.push('success');
+    if (b.errorSummary) bits.push(`error: ${b.errorSummary}`);
+    if (bits.length) out.push(`   #${c.n} ${c.url.replace(/^https?:\/\/[^/]+/, '').split('?')[0]} -> ${bits.join('; ')}`);
+  }
+  return out;
+}
+
+async function alerts(page) {
+  return page.$$eval('[role="alert"], .o-form-error-container, .infobox-error, .okta-form-infobox-error', (els) => els.map((e) => e.innerText.trim()).filter(Boolean).join(' | ')).catch(() => '');
+}
+
 async function codePrompt(page) {
   const sel = ['input[autocomplete="one-time-code"]', 'input[name*="passcode" i]', 'input[name*="code" i]', 'input[id*="code" i]', 'input[placeholder*="code" i]', 'input[name*="otp" i]', 'input[inputmode="numeric"]'];
   const input = await visibleInput(page, sel);
@@ -194,9 +216,17 @@ async function codePrompt(page) {
     const passNow = await visibleInput(page, ['input[type="password"]']);
     if (!passNow || (await box.getAttribute('type')) !== 'password') {
       await box.fill(user);
-      if (passNow) { await passNow.fill(pass); await passNow.press('Enter'); }
-      else { if (!(await clickIf(page, ['input[type="submit"]', 'button[type="submit"]', 'text=^next$', 'text=^sign in$']))) await box.press('Enter'); }
+      if (passNow) {
+        await passNow.fill(pass);
+        const remember = await visibleInput(page, ['input[name="rememberMe"]', 'input[type="checkbox"]']);
+        if (remember && !(await remember.isChecked().catch(() => true))) await remember.check().catch(() => {});
+      }
+      if (!(await clickIf(page, ['input[type="submit"]', 'button[type="submit"]', 'text=^next$', 'text=^sign in$']))) await (passNow || box).press('Enter');
       await settle(page, 8000);
+      // Give Okta up to 30s to move on (or to show an error).
+      for (let i = 0; i < 30 && (await visibleInput(page, ['input[type="password"]'])) && !(await alerts(page)); i += 1) await page.waitForTimeout(1000);
+      const a = await alerts(page);
+      if (a) console.log(`   Okta says: ${a}`);
     }
     // Step 2: password, if it wasn't on the first screen.
     if (!passNow) {
@@ -215,7 +245,9 @@ async function codePrompt(page) {
     for (let round = 0; round < 2; round += 1) {
       let code = await codePrompt(page);
       if (!code) {
-        const picked = await clickIf(page, ['text=email', 'text=text message|sms|phone']);
+        if (await visibleInput(page, ['input[type="password"]'])) break; // still the password form: nothing to pick
+        console.log(`   after sign-in: ${page.url().split('?')[0]}  text: ${((await page.evaluate(() => document.body.innerText).catch(() => '')) || '').replace(/\s+/g, ' ').slice(0, 200)}`);
+        const picked = await clickIf(page, ['text=^email$|^email\\b|verify with your email|email me', 'text=text message|sms|phone']);
         if (!picked) break;
         console.log(`   picked a verification method: ${picked.replace('text=', '')}`);
         await settle(page, 6000);
@@ -237,7 +269,9 @@ async function codePrompt(page) {
     if (await onSignInPage(page)) {
       await page.screenshot({ path: path.join(CAPTURE_DIR, 'login-failed.png') });
       const msg = ((await page.evaluate(() => document.body.innerText).catch(() => '')) || '').replace(/\s+/g, ' ').slice(0, 400);
-      console.log(`\nStill on a sign-in page: ${page.url()}\nInputs: ${await inputsSeen(page) || 'none'}\nPage says: ${msg}\nPicture saved: spoton-capture/login-failed.png`);
+      console.log(`\nStill on a sign-in page: ${page.url().split('?')[0]}\nInputs: ${await inputsSeen(page) || 'none'}\nPage says: ${msg}\nPicture saved: spoton-capture/login-failed.png`);
+      const hints = oktaHints(captured);
+      console.log(hints.length ? `What Okta answered:\n${hints.join('\n')}` : 'No Okta answers were captured (the form may not have submitted).');
       if (fs.existsSync(SESSION_FILE)) fs.unlinkSync(SESSION_FILE);
       await browser.close(); rl.close(); process.exit(1);
     }
@@ -264,10 +298,11 @@ async function codePrompt(page) {
   const onClock = ((await page.textContent('body').catch(() => '')) || '').match(/(\d+) on the Clock/i);
   console.log(`   page title: ${await page.title()}   ${onClock ? `(${onClock[1]} on the clock)` : ''}   ${captured.length - before} data responses`);
 
-  const salesUrl = opt('--sales');
-  if (salesUrl) {
+  // Daily Sales Recap (address from Scotto's browser, 2026-10-06).
+  const salesUrl = opt('--sales') || `${SITE}/restaurant-reporting/interactive-reports/dsr/?location_key=${LOCATION_KEY}&startDate=${day}&endDate=${day}`;
+  if (salesUrl !== 'none') {
     phase = 'sales';
-    console.log('\nOpening the sales report you gave ...');
+    console.log('\nOpening the Daily Sales Recap ...');
     const b2 = captured.length;
     await page.goto(salesUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await settle(page, 12000);
