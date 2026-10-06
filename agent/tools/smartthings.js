@@ -82,6 +82,29 @@ async function signin() {
   console.log('No SmartThings app on this box yet. Run: node tools/smartthings.js setup');
 }
 
+// Shows which screen a SmartThings TV is: switches it the other way for
+// a few seconds and back (off then on if it's on; on then off if it's off).
+async function flash(d) {
+  const was = await st.getSwitchState(d.deviceId).catch(() => null);
+  try {
+    if (was === 'on') {
+      console.log('   Turning it OFF for 8 seconds -- watch for the screen that goes dark...');
+      await st.switchOff(d.deviceId);
+      await new Promise((r) => setTimeout(r, 8000));
+      await st.switchOn(d.deviceId);
+      console.log('   Turned it back on.');
+    } else {
+      console.log('   It\'s off. Turning it ON -- watch for the screen that lights up (it goes off again in 15 seconds)...');
+      await st.switchOn(d.deviceId);
+      await new Promise((r) => setTimeout(r, 15000));
+      await st.switchOff(d.deviceId);
+      console.log('   Turned it back off.');
+    }
+  } catch (err) {
+    console.log(`   Couldn't flash it: ${err.message}`);
+  }
+}
+
 async function link() {
   let list = await st.listTvs();
   if (!list.length) { console.log('SmartThings has no TVs on this account. Add them in the SmartThings app first.'); return; }
@@ -109,7 +132,12 @@ async function link() {
   for (const d of list) {
     let tv = ours.find((t) => squash(t.name) === squash(d.label)) || ours.find((t) => m[String(t.id)] === d.deviceId);
     if (!tv) {
-      const ans = await ask(`"${d.label}" -- which Bar Ops TV is this? (type its name, Enter to skip): `);
+      let ans;
+      for (;;) {
+        ans = await ask(`"${d.label}" -- which Bar Ops TV is this? (its name, ? to flash it so you can see, Enter to skip): `);
+        if (ans !== '?') break;
+        await flash(d);
+      }
       if (!ans) continue;
       tv = ours.find((t) => squash(t.name) === squash(ans));
       if (!tv) { console.log(`   No Bar Ops TV named "${ans}", skipped.`); continue; }
