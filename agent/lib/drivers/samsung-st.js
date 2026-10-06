@@ -174,11 +174,19 @@ async function listTvs() {
     for (const d of data.items || []) {
       const tv = (d.ocf && /tv/i.test(d.ocf.deviceType || '')) || /tv/i.test(`${d.deviceTypeName || ''} ${d.name || ''}`)
         || (d.components || []).some((c) => (c.categories || []).some((k) => /television/i.test(k.name)));
-      if (tv) out.push({ deviceId: d.deviceId, label: d.label || d.name, name: d.name });
+      if (tv) out.push({ deviceId: d.deviceId, label: d.label || d.name, name: d.name, locationId: d.locationId });
     }
     const next = data._links && data._links.next && data._links.next.href;
     path = next ? next.replace(BASE_URL, '') : null;
   }
+  return out;
+}
+
+// { locationId: name } for the account's SmartThings locations (homes).
+async function locations() {
+  const data = await api('/locations');
+  const out = {};
+  for (const l of data.items || []) out[l.locationId] = l.name;
   return out;
 }
 
@@ -191,6 +199,6 @@ function unmute(deviceId) { return sendCommand(deviceId, 'audioMute', 'unmute');
 function setMute(deviceId) { return mute(deviceId); }
 
 module.exports = {
-  configured, deviceIdFor, authorizeUrl, createApp, signIn, refresh, listTvs, REDIRECT_URI,
+  configured, deviceIdFor, authorizeUrl, createApp, signIn, refresh, listTvs, locations, REDIRECT_URI,
   getSwitchState, getMuteState, switchOn, switchOff, volumeUp, volumeDown, mute, unmute, setMute,
 };

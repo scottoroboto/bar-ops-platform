@@ -83,8 +83,26 @@ async function signin() {
 }
 
 async function link() {
-  const list = await st.listTvs();
+  let list = await st.listTvs();
   if (!list.length) { console.log('SmartThings has no TVs on this account. Add them in the SmartThings app first.'); return; }
+  // Only this bar's SmartThings location, so another bar's (or home's)
+  // "TV 6" can never be linked here and switched on from this box.
+  const locs = await st.locations().catch(() => ({}));
+  const used = [...new Set(list.map((d) => d.locationId))];
+  if (used.length > 1) {
+    console.log('Your SmartThings account has TVs in more than one location:');
+    // Location names need an extra permission the box doesn't ask for, so
+    // show a few TV names from each one too.
+    used.forEach((id, i) => {
+      const here = list.filter((d) => d.locationId === id);
+      console.log(`  ${i + 1}. ${locs[id] || 'Location'}  (${here.length} TVs: ${here.slice(0, 4).map((d) => d.label).join(', ')}${here.length > 4 ? ', ...' : ''})`);
+    });
+    const pick = Number(await ask('Which one is THIS bar? Number: '));
+    const loc = used[pick - 1];
+    if (!loc) { console.log('No location picked; nothing linked.'); return; }
+    list = list.filter((d) => d.locationId === loc);
+    cache.set('smartthingsLocation', loc);
+  }
   const m = map();
   const ours = tvs();
   console.log(`SmartThings TVs on this account: ${list.length}\n`);
