@@ -178,16 +178,24 @@ class Session {
   }
 
   // Opens one report page and returns the JSON responses it loaded.
-  // start/end: MM-DD-YYYY (end defaults to start).
-  async fetchReport(template, locationKey, start, end, { retrySignIn = true } = {}) {
+  // start/end: MM-DD-YYYY (end defaults to start). Moves on as soon as the
+  // report's own data reply has arrived (`until`), instead of waiting for
+  // the whole page to go quiet -- that was most of the time per pull.
+  async fetchReport(template, locationKey, start, end, { retrySignIn = true, until = null } = {}) {
     if (!this.browser) await this.open();
     this.captured = [];
     await this.page.goto(reportUrl(template, locationKey, start, end), { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await settle(this.page, 12000);
+    const want = until || untilFor(template);
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline && !(want && this.captured.some(want))) {
+      if (await onSignInPage(this.page)) break;
+      await this.page.waitForTimeout(250);
+    }
+    await this.page.waitForTimeout(400);
     if (await onSignInPage(this.page)) {
       if (!retrySignIn) throw new Error('SpotOn bounced the report page to sign-in.');
       await this.ensureSignedIn();
-      return this.fetchReport(template, locationKey, start, end, { retrySignIn: false });
+      return this.fetchReport(template, locationKey, start, end, { retrySignIn: false, until });
     }
     return this.captured.slice();
   }
@@ -197,6 +205,13 @@ class Session {
     try { if (this.browser) await this.browser.close(); } catch (e) { /* ignore */ }
     this.browser = null;
   }
+}
+
+// Which reply means "the report has loaded" for each report page.
+function untilFor(template) {
+  if (template === 'employeetime' || template === 'time-clock') return (c) => /\/api\/reports\//.test(c.url) && Array.isArray(c.body);
+  if (template === 'dsr') return (c) => !!(c.body && c.body.data && c.body.data.reports && Array.isArray(c.body.data.reports.data));
+  return (c) => /\/api\/reports\//.test(c.url) || !!(c.body && c.body.data && c.body.data.reports);
 }
 
 // ---- Picking the numbers out of what the pages loaded -------------------
