@@ -468,6 +468,11 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 /* Active/Inactive per-row switch (owner only) — a thin divider then the
    existing generic .switch pill component, reused rather than another
    bespoke toggle. See empStatusToggleHtml() in employees.js. */
+.emp-noapps { font-size: 11px; color: #454c5b; align-self: center; padding: 0 4px; }
+.detail-apps { display: flex; flex-wrap: wrap; gap: 10px 6px; }
+.detail-apps .emp-tgl { width: 56px; cursor: pointer; }
+.detail-apps .emp-tgl .ic { width: 40px; height: 40px; border-radius: 10px; }
+.detail-apps .emp-tgl .lbl { font-size: 10px; }
 .emp-status-divider { width: 1px; align-self: stretch; background: var(--card-border); margin: 0 2px; flex-shrink: 0; }
 .emp-status-tgl { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 46px; flex-shrink: 0; }
 .emp-status-tgl .lbl { font-size: 8px; font-weight: 700; letter-spacing: 0.02em; color: var(--muted); text-transform: uppercase; }

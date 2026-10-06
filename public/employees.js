@@ -278,7 +278,7 @@ let LOC_FILTER = 'all';
 async function loadAllEmployees() {
   if (ME.role !== 'owner' && ME.role !== 'manager') return;
   document.getElementById('allEmployeesHint').textContent = ME.role === 'owner'
-    ? 'Click a row to see their data card. Toggle which apps each person can use right from the list — this can be changed any time, not just at onboarding.'
+    ? 'Click a row to see their data card. The apps shown on a row are the ones that person has; turn apps on or off from their card.'
     : "The roster for your bar" + (myLocationIds(ME).length > 1 ? 's' : '') + ". Click a row to see their data card, or request a pay raise.";
   ALL_EMPLOYEES = await api('/api/employees');
   renderLocFilters();
@@ -404,7 +404,10 @@ function lockBadgeHtml(p) {
 function empRowHtml(p) {
   let rightHtml = '';
   if (ME.role === 'owner') {
-    rightHtml = `<div class="emp-toggles">${empToggleDefs(p).map(t => empToggleHtml(p, t)).join('')}${tvShiftButtonHtml(p, true)}${empStatusToggleHtml(p)}</div>`;
+    // Only the apps that are on (Scotto, Oct 2026): the list was getting
+    // crowded. Turning apps on and off happens on the employee's card.
+    const on = empToggleDefs(p).filter(t => p.appAccess && p.appAccess[t.key]);
+    rightHtml = `<div class="emp-toggles">${on.map(t => empBadgeHtml(t)).join('') || (p.role === 'owner' ? '' : '<span class="emp-noapps">no apps</span>')}${tvShiftButtonHtml(p, true)}${empStatusToggleHtml(p)}</div>`;
   } else if (ME.role === 'manager') {
     rightHtml = `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button>`;
   }
@@ -448,6 +451,18 @@ async function toggleEmployeeStatus(personId, makeActive) {
     showMsg(e.message, 'error');
     loadAllEmployees();
   }
+}
+
+// On the list: a read-only marker for an app that is on. Tapping the row
+// opens the card, where the real toggles are.
+function empBadgeHtml(def) {
+  return `<div class="emp-tgl on" title="${escapeHtml(def.label)} is on"><div class="ic">${def.icon}</div><span class="lbl">${def.label}</span></div>`;
+}
+
+// The on/off toggles on the employee's card (owner): every app, with
+// the same confirm bubble as before.
+function renderDetailApps(p) {
+  document.getElementById('detailApps').innerHTML = empToggleDefs(p).map(t => empToggleHtml(p, t)).join('');
 }
 
 // Bigger icon-plus-label toggle, per the approved Concept C mockup — still
@@ -542,12 +557,20 @@ function confirmToggleStatus(evt, personId, makeActive) {
   openToggleConfirm(evt.currentTarget.closest('.emp-status-tgl'), text, () => toggleEmployeeStatus(personId, makeActive));
 }
 
+function refreshOpenDetailApps() {
+  const modal = document.getElementById('employeeDetailModal');
+  if (!modal || modal.style.display === 'none') return;
+  const p = ALL_EMPLOYEES.find(x => x.id === document.getElementById('detailPersonId').value);
+  if (p && ME.role === 'owner') renderDetailApps(p);
+}
+
 async function toggleAccess(personId, appKey, enabled) {
   try {
     const result = await withStepUp(() => api(`/api/employees/${personId}/app-access`, { method: 'POST', body: { appKey, enabled } }));
     if (result && result.ok === false) { showMsg(result.error || 'Could not update access.', 'error'); loadAllEmployees(); return; }
     showMsg(`Updated ${appKey.replace('_', ' ')} access.`, 'success');
     await loadAllEmployees();
+    refreshOpenDetailApps();
   } catch (e) {
     showMsg(e.message, 'error');
     loadAllEmployees();
@@ -755,6 +778,10 @@ function openEmployeeDetail(id) {
       : `${first} hasn't signed in yet, and has no email on file — resending will only generate new credentials here for you to hand over.`;
   }
   document.getElementById('detailCredentialsResult').innerHTML = '';
+
+  const appsEditable = isOwner && p.role !== 'owner' && p.status === 'active';
+  document.getElementById('detailAppsFields').style.display = appsEditable ? '' : 'none';
+  if (appsEditable) renderDetailApps(p);
 
   document.getElementById('detailNetworkAccessFields').style.display = isOwner ? '' : 'none';
   if (isOwner) renderDetailNetworkAccess(p);
