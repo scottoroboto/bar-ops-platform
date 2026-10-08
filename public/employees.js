@@ -591,7 +591,7 @@ async function toggleAccess(personId, appKey, enabled) {
 // activation too, mirroring how app access itself works.
 // Home screen lines for a manager (patch_060): Network, Bar, Kitchen,
 // coolers. Owner only; saved one switch at a time.
-const HOME_LINES = [['network', 'Network'], ['bar', 'Bar line (sales, labor, staff)'], ['kitchen', 'Kitchen line (sales, labor, staff)'], ['coolers', 'Cooler buttons']];
+const HOME_LINES = [['alerts', 'Alerts button'], ['network', 'Network row'], ['bar', 'Bar line (sales, labor, staff)'], ['kitchen', 'Kitchen line (sales, labor, staff)'], ['coolers', 'Cooler buttons'], ['applicants', 'Needs you: applicants'], ['games', 'Needs you: games not in SpotOn'], ['service_calls', 'Needs you: service calls']];
 async function renderDetailHome(person) {
   const el = document.getElementById('detailHome');
   el.innerHTML = '<p class="muted">Loading…</p>';
@@ -605,7 +605,7 @@ async function renderDetailHome(person) {
 async function setHomeLine(personId, key, enabled) {
   try {
     await withStepUp(() => api(`/api/employees/${personId}/home-lines`, { method: 'POST', body: { [key]: enabled } }));
-    showMsg(`Home screen updated.`, 'success');
+    showMsg('Widgets updated.', 'success');
   } catch (e) { showMsg(e.message, 'error'); const p = ALL_EMPLOYEES.find((x) => x.id === personId); if (p) renderDetailHome(p); }
 }
 

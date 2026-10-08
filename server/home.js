@@ -21,11 +21,13 @@ function localParts(date, tz) {
 }
 function hm(t) { const m = String(t || '').match(/^(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; }
 
+const WIDGETS = ['alerts', 'network', 'bar', 'kitchen', 'coolers', 'applicants', 'games', 'service_calls'];
 async function linesFor(svc, person) {
-  if (person.role === 'owner') return { network: true, bar: true, kitchen: true, coolers: true };
-  const { rows } = await svc.query('SELECT network, bar, kitchen, coolers FROM home_lines WHERE person_id = $1', [person.id]);
+  const all = Object.fromEntries(WIDGETS.map((k) => [k, true]));
+  if (person.role === 'owner') return all;
+  const { rows } = await svc.query('SELECT * FROM home_lines WHERE person_id = $1', [person.id]);
   const r = rows[0] || {};
-  return { network: r.network !== false, bar: r.bar !== false, kitchen: r.kitchen !== false, coolers: r.coolers !== false };
+  return Object.fromEntries(WIDGETS.map((k) => [k, r[k] !== false]));
 }
 
 async function getLines(personId) {
@@ -36,11 +38,12 @@ async function setLines(personId, body, updatedBy) {
   const b = body || {};
   return withServiceClient(async (svc) => {
     const cur = await linesFor(svc, { id: personId, role: 'manager' });
-    const next = { network: b.network !== undefined ? !!b.network : cur.network, bar: b.bar !== undefined ? !!b.bar : cur.bar, kitchen: b.kitchen !== undefined ? !!b.kitchen : cur.kitchen, coolers: b.coolers !== undefined ? !!b.coolers : cur.coolers };
+    const next = Object.fromEntries(WIDGETS.map((k) => [k, b[k] !== undefined ? !!b[k] : cur[k]]));
     await svc.query(
-      `INSERT INTO home_lines (person_id, network, bar, kitchen, coolers, updated_by) VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (person_id) DO UPDATE SET network = EXCLUDED.network, bar = EXCLUDED.bar, kitchen = EXCLUDED.kitchen, coolers = EXCLUDED.coolers, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-      [personId, next.network, next.bar, next.kitchen, next.coolers, updatedBy || null]);
+      `INSERT INTO home_lines (person_id, alerts, network, bar, kitchen, coolers, applicants, games, service_calls, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (person_id) DO UPDATE SET alerts = EXCLUDED.alerts, network = EXCLUDED.network, bar = EXCLUDED.bar, kitchen = EXCLUDED.kitchen, coolers = EXCLUDED.coolers,
+         applicants = EXCLUDED.applicants, games = EXCLUDED.games, service_calls = EXCLUDED.service_calls, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+      [personId, next.alerts, next.network, next.bar, next.kitchen, next.coolers, next.applicants, next.games, next.service_calls, updatedBy || null]);
     return next;
   });
 }
@@ -127,13 +130,13 @@ async function view(person, locationIds) {
         co2: co2 ? { ppm: co2.ppm, state: co2.state } : null,
       });
     }
-    const alerts = (await monitoring.listAlerts(svc, { openOnly: true }))
+    const alerts = !lines.alerts ? [] : (await monitoring.listAlerts(svc, { openOnly: true }))
       .filter((a) => locationIds.some((id) => String(id) === String(a.location_id)))
       .map((a) => ({ id: a.id, category: a.category, systemName: a.system_name, message: a.message, openedAt: a.opened_at, acknowledgedAt: a.acknowledged_at, silenced: a.silenced, locationName: a.location_name, status: a.status }));
     const { rows: pend } = await svc.query(`SELECT count(*)::int AS n FROM people WHERE status = 'pending_review' AND (location_id = ANY($1::uuid[]) OR $2)`, [locationIds, person.role === 'owner']);
     const { rows: games } = await svc.query(`SELECT count(*)::int AS n FROM amusement_collections c JOIN amusement_locations al ON al.id = c.location_id WHERE c.status = 'final' AND c.pos_status = 'queued' AND (al.location_id = ANY($1::uuid[]) OR $2)`, [locationIds, person.role === 'owner']);
     const { rows: calls } = await svc.query(`SELECT count(*)::int AS n FROM service_calls WHERE status = 'open' AND location_id = ANY($1::uuid[])`, [locationIds]);
-    return { lines, locations, alerts, needs: { applicants: pend[0].n, gamesQueued: games[0].n, serviceCalls: calls[0].n }, at: new Date().toISOString() };
+    return { lines, locations, alerts, needs: { applicants: lines.applicants ? pend[0].n : 0, gamesQueued: lines.games ? games[0].n : 0, serviceCalls: lines.service_calls ? calls[0].n : 0 }, at: new Date().toISOString() };
   });
 }
 

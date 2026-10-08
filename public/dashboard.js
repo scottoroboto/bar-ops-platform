@@ -202,8 +202,8 @@ function renderHome() {
     h.needs.serviceCalls ? `<a class="hm-need" href="/servicecalls.html"><span>Service calls open</span><span class="b dim">${h.needs.serviceCalls}</span></a>` : '',
   ].filter(Boolean) : [];
   const stamp = h.at ? new Date(h.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-  el.innerHTML = `<div id="hmPull" class="hm-pull"></div>${alertsHtml}
-    ${blocks ? `<div class="hm-kick">Right now</div>${blocks}<div class="hm-stamp"><a href="#" onclick="loadHome(true); return false;">${HOME_LOADING ? 'Updating…' : `Updated ${stamp} · refresh`}</a></div>` : ''}
+  el.innerHTML = `<div id="hmPull" class="hm-pull"></div>${h.lines && h.lines.alerts === false ? '' : alertsHtml}
+    ${blocks ? `<div class="hm-kick">Widgets</div>${blocks}<div class="hm-stamp"><a href="#" onclick="loadHome(true); return false;">${HOME_LOADING ? 'Updating…' : `Updated ${stamp} · refresh`}</a></div>` : ''}
     ${needs.length ? `<div class="hm-kick" style="margin-top:12px;">Needs you</div><div class="hm-needs">${needs.join('')}</div>` : ''}
     <div class="hm-kick" style="margin-top:12px;">Apps</div>`;
 }
