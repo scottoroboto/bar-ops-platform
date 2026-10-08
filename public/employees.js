@@ -401,22 +401,31 @@ function lockBadgeHtml(p) {
   return '';
 }
 
+// One employee on the list (Scotto, Oct 2026): name, role and bar on the
+// first line with the first three of their apps beside it; the Active
+// switch (and the shift button) under the name, with the rest of their
+// apps to its right, five to a row. Turning apps on and off happens on
+// the card.
 function empRowHtml(p) {
-  let rightHtml = '';
+  const nameBlock = `<div class="emp-who">
+      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}${lockBadgeHtml(p)}</div>
+      <div class="emp-roleinfo">${escapeHtml(cap(p.role))} &middot; ${escapeHtml(p.position || '—')} <span class="emp-locs">${locChipsHtml(p)}</span></div>
+    </div>`;
   if (ME.role === 'owner') {
-    // Only the apps that are on (Scotto, Oct 2026): the list was getting
-    // crowded. Turning apps on and off happens on the employee's card.
     const on = empToggleDefs(p).filter(t => p.appAccess && p.appAccess[t.key]);
-    rightHtml = `<div class="emp-toggles"><div class="emp-apps">${on.map(t => empBadgeHtml(t)).join('') || (p.role === 'owner' ? '' : '<span class="emp-noapps">no apps</span>')}</div>${tvShiftButtonHtml(p, true)}${empStatusToggleHtml(p)}</div>`;
-  } else if (ME.role === 'manager') {
-    rightHtml = `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button>`;
+    const first = on.slice(0, 3).map(t => empBadgeHtml(t)).join('');
+    const rest = on.slice(3).map(t => empBadgeHtml(t)).join('');
+    return `
+    <div class="emp-row" onclick="openEmployeeDetail('${p.id}')">
+      <div class="emp-l1">${nameBlock}<div class="emp-apps">${first || (p.role === 'owner' ? '' : '<span class="emp-noapps">no apps</span>')}</div></div>
+      <div class="emp-l2"><div class="emp-toggles">${empStatusToggleHtml(p)}${tvShiftButtonHtml(p, true)}</div><div class="emp-apps">${rest}</div></div>
+    </div>`;
   }
+  const rightHtml = ME.role === 'manager'
+    ? `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button>` : '';
   return `
     <div class="emp-row" onclick="openEmployeeDetail('${p.id}')">
-      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}${lockBadgeHtml(p)}</div>
-      <div class="emp-roleinfo">${escapeHtml(cap(p.role))} &middot; ${escapeHtml(p.position || '—')}</div>
-      <div class="emp-locs">${locChipsHtml(p)}</div>
-      ${rightHtml}
+      <div class="emp-l1">${nameBlock}${rightHtml}</div>
     </div>`;
 }
 
@@ -430,8 +439,7 @@ function empStatusToggleHtml(p) {
   const active = p.status === 'active';
   const isSelf = p.id === ME.id;
   const title = isSelf ? "You can't deactivate your own account" : (active ? 'Set inactive' : 'Set active');
-  return `<div class="emp-status-divider"></div>
-    <div class="emp-status-tgl" onclick="event.stopPropagation();" title="${escapeHtml(title)}">
+  return `<div class="emp-status-tgl" onclick="event.stopPropagation();" title="${escapeHtml(title)}">
       <label class="switch${isSelf ? ' is-disabled' : ''}">
         <input type="checkbox" ${active ? 'checked' : ''} ${isSelf ? 'disabled' : ''} onclick="event.preventDefault(); confirmToggleStatus(event, '${p.id}', ${!active})">
         <span class="slider"></span>
