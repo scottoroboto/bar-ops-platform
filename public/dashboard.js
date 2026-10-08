@@ -144,7 +144,7 @@ function hmCoolBtn(c, locId) {
 // the owner's switches for this person); a line with nothing on is left out.
 function hmSide(label, d, c, locId, kitchen, lines) {
   const key = kitchen ? 'kitchen' : 'bar';
-  const want = { sales: lines[`${key}_sales`] === true, labor: lines[`${key}_labor`] === true, staff: lines[`${key}_staff`] === true, coolers: lines.coolers === true && !!c };
+  const want = { sales: lines[`${key}_sales`] === true, labor: lines[`${key}_labor`] === true, staff: lines[`${key}_staff`] === true, coolers: lines[`${key}_coolers`] === true && !!c };
   if (!want.sales && !want.labor && !want.staff && !want.coolers) return '';
   const warnPct = kitchen ? 46 : 30;
   const detail = kitchen ? `/kitchen-board.html?location_id=${encodeURIComponent(locId)}` : '#';
