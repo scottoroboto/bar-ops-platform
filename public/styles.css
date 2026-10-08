@@ -456,7 +456,12 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .emp-row .emp-name { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; }
 .emp-row .emp-roleinfo { width: 170px; flex-shrink: 0; font-size: 12.5px; color: var(--muted); }
 .emp-row .emp-locs { width: 96px; flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 4px; }
-.emp-row .emp-toggles { display: flex; gap: 8px; flex-shrink: 0; }
+.emp-row .emp-toggles { display: flex; gap: 8px; flex-shrink: 1; min-width: 0; align-items: center; }
+/* The apps a person has: wrap onto more lines rather than run off the
+   screen (Scotto, Oct 2026); the shift button and Active switch stay put. */
+.emp-row .emp-apps { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; min-width: 0; max-width: 204px; } /* five per row, then wrap */
+.emp-row .emp-apps .emp-tgl { width: 36px; }
+.emp-row .emp-apps .emp-tgl .ic { width: 26px; height: 26px; border-radius: 7px; }
 
 .emp-tgl { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 42px; flex-shrink: 0; }
 .emp-tgl .ic { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
@@ -495,7 +500,8 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
   .emp-row { flex-wrap: wrap; }
   .emp-row .emp-roleinfo { width: auto; }
   .emp-row .emp-locs { width: auto; order: 1; }
-  .emp-row .emp-toggles { order: 2; margin-left: auto; }
+  .emp-row .emp-toggles { order: 2; margin-left: auto; width: 100%; justify-content: flex-end; }
+  .emp-row .emp-apps { flex: 1; }
 }
 
 /* Employee data card — the popup opened by clicking a roster row */

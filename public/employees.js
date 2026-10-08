@@ -407,7 +407,7 @@ function empRowHtml(p) {
     // Only the apps that are on (Scotto, Oct 2026): the list was getting
     // crowded. Turning apps on and off happens on the employee's card.
     const on = empToggleDefs(p).filter(t => p.appAccess && p.appAccess[t.key]);
-    rightHtml = `<div class="emp-toggles">${on.map(t => empBadgeHtml(t)).join('') || (p.role === 'owner' ? '' : '<span class="emp-noapps">no apps</span>')}${tvShiftButtonHtml(p, true)}${empStatusToggleHtml(p)}</div>`;
+    rightHtml = `<div class="emp-toggles"><div class="emp-apps">${on.map(t => empBadgeHtml(t)).join('') || (p.role === 'owner' ? '' : '<span class="emp-noapps">no apps</span>')}</div>${tvShiftButtonHtml(p, true)}${empStatusToggleHtml(p)}</div>`;
   } else if (ME.role === 'manager') {
     rightHtml = `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button>`;
   }
