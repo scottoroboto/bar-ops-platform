@@ -314,7 +314,10 @@ async function getNetworkBoard(client, locationIds) {
       at: d.measured_at || null,
       stale: !d.measured_at || Date.now() - new Date(d.measured_at).getTime() > STALE_MS,
     } : null;
-    return { locationId: l.id, locationName: l.name, status: barStatusFrom(devices), cascade: gatewayDown, speed, devices };
+    const wanRow = mine.find((r) => ['unifi_wan', 'fiber_wan', 'cable_wan'].includes(r.kind) && r.last_detail) || null;
+    const wd = wanRow ? wanRow.last_detail : null;
+    const wan = wd ? { latencyMs: Number.isFinite(Number(wd.latency_ms)) ? Number(wd.latency_ms) : null, lossPct: Number.isFinite(Number(wd.packet_loss)) ? Number(wd.packet_loss) : null, at: wd.metric_time || wd.measured_at || null } : null;
+    return { locationId: l.id, locationName: l.name, status: barStatusFrom(devices), cascade: gatewayDown, speed, wan, devices };
   });
 }
 
@@ -410,7 +413,7 @@ async function listAlerts(client, { locationId, openOnly } = {}) {
   if (openOnly) clauses.push('sa.closed_at IS NULL');
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const { rows } = await client.query(
-    `SELECT sa.*, ms.name AS system_name, ms.category, l.name AS location_name,
+    `SELECT sa.*, ms.name AS system_name, ms.category, ms.location_id, l.name AS location_name,
             (ms.silenced_until IS NOT NULL AND ms.silenced_until > now()) AS silenced
      FROM system_alerts sa
      JOIN monitored_systems ms ON ms.id = sa.system_id

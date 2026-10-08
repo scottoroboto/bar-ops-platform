@@ -581,6 +581,26 @@ async function toggleAccess(personId, appKey, enabled) {
 // (see detailNetworkAccessFields in employees.html), same on/off-per-bar
 // shape as the activate modal's rows, just editable any time after
 // activation too, mirroring how app access itself works.
+// Home screen lines for a manager (patch_060): Network, Bar, Kitchen,
+// coolers. Owner only; saved one switch at a time.
+const HOME_LINES = [['network', 'Network'], ['bar', 'Bar line (sales, labor, staff)'], ['kitchen', 'Kitchen line (sales, labor, staff)'], ['coolers', 'Cooler buttons']];
+async function renderDetailHome(person) {
+  const el = document.getElementById('detailHome');
+  el.innerHTML = '<p class="muted">Loading…</p>';
+  let lines;
+  try { lines = await api(`/api/employees/${person.id}/home-lines`); } catch (e) { el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; return; }
+  el.innerHTML = HOME_LINES.map(([key, label]) => `
+    <label class="toggle-row" style="gap:8px;"><span class="label">${label}</span>
+      <span class="switch"><input type="checkbox" ${lines[key] ? 'checked' : ''} onchange="setHomeLine('${person.id}', '${key}', this.checked)"><span class="slider"></span></span>
+    </label>`).join('');
+}
+async function setHomeLine(personId, key, enabled) {
+  try {
+    await withStepUp(() => api(`/api/employees/${personId}/home-lines`, { method: 'POST', body: { [key]: enabled } }));
+    showMsg(`Home screen updated.`, 'success');
+  } catch (e) { showMsg(e.message, 'error'); const p = ALL_EMPLOYEES.find((x) => x.id === personId); if (p) renderDetailHome(p); }
+}
+
 function renderDetailNetworkAccess(person) {
   document.getElementById('detailNetworkAccess').innerHTML = LOCATIONS.map(l => {
     const on = !!(person.networkAccess && person.networkAccess[l.id]);
@@ -782,6 +802,10 @@ function openEmployeeDetail(id) {
   const appsEditable = isOwner && p.role !== 'owner' && p.status === 'active';
   document.getElementById('detailAppsFields').style.display = appsEditable ? '' : 'none';
   if (appsEditable) renderDetailApps(p);
+
+  const homeEditable = isOwner && p.role === 'manager' && p.status === 'active';
+  document.getElementById('detailHomeFields').style.display = homeEditable ? '' : 'none';
+  if (homeEditable) renderDetailHome(p);
 
   document.getElementById('detailNetworkAccessFields').style.display = isOwner ? '' : 'none';
   if (isOwner) renderDetailNetworkAccess(p);

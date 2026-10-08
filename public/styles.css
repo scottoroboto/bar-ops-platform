@@ -574,3 +574,33 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
   .print-table th { background: #eee; }
   .print-emp-name { font-weight: 700; white-space: nowrap; }
 }
+
+/* Home screen (Oct 2026): one block per bar above the app tiles. */
+.hm-alerts { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px; min-height: 46px; padding: 0 14px; margin: 0 0 12px; border-radius: 12px; border: 1px solid var(--card-border); background: var(--card); color: var(--text); font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer; box-sizing: border-box; }
+.hm-alerts.bad { border-color: #7a2a30; background: #2a1416; color: #ffd0d2; }
+.hm-alerts.open { border-radius: 12px 12px 0 0; margin-bottom: 0; }
+.hm-alerts .n { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 8px; border-radius: 12px; background: #e5566d; color: #fff; font-size: 13px; }
+.hm-alerts.ok .n { background: #2f7a26; }
+.hm-alertlist { border: 1px solid #7a2a30; border-top: 0; border-radius: 0 0 12px 12px; background: #1d161a; padding: 6px 12px 10px; margin-bottom: 12px; }
+.hm-alertrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid #3a2226; font-size: 13px; }
+.hm-alertrow:first-child { border-top: 0; }
+.hm-kick { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 4px 0 8px; }
+.hm-block { border: 2px solid #3b8f2f; border-radius: 12px; padding: 6px 10px; margin-bottom: 10px; background: #121419; }
+.hm-block.warn { border-color: #c9770f; } .hm-block.bad { border-color: #c91f26; } .hm-block.none { border-color: #3a4152; }
+.hm-top { display: flex; align-items: center; gap: 10px; padding: 4px 0 8px; }
+.hm-code { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-style: italic; font-weight: 800; font-size: 40px; line-height: 1; letter-spacing: -.04em; width: 52px; color: #8ee37a; text-decoration: none; }
+.hm-block.warn .hm-code { color: #ffb454; } .hm-block.bad .hm-code { color: #ff8a8f; } .hm-block.none .hm-code { color: #9aa3b2; }
+.hm-obtn { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; min-height: 40px; min-width: 72px; padding: 3px 10px; border-radius: 9px; border: 2px solid #5b606b; background: #171a21; font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 19px; line-height: 1.05; letter-spacing: .02em; color: #c4c8d0; text-decoration: none; }
+.hm-obtn .s { font-size: 12px; font-weight: 700; }
+.hm-obtn.ok { border-color: #3fbf7f; color: #c9f5dc; } .hm-obtn.warn { border-color: #e8931c; color: #ffe3b8; } .hm-obtn.bad { border-color: #e3242b; color: #ffd0d2; background: #2a1416; }
+.hm-net { flex: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 8px; font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 15px; line-height: 1.15; text-align: center; }
+.hm-line { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid #2a2f3a; }
+.hm-area { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 22px; width: 60px; letter-spacing: -.01em; }
+.hm-stat { display: flex; flex-direction: column; align-items: center; flex: 1; line-height: 1.05; text-decoration: none; color: var(--text); }
+.hm-stat .k { font-size: 10px; color: var(--muted); } .hm-stat .v { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 17px; }
+.hm-stat .v.warn { color: #ffb454; }
+.hm-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); padding: 6px 0 2px; border-top: 1px solid #2a2f3a; flex-wrap: wrap; }
+.hm-needs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.hm-need { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--card-border); color: var(--text); text-decoration: none; font-size: 13px; font-weight: 600; }
+.hm-need .b { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: #e5566d; color: #fff; font-size: 12px; font-weight: 700; }
+.hm-need .b.warn { background: #e0a83e; color: #1b1400; } .hm-need .b.dim { background: #2f3542; }

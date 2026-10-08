@@ -124,6 +124,97 @@ async function loadCriticalSystems() {
   }
 }
 
+// ---------------------------------------------------------------------
+// The home screen for the owner and managers (Oct 2026): a collapsed
+// alerts button, one block per bar ("Right now"), and what needs them,
+// all above the app tiles. Managers see only the lines the owner turned
+// on for them (Employees card → Home screen).
+// ---------------------------------------------------------------------
+let HOME = null;
+let ALERTS_OPEN = false;
+const money0 = (n) => (n == null ? '—' : '$' + Math.round(n).toLocaleString());
+
+function hmLevelClass(level) { return level === 'bad' ? 'bad' : level === 'warn' ? 'warn' : level === 'ok' ? 'ok' : 'none'; }
+function hmCoolBtn(c, locId) {
+  if (!c) return '';
+  const cls = c.level === 'none' ? '' : hmLevelClass(c.level);
+  return `<a class="hm-obtn ${cls}" href="/sensors.html?location_id=${encodeURIComponent(locId)}"><span class="s">coolers</span><span>${c.total ? `${c.ok} of ${c.total}` : '—'}</span></a>`;
+}
+function hmSide(label, d, c, locId, kitchen) {
+  if (!d) return '';
+  const warnPct = kitchen ? 46 : 30;
+  return `<div class="hm-line">
+    <span class="hm-area" style="${kitchen ? 'text-transform:none;' : ''}">${label}</span>
+    <a class="hm-stat" href="${kitchen ? `/kitchen-board.html?location_id=${encodeURIComponent(locId)}` : '#'}"><span class="k">sales</span><span class="v">${d.hasData ? money0(d.sales) : '—'}</span></a>
+    <a class="hm-stat" href="${kitchen ? `/kitchen-board.html?location_id=${encodeURIComponent(locId)}` : '#'}"><span class="k">labor</span><span class="v ${d.laborPct != null && d.laborPct > warnPct ? 'warn' : ''}">${d.laborPct != null ? d.laborPct + '%' : '—'}</span></a>
+    <a class="hm-stat" href="/scheduling.html"><span class="k">staff</span><span class="v ${d.staffScheduled > d.staffOn ? 'warn' : ''}">${d.hasData || d.staffScheduled ? `${d.staffOn} of ${Math.max(d.staffOn, d.staffScheduled)}` : '—'}</span></a>
+    ${hmCoolBtn(c, locId)}
+  </div>`;
+}
+function hmBlock(l) {
+  const n = l.network;
+  const netCls = n ? (n.status === 'offline' ? 'bad' : n.status === 'warning' ? 'warn' : n.status === 'online' ? 'ok' : '') : '';
+  const top = n ? `<div class="hm-top">
+      <a class="hm-code" href="/monitoring.html">${escapeHtml(shortLoc(l.name))}</a>
+      <a class="hm-obtn ${netCls}" href="/monitoring.html">NETWORK</a>
+      <div class="hm-net">
+        <span>${n.latencyMs != null ? n.latencyMs + ' ms' : (n.speed ? n.speed.down + '↓' : '—')}</span><span>${n.gearUp} of ${n.gearTotal} up</span>
+        <span style="${n.lossPct != null && n.lossPct > 1 ? 'color:#ffb454' : ''}">${n.lossPct != null ? n.lossPct + '% loss' : (n.speed ? n.speed.up + '↑ Mbps' : '')}</span><span>${l.tvs && l.tvs.total ? `TVs ${l.tvs.total - l.tvs.unreachable} of ${l.tvs.total}` : ''}</span>
+      </div></div>`
+    : `<div class="hm-top"><a class="hm-code" href="/dashboard.html">${escapeHtml(shortLoc(l.name))}</a><span class="muted" style="font-size:13px;">${escapeHtml(l.name)}</span></div>`;
+  const coolers = l.coolers || {};
+  const foot = [];
+  if (l.tvs && l.tvs.unreachable) foot.push(`${l.tvs.unreachable} TV${l.tvs.unreachable === 1 ? '' : 's'} unreachable`);
+  if (l.co2) foot.push(`CO2 ${Number(l.co2.ppm).toLocaleString()} ppm${l.co2.state && l.co2.state !== 'normal' ? ' · ' + l.co2.state : ''}`);
+  if (coolers.unassigned) foot.push(`${coolers.unassigned} new probe${coolers.unassigned === 1 ? '' : 's'} to name`);
+  if (coolers.other && coolers.other.total) foot.push(`other coolers ${coolers.other.ok} of ${coolers.other.total}`);
+  if (l.asOf) foot.push(`sales as of ${new Date(l.asOf).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+  else if (l.bar || l.kitchen) foot.push('no SpotOn pull at this bar yet');
+  return `<div class="hm-block ${hmLevelClass(l.level)}">
+    ${top}
+    ${hmSide('BAR', l.bar, coolers.bar, l.id, false)}
+    ${hmSide('Kitchen', l.kitchen, coolers.kitchen, l.id, true)}
+    ${foot.length ? `<div class="hm-foot">${foot.map((f) => `<span>${escapeHtml(f)}</span>`).join('')}</div>` : ''}
+  </div>`;
+}
+function renderHome() {
+  const h = HOME;
+  const el = document.getElementById('homeTop');
+  if (!h) { el.innerHTML = ''; return; }
+  // TVs are handled on the bar's iPad and in the 6am summary; they show
+  // on the block's footer, not in the alert count.
+  const alerts = (h.alerts || []).filter((a) => a.category !== 'av');
+  const tvAlerts = (h.alerts || []).length - alerts.length;
+  const byCat = {};
+  for (const a of alerts) byCat[a.category] = (byCat[a.category] || 0) + 1;
+  const catWord = { refrigeration: 'cooler', network: 'network', av: 'TV', hvac: 'HVAC', power: 'power' };
+  const summary = Object.keys(byCat).map((k) => `${byCat[k]} ${catWord[k] || k}${byCat[k] === 1 ? '' : 's'}`).join(', ');
+  const alertsHtml = `<button class="hm-alerts ${alerts.length ? 'bad' : 'ok'} ${ALERTS_OPEN && alerts.length ? 'open' : ''}" onclick="toggleAlerts()" aria-expanded="${ALERTS_OPEN}">
+      <span style="display:flex; align-items:center; gap:10px;"><span class="n">${alerts.length || '✓'}</span><span>${alerts.length ? `alert${alerts.length === 1 ? '' : 's'} · ${summary}` : 'no alerts'}${tvAlerts ? ` <span class="muted" style="font-weight:600;">· ${tvAlerts} TV${tvAlerts === 1 ? '' : 's'} on the iPad</span>` : ''}</span></span>
+      ${alerts.length ? `<span>${ALERTS_OPEN ? '▴' : '▾'}</span>` : ''}
+    </button>
+    ${ALERTS_OPEN && alerts.length ? `<div class="hm-alertlist">${alerts.slice(0, 20).map((a) => `<div class="hm-alertrow"><div><b>${escapeHtml(a.systemName)}</b> · ${escapeHtml(shortLoc(a.locationName))}<br><span class="muted">${escapeHtml(a.message || '')}${a.acknowledgedAt ? ' · acknowledged' : ''}${a.silenced ? ' · silenced' : ''}</span></div>
+      <div style="display:flex; gap:6px; flex-shrink:0;">${a.acknowledgedAt ? '' : `<button class="small secondary" style="margin:0;" onclick="ackHomeAlert('${a.id}')">Ack</button>`}<a class="button small" style="margin:0; text-decoration:none;" href="${a.category === 'refrigeration' ? '/sensors.html' : '/monitoring.html'}">Open</a></div></div>`).join('')}${alerts.length > 20 ? `<div class="hm-alertrow"><a href="/monitoring.html" style="color:#8fb6ff;">and ${alerts.length - 20} more in Systems Monitoring</a></div>` : ''}</div>` : ''}`;
+  const blocks = (h.locations || []).map(hmBlock).join('');
+  const needs = h.needs ? [
+    h.needs.applicants ? `<a class="hm-need" href="/employees.html"><span>Applicants</span><span class="b">${h.needs.applicants}</span></a>` : '',
+    h.needs.gamesQueued ? `<a class="hm-need" href="/amusement.html"><span>Games not in SpotOn</span><span class="b warn">${h.needs.gamesQueued}</span></a>` : '',
+    h.needs.serviceCalls ? `<a class="hm-need" href="/servicecalls.html"><span>Service calls open</span><span class="b dim">${h.needs.serviceCalls}</span></a>` : '',
+  ].filter(Boolean) : [];
+  el.innerHTML = `${alertsHtml}
+    ${blocks ? `<div class="hm-kick">Right now</div>${blocks}` : ''}
+    ${needs.length ? `<div class="hm-kick" style="margin-top:12px;">Needs you</div><div class="hm-needs">${needs.join('')}</div>` : ''}
+    <div class="hm-kick" style="margin-top:12px;">Apps</div>`;
+}
+function toggleAlerts() { ALERTS_OPEN = !ALERTS_OPEN; renderHome(); }
+async function ackHomeAlert(id) {
+  try { await api(`/api/monitoring/alerts/${id}/ack`, { method: 'POST', body: {} }); await loadHome(); } catch (e) { /* the row stays */ }
+}
+async function loadHome() {
+  try { HOME = await api('/api/home'); renderHome(); } catch (e) { document.getElementById('homeTop').innerHTML = ''; }
+}
+setInterval(() => { if (HOME) loadHome(); }, 60000);
+
 async function safeCount(path) {
   try {
     const data = await api(path);
@@ -148,7 +239,7 @@ async function employeesReviewCount(person) {
   const person = requireAuth();
   if (!person) return;
   renderTopbar('Apps Home');
-  loadCriticalSystems();
+  if (person.role === 'owner' || person.role === 'manager') loadHome(person); else loadCriticalSystems();
 
   if (person.status && person.status !== 'active') {
     document.getElementById('statusCard').style.display = '';

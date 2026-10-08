@@ -18,6 +18,7 @@ const inventorycontrol = require('./inventorycontrol');
 const amusement = require('./amusement');
 const kitchenboard = require('./kitchenboard');
 const sensors = require('./sensors');
+const home = require('./home');
 const notify = require('./notify');
 const jotform = require('./jotform');
 const multer = require('multer');
@@ -292,6 +293,27 @@ res.json({ person: req.person, appAccess: access, cashHandlingTier, inventoryTie
 // Apps Home network board (Scotto's mockup) — same audience rule as the
 // older critical-systems widget below: the owner sees every bar, anyone
 // else the bars they've been granted in network_status_access.
+// The home screen (Oct 2026): one block per bar for the owner and
+// managers, open alerts, what needs them. Staff and maintenance get an
+// empty answer and keep the plain tile grid for now.
+app.get('/api/home', auth.requireSession('light'), async (req, res) => {
+const p = req.person;
+if (p.role !== 'owner' && p.role !== 'manager') return res.json({ lines: { network: false, bar: false, kitchen: false, coolers: false }, locations: [], alerts: [], needs: null });
+try {
+let ids = locationIdsOf(p);
+if (p.role === 'owner') { const { rows } = await pool.query('SELECT id FROM locations WHERE active = true'); ids = rows.map((r) => r.id); }
+res.json(await home.view(p, ids));
+} catch (err) { console.error('[home] view failed', err); res.status(500).json({ error: err.message }); }
+});
+app.get('/api/employees/:id/home-lines', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+res.json(await home.getLines(req.params.id));
+});
+app.post('/api/employees/:id/home-lines', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+res.json({ ok: true, lines: await home.setLines(req.params.id, req.body, req.person.id) });
+});
+
 app.get('/api/dashboard/network', auth.requireSession('light'), async (req, res) => {
 let locationIds;
 if (req.person.role === 'owner') {
