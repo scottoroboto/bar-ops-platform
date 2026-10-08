@@ -471,8 +471,13 @@ function isSilenced(system) {
 // status inside the same hour just refreshes the newest row's time and
 // detail, so "checked 20s ago" stays accurate and the 24-hour drill-down
 // still shows every change.
-async function recordStatus({ systemId, status, detail }) {
-  return withServiceClient(async (svc) => {
+// `message` (optional) is the alert text for this status, e.g. a cooler's
+// "Draft 3 is 44.2°F (above 40°F for 17 min)"; it also refreshes an open
+// alert so reminders carry the current reading. A system's config may
+// carry `notify_hold_ms` (sensors: 0, the sustain time is theirs) and
+// `quiet: true` (record and show, never text: battery / weak signal).
+async function recordStatus({ systemId, status, detail, message, quiet = false }, client = null) {
+  const run = async (svc) => {
     const detailJson = detail ? JSON.stringify(detail) : null;
     const { rowCount } = await svc.query(
       `WITH last AS (SELECT id, status, checked_at FROM system_status WHERE system_id = $1 ORDER BY checked_at DESC LIMIT 1)
@@ -494,19 +499,29 @@ async function recordStatus({ systemId, status, detail }) {
 
     if (isBad && !openAlert) {
       const system = await systemWithLocation(svc, systemId);
-      const message = `${system.name} at ${system.location_name} is ${status}.`;
+      const text = message || `${system.name} at ${system.location_name} is ${status}.`;
       const expectedOn = system.category === 'av' ? withinAvHours(system) : true;
       await svc.query(
         'INSERT INTO system_alerts (system_id, status, message, expected_on) VALUES ($1,$2,$3,$4)',
-        [systemId, status, message, expectedOn]
+        [systemId, status, text, expectedOn]
       );
-      // Deliberately no notification here — see DOWN_BEFORE_NOTIFY_MS.
+      // Deliberately no notification here — see DOWN_BEFORE_NOTIFY_MS —
+      // except for a system whose config sets the hold to 0 (sensors: the
+      // sustain time already passed before this was called).
+      const cfg0 = system.config || {};
+      if (Number(cfg0.notify_hold_ms) === 0 && !cfg0.quiet && !quiet && expectedOn && !isSilenced(system)) {
+        await notifyGroupOpened(svc, system, 0).catch((err) => console.error('[monitoring] notify(opened) error', err));
+      }
     } else if (isBad && openAlert) {
+      if (message && message !== openAlert.message) await svc.query('UPDATE system_alerts SET message = $2, status = $3 WHERE id = $1', [openAlert.id, message, status]);
       if (openAlert.notified_at || !openAlert.expected_on) return;
-      if (now - new Date(openAlert.opened_at).getTime() < DOWN_BEFORE_NOTIFY_MS) return;
       const system = await systemWithLocation(svc, systemId);
+      const cfg = system.config || {};
+      if (cfg.quiet || quiet) return; // shown on the dashboard and in the 6am summary, never texted
+      const hold = Number.isFinite(Number(cfg.notify_hold_ms)) ? Number(cfg.notify_hold_ms) : DOWN_BEFORE_NOTIFY_MS;
+      if (now - new Date(openAlert.opened_at).getTime() < hold) return;
       if (isSilenced(system) || system.category === 'av') return; // av: the bar's iPad handles it
-      await notifyGroupOpened(svc, system).catch((err) => console.error('[monitoring] notify(opened) error', err));
+      await notifyGroupOpened(svc, system, hold).catch((err) => console.error('[monitoring] notify(opened) error', err));
     } else if (!isBad && openAlert) {
       await svc.query('UPDATE system_alerts SET closed_at = now() WHERE id = $1', [openAlert.id]);
       if (!openAlert.notified_at) return; // nobody was told it was down, so nothing to close out
@@ -514,6 +529,43 @@ async function recordStatus({ systemId, status, detail }) {
       if (isSilenced(system)) return;
       await notifyAlert(svc, system, openAlert, 'closed').catch((err) => console.error('[monitoring] notify(closed) error', err));
     }
+  };
+  return client ? run(client) : withServiceClient(run);
+}
+
+// Somebody saw it. Stops the refrigeration reminders; the alert still
+// closes on its own when the reading comes back.
+async function acknowledgeAlert({ alertId, personId }) {
+  return withServiceClient(async (svc) => {
+    const { rows } = await svc.query(
+      `UPDATE system_alerts SET acknowledged_at = COALESCE(acknowledged_at, now()), acknowledged_by = COALESCE(acknowledged_by, $2)
+       WHERE id = $1 AND closed_at IS NULL RETURNING *`, [alertId, personId]);
+    return rows[0] || null;
+  });
+}
+
+// Refrigeration: an open alert that was texted and that nobody has
+// acknowledged is texted again every renotify_min (default 30), with the
+// current reading. Runs every minute from server/index.js.
+async function remindUnacknowledged() {
+  return withServiceClient(async (svc) => {
+    const { rows } = await svc.query(
+      `SELECT sa.*, ms.name AS system_name, ms.location_id, ms.category, ms.silenced_until, ms.config,
+              COALESCE(ss.renotify_min, 30) AS renotify_min
+       FROM system_alerts sa JOIN monitored_systems ms ON ms.id = sa.system_id
+       LEFT JOIN sensor_settings ss ON ss.location_id = ms.location_id
+       WHERE sa.closed_at IS NULL AND sa.acknowledged_at IS NULL AND sa.notified_at IS NOT NULL
+         AND ms.category = 'refrigeration' AND COALESCE((ms.config->>'quiet')::boolean, false) = false
+         AND (ms.silenced_until IS NULL OR ms.silenced_until <= now())
+         AND COALESCE(sa.last_notified_at, sa.notified_at) <= now() - (COALESCE(ss.renotify_min, 30) || ' minutes')::interval`);
+    let sent = 0;
+    for (const alert of rows) {
+      const system = await systemWithLocation(svc, alert.system_id);
+      await notifyAlert(svc, system, alert, 'reminder').catch((err) => console.error('[monitoring] reminder error', err));
+      await svc.query('UPDATE system_alerts SET last_notified_at = now(), reminder_count = reminder_count + 1 WHERE id = $1', [alert.id]);
+      sent += 1;
+    }
+    return sent;
   });
 }
 
@@ -538,7 +590,7 @@ async function pruneStatusHistory() {
 
 // Everything at this bar, in this category, that is open, past the hold,
 // unsilenced and not yet announced — announced together, once.
-async function notifyGroupOpened(svc, system) {
+async function notifyGroupOpened(svc, system, holdMs = DOWN_BEFORE_NOTIFY_MS) {
   const { rows: alerts } = await svc.query(
     `SELECT sa.*, ms.name AS system_name FROM system_alerts sa
      JOIN monitored_systems ms ON ms.id = sa.system_id
@@ -547,7 +599,7 @@ async function notifyGroupOpened(svc, system) {
        AND sa.opened_at <= now() - ($3 || ' milliseconds')::interval
        AND (ms.silenced_until IS NULL OR ms.silenced_until <= now())
      ORDER BY sa.opened_at`,
-    [system.location_id, system.category, DOWN_BEFORE_NOTIFY_MS]
+    [system.location_id, system.category, holdMs]
   );
   if (!alerts.length) return;
   await svc.query('UPDATE system_alerts SET notified_at = now(), last_notified_at = now() WHERE id = ANY($1::uuid[])', [alerts.map((a) => a.id)]);
@@ -812,6 +864,9 @@ async function notifyAlert(svc, system, alert, kind) {
       : `⚠ ${alerts.length} ${catLabel}s ${first.status} — ${system.location_name}`;
     text = (alerts.length === 1 ? `${first.message}\n\n` : `${alerts.length} ${catLabel}s at ${system.location_name} went ${first.status} together:\n${names.map((n) => `  • ${n}`).join('\n')}\n\n`)
       + `Down since: ${first.opened_at}\n\nYou'll get one note when it recovers. Anything still down is in the 6am summary. To quiet it, open the app and press Silence on it.`;
+  } else if (kind === 'reminder') {
+    subject = `⚠ Still: ${system.name} — ${system.location_name}`;
+    text = `${first.message}\n\nOpen since ${first.opened_at} and not acknowledged. Tap Acknowledge in Bar Ops to stop these reminders; it still clears itself when the reading comes back.`;
   } else if (kind === 'service_call') {
     subject = `⚠ TV needs service: ${system.name} — ${system.location_name}`;
     text = `The bar reported ${system.name} at ${system.location_name} from the TV Staff page. It has been unreachable since ${first.opened_at} and Turn On didn't bring it back.\n\nA service call has been opened (Service Calls app). Open the app to view.`;
@@ -1404,7 +1459,7 @@ module.exports = {
   getAttention, agentClear, agentServiceCall, setAvHours, withinAvHours, barParts,
   runDailySummaryIfDue, sendDailySummaries, setNotifySettings, modeFor, PREF_CATEGORIES,
   requireMonitoringAccess, listSystems, addSystem, updateSystem, archiveSystem, moveSystem,
-  listStatusHistory, listAlerts, recordStatus, pruneStatusHistory,
+  listStatusHistory, listAlerts, recordStatus, pruneStatusHistory, acknowledgeAlert, remindUnacknowledged,
   getNotifySettings, setNotifyChannel,
   listAlertRoutes, addAlertRoute, removeAlertRoute,
   pollUnifiSystems, unifiConfigured,

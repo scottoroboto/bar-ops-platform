@@ -16,6 +16,7 @@ const sonos = require('./lib/sonos');
 const pandora = require('./lib/pandora');
 const sports = require('./lib/sports');
 const kitchen = require('./lib/kitchen');
+const sensors = require('./lib/sensors');
 const lights = require('./lib/lights');
 const scheduler = require('./lib/scheduler');
 const layouts = require('./lib/layouts');
@@ -50,6 +51,7 @@ app.get('/api/status', (req, res) => {
     lastHeartbeatAt: cache.get('lastHeartbeatAt'),
     lastHeartbeatOk: cache.get('lastHeartbeatOk'),
     kitchen: kitchen.status(),
+    sensors: sensors.status(),
   });
 });
 
@@ -1213,6 +1215,7 @@ app.listen(config.PORT, () => {
   sonos.start();
   pandora.start();
   kitchen.start();
+  sensors.start();
   sports.start({
     receivers: sportsReceivers,
     tune: (slots, major, minor, via, actor) => tuneSlots(slots, major, minor, via, actor),

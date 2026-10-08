@@ -17,6 +17,7 @@ const vclights = require('./vclights');
 const inventorycontrol = require('./inventorycontrol');
 const amusement = require('./amusement');
 const kitchenboard = require('./kitchenboard');
+const sensors = require('./sensors');
 const notify = require('./notify');
 const jotform = require('./jotform');
 const multer = require('multer');
@@ -5201,6 +5202,70 @@ if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner onl
 res.json({ ok: !!(await kitchenboard.revokeDevice(req.params.id, req.person.id)) });
 });
 
+// ---------------------------------------------------------------------
+// Cooler temperature sensors (patch_059). The bar's box posts readings
+// with its agent token; people see them with Monitoring access.
+// ---------------------------------------------------------------------
+app.post('/api/venue/agent/sensors', requireAgentAuth(), async (req, res) => {
+try {
+res.json(await sensors.ingest(req.vcSite.location_id, req.body || {}));
+} catch (err) {
+console.error('[sensors] ingest failed', err);
+res.status(err.statusCode || 500).json({ ok: false, error: err.message });
+}
+});
+app.get('/api/venue/agent/sensors/config', requireAgentAuth(), async (req, res) => {
+try { res.json(await sensors.config(req.vcSite.location_id)); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Owner always; anyone else needs the Monitoring app and to work at that bar.
+async function sensorsAccess(person, locationId) {
+if (!locationId || !atMyLocation(person, locationId)) return false;
+if (person.role === 'owner') return true;
+return withServiceClient((c) => monitoring.requireMonitoringAccess(c, person.id));
+}
+function sensorsFail(res, err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+
+app.get('/api/sensors/view', auth.requireSession('light'), async (req, res) => {
+const loc = pickLocation(req.person, req.query.location_id);
+if (!(await sensorsAccess(req.person, loc))) return res.status(403).json({ error: 'Systems Monitoring isn’t turned on for your account at this bar.' });
+try { res.json(await sensors.view(loc)); } catch (err) { sensorsFail(res, err); }
+});
+app.get('/api/sensors/probes/:id/history', auth.requireSession('light'), async (req, res) => {
+const loc = await sensors.probeLocation(req.params.id);
+if (!(await sensorsAccess(req.person, loc))) return res.status(403).json({ error: 'Not your bar.' });
+try { res.json(await sensors.history(req.params.id, String(req.query.range || '24h'))); } catch (err) { sensorsFail(res, err); }
+});
+app.post('/api/sensors/probes/:id', auth.requireSession('full'), async (req, res) => {
+const loc = await sensors.probeLocation(req.params.id);
+if (!(await sensorsAccess(req.person, loc))) return res.status(403).json({ error: 'Not your bar.' });
+try { res.json({ ok: true, probe: await sensors.updateProbe(req.params.id, req.body) }); } catch (err) { sensorsFail(res, err); }
+});
+app.post('/api/sensors/nodes/:id', auth.requireSession('full'), async (req, res) => {
+const loc = await sensors.nodeLocation(req.params.id);
+if (!(await sensorsAccess(req.person, loc))) return res.status(403).json({ error: 'Not your bar.' });
+try { res.json({ ok: true, node: await sensors.updateNode(req.params.id, req.body) }); } catch (err) { sensorsFail(res, err); }
+});
+app.post('/api/sensors/nodes/:id/mode', auth.requireSession('light'), async (req, res) => {
+const loc = await sensors.nodeLocation(req.params.id);
+if (!(await sensorsAccess(req.person, loc))) return res.status(403).json({ error: 'Not your bar.' });
+try { res.json({ ok: true, node: await sensors.setMode(req.params.id, req.body || {}) }); } catch (err) { sensorsFail(res, err); }
+});
+app.post('/api/sensors/locations/:locationId/interval', auth.requireSession('full'), async (req, res) => {
+if (!(await sensorsAccess(req.person, req.params.locationId))) return res.status(403).json({ error: 'Not your bar.' });
+try { res.json({ ok: true, nodes: await sensors.setLocationInterval(req.params.locationId, (req.body || {}).intervalS) }); } catch (err) { sensorsFail(res, err); }
+});
+app.post('/api/sensors/settings/:locationId', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try { res.json({ ok: true, settings: await sensors.updateSettings(req.params.locationId, req.body) }); } catch (err) { sensorsFail(res, err); }
+});
+// Acknowledge an alert (any category): stops the reminders, keeps the alert until it clears.
+app.post('/api/monitoring/alerts/:id/ack', auth.requireSession('light'), async (req, res) => {
+const loc = await sensors.alertLocation(req.params.id);
+if (!(await sensorsAccess(req.person, loc))) return res.status(403).json({ error: 'Not your bar.' });
+try { res.json({ ok: true, alert: await monitoring.acknowledgeAlert({ alertId: req.params.id, personId: req.person.id }) }); } catch (err) { sensorsFail(res, err); }
+});
+
 app.listen(PORT, () => console.log(`Bar platform listening on http://localhost:${PORT}`));
 
 // Daily safety net, same idea as the Apps Script midnight trigger.
@@ -5235,6 +5300,12 @@ const pruneHistory = () => monitoring.pruneStatusHistory()
 .catch((err) => console.error('[monitoring] history prune error', err));
 setTimeout(pruneHistory, 90 * 1000);
 setInterval(pruneHistory, 60 * 60 * 1000);
+
+// Cooler sensors (patch_059): silent boxes and gateways every minute,
+// refrigeration reminders every minute, old readings once an hour.
+setInterval(() => { sensors.sweep().catch((err) => console.error('[sensors] sweep error', err)); }, 60 * 1000);
+setInterval(() => { monitoring.remindUnacknowledged().then((n) => { if (n) console.log(`[monitoring] ${n} reminder(s) sent`); }).catch((err) => console.error('[monitoring] reminder error', err)); }, 60 * 1000);
+setInterval(() => { sensors.prune().then((n) => { if (n) console.log(`[sensors] dropped ${n} old reading(s)`); }).catch((err) => console.error('[sensors] prune error', err)); }, 60 * 60 * 1000);
 
 // One UniFi connection check shortly after boot, so a new key shows up
 // in Render's logs as "N console(s), M device(s)" without anyone signing in.

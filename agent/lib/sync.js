@@ -276,6 +276,22 @@ async function pushHealth(items) {
 // page to show, and the Clear / Service call buttons. Turn On is local
 // (samsung-ws) and needs no cloud call -- the next health push closes the
 // alert on its own once the TV answers.
+// Cooler sensors (Oct 2026): a batch of node reports up, the probe/box
+// settings down. A 4xx comes back with err.status so the caller can drop
+// a batch the cloud will never take; anything else is retried.
+async function sensorsPush(payload) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/sensors`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(payload) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || `sensors push failed: ${res.status}`), { status: res.status });
+  return data;
+}
+async function sensorsConfig() {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/sensors/config`, { headers: authHeaders() });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `sensors config failed: ${res.status}`);
+  return data;
+}
+
 async function pullAttention() {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/attention`, { headers: authHeaders() });
   const data = await res.json().catch(() => ({}));
@@ -495,4 +511,5 @@ module.exports = {
   createScene, pushEvent, updateEvent, deleteEvent, reportEventState,
   takeBackupNow, listBackups, restoreBackup, pushActivity, pushHealth,
   pollCommands,
+  sensorsPush, sensorsConfig,
 };

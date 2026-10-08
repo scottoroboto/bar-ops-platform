@@ -38,4 +38,4 @@ function set(key, value) {
   setStmt.run(key, json);
 }
 
-module.exports = { get, set };
+module.exports = { get, set, db };

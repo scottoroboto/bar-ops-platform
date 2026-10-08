@@ -254,6 +254,12 @@ async function employeesReviewCount(person) {
     tiles.push(tileHtml({ icon: ICONS.venue_control, label: 'TV Staff', href: '/tv-staff.html' }));
   }
 
+  // Coolers (patch_059): the sensor boxes' temperatures. Owner always;
+  // anyone else with the Monitoring app.
+  if (person.role === 'owner' || (monEntry && monEntry.enabled)) {
+    tiles.push(tileHtml({ icon: ICONS.monitoring, label: 'Coolers', href: '/sensors.html' }));
+  }
+
   // Kitchen board (patch_055/057): the owner gets its settings; a manager
   // gets the board itself, where the owner has turned that on.
   if (person.role === 'owner') {
