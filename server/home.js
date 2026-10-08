@@ -25,9 +25,10 @@ const WIDGETS = ['alerts', 'network', 'bar_sales', 'bar_labor', 'bar_staff', 'ki
 async function linesFor(svc, person) {
   const all = Object.fromEntries(WIDGETS.map((k) => [k, true]));
   if (person.role === 'owner') return all;
+  // Managers start with nothing on; the owner switches on what each should see.
   const { rows } = await svc.query('SELECT * FROM home_lines WHERE person_id = $1', [person.id]);
   const r = rows[0] || {};
-  return Object.fromEntries(WIDGETS.map((k) => [k, r[k] !== false]));
+  return Object.fromEntries(WIDGETS.map((k) => [k, r[k] === true]));
 }
 
 async function getLines(personId) {

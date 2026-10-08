@@ -144,7 +144,7 @@ function hmCoolBtn(c, locId) {
 // the owner's switches for this person); a line with nothing on is left out.
 function hmSide(label, d, c, locId, kitchen, lines) {
   const key = kitchen ? 'kitchen' : 'bar';
-  const want = { sales: lines[`${key}_sales`] !== false, labor: lines[`${key}_labor`] !== false, staff: lines[`${key}_staff`] !== false, coolers: lines.coolers !== false && !!c };
+  const want = { sales: lines[`${key}_sales`] === true, labor: lines[`${key}_labor`] === true, staff: lines[`${key}_staff`] === true, coolers: lines.coolers === true && !!c };
   if (!want.sales && !want.labor && !want.staff && !want.coolers) return '';
   const warnPct = kitchen ? 46 : 30;
   const detail = kitchen ? `/kitchen-board.html?location_id=${encodeURIComponent(locId)}` : '#';
@@ -209,7 +209,7 @@ function renderHome() {
     h.needs.serviceCalls ? `<a class="hm-need" href="/servicecalls.html"><span>Service calls open</span><span class="b dim">${h.needs.serviceCalls}</span></a>` : '',
   ].filter(Boolean) : [];
   const stamp = h.at ? new Date(h.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-  el.innerHTML = `<div id="hmPull" class="hm-pull"></div>${h.lines && h.lines.alerts === false ? '' : alertsHtml}
+  el.innerHTML = `<div id="hmPull" class="hm-pull"></div>${h.lines && h.lines.alerts ? alertsHtml : ''}
     ${blocks ? `<div class="hm-kick">Widgets</div>${blocks}<div class="hm-stamp"><a href="#" onclick="loadHome(true); return false;">${HOME_LOADING ? 'Updating…' : `Updated ${stamp} · refresh`}</a></div>` : ''}
     ${needs.length ? `<div class="hm-kick" style="margin-top:12px;">Needs you</div><div class="hm-needs">${needs.join('')}</div>` : ''}
     <div class="hm-kick" style="margin-top:12px;">Apps</div>`;
