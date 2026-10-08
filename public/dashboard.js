@@ -201,8 +201,9 @@ function renderHome() {
     h.needs.gamesQueued ? `<a class="hm-need" href="/amusement.html"><span>Games not in SpotOn</span><span class="b warn">${h.needs.gamesQueued}</span></a>` : '',
     h.needs.serviceCalls ? `<a class="hm-need" href="/servicecalls.html"><span>Service calls open</span><span class="b dim">${h.needs.serviceCalls}</span></a>` : '',
   ].filter(Boolean) : [];
-  el.innerHTML = `${alertsHtml}
-    ${blocks ? `<div class="hm-kick">Right now</div>${blocks}` : ''}
+  const stamp = h.at ? new Date(h.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  el.innerHTML = `<div id="hmPull" class="hm-pull"></div>${alertsHtml}
+    ${blocks ? `<div class="hm-kick">Right now</div>${blocks}<div class="hm-stamp"><a href="#" onclick="loadHome(true); return false;">${HOME_LOADING ? 'Updating…' : `Updated ${stamp} · refresh`}</a></div>` : ''}
     ${needs.length ? `<div class="hm-kick" style="margin-top:12px;">Needs you</div><div class="hm-needs">${needs.join('')}</div>` : ''}
     <div class="hm-kick" style="margin-top:12px;">Apps</div>`;
 }
@@ -210,10 +211,36 @@ function toggleAlerts() { ALERTS_OPEN = !ALERTS_OPEN; renderHome(); }
 async function ackHomeAlert(id) {
   try { await api(`/api/monitoring/alerts/${id}/ack`, { method: 'POST', body: {} }); await loadHome(); } catch (e) { /* the row stays */ }
 }
-async function loadHome() {
-  try { HOME = await api('/api/home'); renderHome(); } catch (e) { document.getElementById('homeTop').innerHTML = ''; }
+let HOME_LOADING = false;
+async function loadHome(byHand) {
+  if (byHand && HOME) { HOME_LOADING = true; renderHome(); }
+  try { HOME = await api('/api/home'); } catch (e) { if (!HOME) { document.getElementById('homeTop').innerHTML = ''; return; } }
+  HOME_LOADING = false;
+  renderHome();
 }
 setInterval(() => { if (HOME) loadHome(); }, 60000);
+// Refresh when the page is opened again from the Home Screen or a tab.
+document.addEventListener('visibilitychange', () => { if (!document.hidden && HOME) loadHome(); });
+
+// Pull down from the top to refresh (a Home Screen app has no browser
+// reload). Past 70 px the pull is armed; letting go reloads the numbers.
+(function pullToRefresh() {
+  let startY = null; let armed = false;
+  const ind = () => document.getElementById('hmPull');
+  document.addEventListener('touchstart', (e) => { startY = window.scrollY <= 0 && HOME ? e.touches[0].clientY : null; armed = false; }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (startY == null) return;
+    const dy = e.touches[0].clientY - startY;
+    const el = ind(); if (!el) return;
+    if (dy > 10) { el.style.height = `${Math.min(56, dy / 2)}px`; el.textContent = dy > 70 ? 'Let go to refresh' : 'Pull to refresh'; armed = dy > 70; } else { el.style.height = '0px'; armed = false; }
+  }, { passive: true });
+  document.addEventListener('touchend', () => {
+    const el = ind();
+    if (el) { el.style.height = '0px'; el.textContent = ''; }
+    if (armed) loadHome(true);
+    startY = null; armed = false;
+  });
+})();
 
 async function safeCount(path) {
   try {

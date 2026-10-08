@@ -620,3 +620,6 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .hm-need { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--card-border); color: var(--text); text-decoration: none; font-size: 13px; font-weight: 600; }
 .hm-need .b { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: #e5566d; color: #fff; font-size: 12px; font-weight: 700; }
 .hm-need .b.warn { background: #e0a83e; color: #1b1400; } .hm-need .b.dim { background: #2f3542; }
+.hm-pull { height: 0; overflow: hidden; text-align: center; font-size: 12px; color: var(--muted); line-height: 56px; transition: height .15s; }
+.hm-stamp { text-align: right; font-size: 11px; margin: -4px 0 10px; }
+.hm-stamp a { color: var(--muted); text-decoration: none; }
