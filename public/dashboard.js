@@ -140,15 +140,22 @@ function hmCoolBtn(c, locId) {
   const cls = c.level === 'none' ? '' : hmLevelClass(c.level);
   return `<a class="hm-obtn ${cls}" href="/sensors.html?location_id=${encodeURIComponent(locId)}"><span class="s">coolers</span><span>${c.total ? `${c.ok}/${c.total}` : '—'}</span></a>`;
 }
-function hmSide(label, d, c, locId, kitchen) {
-  if (!d) return '';
+// One line of a bar block. Each number is a widget of its own (lines =
+// the owner's switches for this person); a line with nothing on is left out.
+function hmSide(label, d, c, locId, kitchen, lines) {
+  const key = kitchen ? 'kitchen' : 'bar';
+  const want = { sales: lines[`${key}_sales`] !== false, labor: lines[`${key}_labor`] !== false, staff: lines[`${key}_staff`] !== false, coolers: lines.coolers !== false && !!c };
+  if (!want.sales && !want.labor && !want.staff && !want.coolers) return '';
   const warnPct = kitchen ? 46 : 30;
+  const detail = kitchen ? `/kitchen-board.html?location_id=${encodeURIComponent(locId)}` : '#';
+  const stats = [];
+  if (d && want.sales) stats.push(`<a class="hm-stat" href="${detail}"><span class="k">sales</span><span class="v">${d.hasData ? money0(d.sales) : '—'}</span></a>`);
+  if (d && want.labor) stats.push(`<a class="hm-stat" href="${detail}"><span class="k">labor</span><span class="v ${d.laborPct != null && d.laborPct > warnPct ? 'warn' : ''}">${d.laborPct != null ? d.laborPct + '%' : '—'}</span></a>`);
+  if (d && want.staff) stats.push(`<a class="hm-stat" href="/scheduling.html"><span class="k">staff</span><span class="v ${d.staffScheduled > d.staffOn ? 'warn' : ''}">${d.hasData || d.staffScheduled ? `${d.staffOn}/${Math.max(d.staffOn, d.staffScheduled)}` : '—'}</span></a>`);
   return `<div class="hm-line">
     <span class="hm-area" style="${kitchen ? 'text-transform:none;' : ''}">${label}</span>
-    <a class="hm-stat" href="${kitchen ? `/kitchen-board.html?location_id=${encodeURIComponent(locId)}` : '#'}"><span class="k">sales</span><span class="v">${d.hasData ? money0(d.sales) : '—'}</span></a>
-    <a class="hm-stat" href="${kitchen ? `/kitchen-board.html?location_id=${encodeURIComponent(locId)}` : '#'}"><span class="k">labor</span><span class="v ${d.laborPct != null && d.laborPct > warnPct ? 'warn' : ''}">${d.laborPct != null ? d.laborPct + '%' : '—'}</span></a>
-    <a class="hm-stat" href="/scheduling.html"><span class="k">staff</span><span class="v ${d.staffScheduled > d.staffOn ? 'warn' : ''}">${d.hasData || d.staffScheduled ? `${d.staffOn}/${Math.max(d.staffOn, d.staffScheduled)}` : '—'}</span></a>
-    ${hmCoolBtn(c, locId)}
+    ${stats.join('')}${stats.length ? '' : '<span style="flex:1"></span>'}
+    ${want.coolers ? hmCoolBtn(c, locId) : ''}
   </div>`;
 }
 function hmBlock(l) {
@@ -172,8 +179,8 @@ function hmBlock(l) {
   else if (l.bar || l.kitchen) foot.push('no SpotOn pull at this bar yet');
   return `<div class="hm-block ${hmLevelClass(l.level)}">
     ${top}
-    ${hmSide('BAR', l.bar, coolers.bar, l.id, false)}
-    ${hmSide('Kitchen', l.kitchen, coolers.kitchen, l.id, true)}
+    ${hmSide('BAR', l.bar, coolers.bar, l.id, false, HOME.lines || {})}
+    ${hmSide('Kitchen', l.kitchen, coolers.kitchen, l.id, true, HOME.lines || {})}
     ${foot.length ? `<div class="hm-foot">${foot.map((f) => `<span>${escapeHtml(f)}</span>`).join('')}</div>` : ''}
   </div>`;
 }

@@ -21,7 +21,7 @@ function localParts(date, tz) {
 }
 function hm(t) { const m = String(t || '').match(/^(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; }
 
-const WIDGETS = ['alerts', 'network', 'bar', 'kitchen', 'coolers', 'applicants', 'games', 'service_calls'];
+const WIDGETS = ['alerts', 'network', 'bar_sales', 'bar_labor', 'bar_staff', 'kitchen_sales', 'kitchen_labor', 'kitchen_staff', 'coolers', 'applicants', 'games', 'service_calls'];
 async function linesFor(svc, person) {
   const all = Object.fromEntries(WIDGETS.map((k) => [k, true]));
   if (person.role === 'owner') return all;
@@ -40,10 +40,13 @@ async function setLines(personId, body, updatedBy) {
     const cur = await linesFor(svc, { id: personId, role: 'manager' });
     const next = Object.fromEntries(WIDGETS.map((k) => [k, b[k] !== undefined ? !!b[k] : cur[k]]));
     await svc.query(
-      `INSERT INTO home_lines (person_id, alerts, network, bar, kitchen, coolers, applicants, games, service_calls, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT (person_id) DO UPDATE SET alerts = EXCLUDED.alerts, network = EXCLUDED.network, bar = EXCLUDED.bar, kitchen = EXCLUDED.kitchen, coolers = EXCLUDED.coolers,
+      `INSERT INTO home_lines (person_id, alerts, network, bar_sales, bar_labor, bar_staff, kitchen_sales, kitchen_labor, kitchen_staff, coolers, applicants, games, service_calls, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (person_id) DO UPDATE SET alerts = EXCLUDED.alerts, network = EXCLUDED.network,
+         bar_sales = EXCLUDED.bar_sales, bar_labor = EXCLUDED.bar_labor, bar_staff = EXCLUDED.bar_staff,
+         kitchen_sales = EXCLUDED.kitchen_sales, kitchen_labor = EXCLUDED.kitchen_labor, kitchen_staff = EXCLUDED.kitchen_staff, coolers = EXCLUDED.coolers,
          applicants = EXCLUDED.applicants, games = EXCLUDED.games, service_calls = EXCLUDED.service_calls, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-      [personId, next.alerts, next.network, next.bar, next.kitchen, next.coolers, next.applicants, next.games, next.service_calls, updatedBy || null]);
+      [personId, next.alerts, next.network, next.bar_sales, next.bar_labor, next.bar_staff, next.kitchen_sales, next.kitchen_labor, next.kitchen_staff, next.coolers, next.applicants, next.games, next.service_calls, updatedBy || null]);
     return next;
   });
 }
@@ -103,7 +106,9 @@ async function view(person, locationIds) {
     for (const l of locs) {
       const tz = l.timezone || DEFAULT_TZ;
       const n = net.find((r) => String(r.locationId) === String(l.id)) || null;
-      const sides = (lines.bar || lines.kitchen) ? await sidesFor(svc, l.id, tz) : null;
+      const wantBar = lines.bar_sales || lines.bar_labor || lines.bar_staff;
+      const wantKitchen = lines.kitchen_sales || lines.kitchen_labor || lines.kitchen_staff;
+      const sides = (wantBar || wantKitchen) ? await sidesFor(svc, l.id, tz) : null;
       const sv = lines.coolers ? await sensors.view(l.id) : null;
       const tvs = await tvsFor(svc, l.id);
       const co2 = sv && sv.co2.length ? sv.co2[0] : null;
@@ -122,8 +127,8 @@ async function view(person, locationIds) {
           return { status: n.status, gearUp: gear.filter((d) => d.status === 'online').length, gearTotal: gear.length,
             latencyMs: n.wan ? n.wan.latencyMs : null, lossPct: n.wan ? n.wan.lossPct : null, clients: clientsFresh ? l.net_clients : null, speed: n.speed, cascade: n.cascade };
         })() : null,
-        bar: sides && lines.bar ? sides.bar : null,
-        kitchen: sides && lines.kitchen ? sides.kitchen : null,
+        bar: sides && wantBar ? sides.bar : null,
+        kitchen: sides && wantKitchen ? sides.kitchen : null,
         asOf: sides ? sides.asOf : null,
         coolers,
         tvs,

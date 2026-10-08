@@ -591,7 +591,7 @@ async function toggleAccess(personId, appKey, enabled) {
 // activation too, mirroring how app access itself works.
 // Home screen lines for a manager (patch_060): Network, Bar, Kitchen,
 // coolers. Owner only; saved one switch at a time.
-const HOME_LINES = [['alerts', 'Alerts button'], ['network', 'Network row'], ['bar', 'Bar line (sales, labor, staff)'], ['kitchen', 'Kitchen line (sales, labor, staff)'], ['coolers', 'Cooler buttons'], ['applicants', 'Needs you: applicants'], ['games', 'Needs you: games not in SpotOn'], ['service_calls', 'Needs you: service calls']];
+const HOME_LINES = [['alerts', 'Alerts button'], ['network', 'Network'], ['bar_sales', 'Bar sales'], ['bar_labor', 'Bar labor %'], ['bar_staff', 'Bar staff on'], ['kitchen_sales', 'Kitchen sales'], ['kitchen_labor', 'Kitchen labor %'], ['kitchen_staff', 'Kitchen staff on'], ['coolers', 'Coolers'], ['applicants', 'Applicants'], ['games', 'Games not in SpotOn'], ['service_calls', 'Service calls open']];
 async function renderDetailHome(person) {
   const el = document.getElementById('detailHome');
   el.innerHTML = '<p class="muted">Loading…</p>';
