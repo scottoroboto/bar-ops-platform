@@ -112,6 +112,11 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
    2026) instead of pushing the whole page off to the right. */
 .tabs { display: flex; gap: 8px; margin-bottom: 16px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 2px; }
 .tabs::-webkit-scrollbar { display: none; }
+/* A thin bar under a tab row that doesn't fit, so people see there is
+   more to the right (phones hide their own scrollbars). Drawn by
+   common.js; its thumb follows the row as it scrolls. */
+.tabs-scroll { height: 4px; border-radius: 2px; background: #262b36; margin: -12px 4px 14px; position: relative; overflow: hidden; }
+.tabs-scroll .thumb { position: absolute; top: 0; bottom: 0; left: 0; width: 40%; border-radius: 2px; background: var(--accent); opacity: .85; }
 .tabs button {
   flex: 1 0 auto;
   white-space: nowrap;

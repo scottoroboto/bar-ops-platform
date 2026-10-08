@@ -364,3 +364,41 @@ function renderTopnav(activeLabel) {
   }
   return `<nav class="topnav"><a class="crumb-link" href="/dashboard.html">Apps Home</a><span class="crumb-sep">›</span><span class="crumb-current">${escapeHtml(activeLabel)}</span></nav>`;
 }
+
+
+// ---------------------------------------------------------------------
+// Tab rows that don't fit the screen scroll sideways (styles.css .tabs).
+// Phones hide scrollbars, so a thin bar is drawn under any such row and
+// its thumb follows the scroll. Rows rendered later by a page's own JS
+// are picked up as they appear.
+// ---------------------------------------------------------------------
+(function tabScrollbars() {
+  if (typeof document === 'undefined') return;
+  const seen = new WeakSet();
+  function attach(tabs) {
+    if (seen.has(tabs)) return;
+    seen.add(tabs);
+    const bar = document.createElement('div');
+    bar.className = 'tabs-scroll';
+    bar.innerHTML = '<div class="thumb"></div>';
+    const thumb = bar.firstChild;
+    tabs.insertAdjacentElement('afterend', bar);
+    const update = () => {
+      const over = tabs.scrollWidth - tabs.clientWidth;
+      if (over <= 2) { bar.style.display = 'none'; return; }
+      bar.style.display = '';
+      const frac = tabs.clientWidth / tabs.scrollWidth;
+      thumb.style.width = `${Math.max(12, Math.round(frac * 100))}%`;
+      thumb.style.left = `${Math.round((tabs.scrollLeft / over) * (100 - Math.max(12, frac * 100)))}%`;
+    };
+    tabs.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(update).observe(tabs);
+    if (typeof MutationObserver !== 'undefined') new MutationObserver(update).observe(tabs, { childList: true, subtree: true });
+    update();
+    setTimeout(update, 300);
+  }
+  function scan() { document.querySelectorAll('.tabs').forEach(attach); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan); else scan();
+  if (typeof MutationObserver !== 'undefined') new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
+})();
