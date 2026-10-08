@@ -56,79 +56,11 @@ function tileHtml({ href, icon, label, note, count, disabled, external }) {
 // rest of the grid — badges are a nice-to-have, not load-bearing.
 // T1/T2/T3, matching employees.js's own shortLoc() convention for the
 // same "Ticket N" location names.
-// Network board (Scotto's mockup, 2026-09-22): one row per bar. A big
-// T1/T2/T3 tile colored by the bar's overall state, with the line's
-// current down/up speed, then a chip per registered network device in
-// its own color. Colors: green good, orange trouble but working, red
-// bad, grey nothing reported.
-function chipLabel(name) {
-  // Scotto's letters, as typed ("UDM Pro", "SW48 PoE"), on two lines.
-  return String(name || '').split(' ').map(escapeHtml).join('<br>');
-}
-// Scotto's topology layout (mockup 2026-09-22), as columns of up to two
-// chips, left to right:
-//   [ –, CABLE WAN ] [ FIBER WAN, CELL WAN ] [ UDM Pro ] [ USW AGG ]
-//   [ first switch, MRKI SW ] [ next switch ] … [ WAP 1, WAP 2 ] …
-// A one-chip column sits centered (UDM, AGG) unless it is an extra
-// switch, which stays on the top row like the mockup's SW48 POE2/3.
-function netColumns(devices) {
-  const of = (...kinds) => devices.filter(d => kinds.includes(d.kind));
-  const cols = [];
-  const cable = of('cable_wan')[0], fiber = of('unifi_wan', 'fiber_wan')[0], cell = of('cell_wan')[0];
-  if (cable) cols.push({ top: null, bottom: cable });
-  if (fiber || cell) cols.push({ top: fiber || null, bottom: cell || null });
-  for (const gw of of('unifi_gateway')) cols.push({ span: gw });
-  for (const agg of of('unifi_agg')) cols.push({ span: agg });
-  const switches = of('unifi_switch'), merakis = of('meraki_switch');
-  switches.forEach((sw, i) => cols.push(i === 0 ? { top: sw, bottom: merakis[0] || null } : { top: sw, bottom: null }));
-  if (!switches.length && merakis[0]) cols.push({ top: null, bottom: merakis[0] });
-  for (const m of merakis.slice(1)) cols.push({ top: null, bottom: m });
-  const aps = of('unifi_ap');
-  for (let i = 0; i < aps.length; i += 2) cols.push({ top: aps[i], bottom: aps[i + 1] || null });
-  return cols;
-}
-function chipHtml(d, r, place, col) {
-  if (!d) return '';
-  const why = d.status === 'online' ? 'good' : d.status === 'warning' ? 'trouble but working' : d.status === 'offline' ? 'down'
-    : (r.cascade && d.kind !== 'unifi_gateway') ? 'unknown — the UDM is down' : 'nothing reported';
-  return `<span class="net-chip ${d.status} ${place}" style="grid-column:${col}" title="${escapeHtml(d.name)}: ${why}${d.silenced ? ' (silenced)' : ''}">${chipLabel(d.name)}</span>`;
-}
-function netRowHtml(r) {
-  const num = (v) => (v == null ? 'NA' : Number(v).toFixed(1));
-  const spd = `<div class="spd"><span class="k">DOWN Mbps</span><span class="v">${r.speed ? num(r.speed.down) : 'NA'}</span></div>
-       <div class="spd"><span class="k">UP Mbps</span><span class="v">${r.speed ? num(r.speed.up) : 'NA'}</span></div>`;
-  const cols = netColumns(r.devices);
-  const chips = cols.map((c, i) => c.span
-    ? chipHtml(c.span, r, 'mid', i + 1)
-    : chipHtml(c.top, r, 'top', i + 1) + chipHtml(c.bottom, r, 'bot', i + 1)).join('');
-  const tip = r.speed && r.speed.stale ? ' (last speed test over a day ago)' : '';
-  return `<div class="net-row">
-    <a class="net-tile ${r.status}" href="/monitoring.html" title="${escapeHtml(r.locationName)}${tip} — open Systems Monitoring">
-      <span class="code">${escapeHtml(shortLoc(r.locationName))}</span>
-      <span class="speeds">${spd}</span>
-    </a>
-    <div class="net-chips" style="--cols:${cols.length || 1}">${chips || '<span class="muted" style="font-size:11px;">Register this bar\'s gear under Systems Monitoring → Add / Manage.</span>'}</div>
-  </div>`;
-}
-
-// Fire-and-forget from init() — a slow/failed fetch here shouldn't hold up
-// the app-tile grid; an empty result (nothing granted) just leaves the
-// board out entirely rather than showing an empty card.
-async function loadCriticalSystems() {
-  const el = document.getElementById('criticalSystemsWidget');
-  try {
-    const rows = await api('/api/dashboard/network');
-    el.innerHTML = rows.length ? `<div class="netboard">${rows.map(netRowHtml).join('')}</div>` : '';
-  } catch (e) {
-    el.innerHTML = '';
-  }
-}
-
 // ---------------------------------------------------------------------
-// The home screen for the owner and managers (Oct 2026): a collapsed
-// alerts button, one block per bar ("Right now"), and what needs them,
-// all above the app tiles. Managers see only the lines the owner turned
-// on for them (Employees card → Home screen).
+// The home screen for the owner, managers and maintenance (Oct 2026): a
+// collapsed alerts button, one block per bar ("Right now"), and what
+// needs them, all above the app tiles. Everyone but the owner sees only
+// the widgets the owner turned on for them (Employees card → Widgets).
 // ---------------------------------------------------------------------
 let HOME = null;
 let ALERTS_OPEN = false;
@@ -273,7 +205,7 @@ async function employeesReviewCount(person) {
   const person = requireAuth();
   if (!person) return;
   renderTopbar('Apps Home');
-  if (person.role === 'owner' || person.role === 'manager') loadHome(person); else loadCriticalSystems();
+  if (person.role === 'owner' || person.role === 'manager' || person.role === 'maintenance') loadHome(person);
 
   if (person.status && person.status !== 'active') {
     document.getElementById('statusCard').style.display = '';

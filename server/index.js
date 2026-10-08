@@ -285,23 +285,16 @@ const inventoryTier = await withServiceClient((client) => inventorycontrol.getEf
 res.json({ person: req.person, appAccess: access, cashHandlingTier, inventoryTier });
 });
 
-// Critical Systems dashboard widget — WAN/LAN/WAP per bar, filtered to
-// whichever locations this person has been granted (owner sees every
-// active location regardless of network_status_access; see
-// db/patch_029_critical_systems_widget.sql). Returns [] (widget hides)
-// for anyone with nothing turned on.
-// Apps Home network board (Scotto's mockup) — same audience rule as the
-// older critical-systems widget below: the owner sees every bar, anyone
-// else the bars they've been granted in network_status_access.
-// The home screen (Oct 2026): one block per bar for the owner and
-// managers, open alerts, what needs them. Staff and maintenance get an
+// The home screen (Oct 2026): one block per bar for the owner, managers
+// and maintenance, open alerts, what needs them. The owner and
+// maintenance cover every bar; a manager gets their own. Staff get an
 // empty answer and keep the plain tile grid for now.
 app.get('/api/home', auth.requireSession('light'), async (req, res) => {
 const p = req.person;
-if (p.role !== 'owner' && p.role !== 'manager') return res.json({ lines: { network: false, bar: false, kitchen: false, coolers: false }, locations: [], alerts: [], needs: null });
+if (p.role !== 'owner' && p.role !== 'manager' && p.role !== 'maintenance') return res.json({ lines: {}, locations: [], alerts: [], needs: null });
 try {
 let ids = locationIdsOf(p);
-if (p.role === 'owner') { const { rows } = await pool.query('SELECT id FROM locations WHERE active = true'); ids = rows.map((r) => r.id); }
+if (p.role === 'owner' || p.role === 'maintenance') { const { rows } = await pool.query('SELECT id FROM locations WHERE active = true'); ids = rows.map((r) => r.id); }
 res.json(await home.view(p, ids));
 } catch (err) { console.error('[home] view failed', err); res.status(500).json({ error: err.message }); }
 });
@@ -312,31 +305,6 @@ res.json(await home.getLines(req.params.id));
 app.post('/api/employees/:id/home-lines', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 res.json({ ok: true, lines: await home.setLines(req.params.id, req.body, req.person.id) });
-});
-
-app.get('/api/dashboard/network', auth.requireSession('light'), async (req, res) => {
-let locationIds;
-if (req.person.role === 'owner') {
-  const { rows: locs } = await pool.query('SELECT id FROM locations WHERE active = true');
-  locationIds = locs.map(l => l.id);
-} else {
-  const access = await employees.getNetworkAccessForPerson(req.person.id);
-  locationIds = access.filter(a => a.enabled).map(a => a.location_id);
-}
-res.json(await withServiceClient((client) => monitoring.getNetworkBoard(client, locationIds)));
-});
-
-app.get('/api/dashboard/critical-systems', auth.requireSession('light'), async (req, res) => {
-let locationIds;
-if (req.person.role === 'owner') {
-  const { rows: locs } = await pool.query('SELECT id FROM locations WHERE active = true');
-  locationIds = locs.map(l => l.id);
-} else {
-  const access = await employees.getNetworkAccessForPerson(req.person.id);
-  locationIds = access.filter(a => a.enabled).map(a => a.location_id);
-}
-const rows = await withServiceClient((client) => monitoring.getCriticalSystemsStatus(client, locationIds));
-res.json(rows);
 });
 
 // Public, unauthenticated — the whole point is this works for someone who
@@ -2991,7 +2959,7 @@ return res.status(403).json({ error: 'Managers/owners only.' });
 
 app.post('/api/employees/:id/activate', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can activate an employee.' });
-const result = await employees.activateEmployee({ personId: req.params.id, appAccess: req.body.appAccess, networkAccess: req.body.networkAccess, activatedBy: req.person.id });
+const result = await employees.activateEmployee({ personId: req.params.id, appAccess: req.body.appAccess, activatedBy: req.person.id });
 res.json(result);
 });
 
@@ -3046,14 +3014,6 @@ if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the 
 let expiresAt = null;
 if (timed) expiresAt = shiftExpiry(req.body.until);
 const result = await employees.setAppAccess({ personId: req.params.id, appKey: req.body.appKey, enabled: timed ? true : req.body.enabled, expiresAt, updatedBy: req.person.id });
-res.json(result);
-});
-
-// Critical Systems widget — which bar(s) this person's dashboard shows a
-// WAN/LAN/WAP row for. Owner-only to change, same posture as app-access.
-app.post('/api/employees/:id/network-access', auth.requireSession('full'), async (req, res) => {
-if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can change network status access.' });
-const result = await employees.setNetworkAccess({ personId: req.params.id, locationId: req.body.locationId, enabled: req.body.enabled, updatedBy: req.person.id });
 res.json(result);
 });
 

@@ -585,12 +585,8 @@ async function toggleAccess(personId, appKey, enabled) {
   }
 }
 
-// Critical Systems access — owner-only section on the employee data card
-// (see detailNetworkAccessFields in employees.html), same on/off-per-bar
-// shape as the activate modal's rows, just editable any time after
-// activation too, mirroring how app access itself works.
-// Home screen lines for a manager (patch_060): Network, Bar, Kitchen,
-// coolers. Owner only; saved one switch at a time.
+// Home screen widgets for a manager or maintenance person (patch_060
+// onward). Owner only; saved one switch at a time.
 const HOME_LINES = [['alerts', 'Alerts button'], ['network', 'Network'], ['bar_sales', 'Bar sales'], ['bar_labor', 'Bar labor %'], ['bar_staff', 'Bar staff on'], ['bar_coolers', 'Bar coolers'], ['kitchen_sales', 'Kitchen sales'], ['kitchen_labor', 'Kitchen labor %'], ['kitchen_staff', 'Kitchen staff on'], ['kitchen_coolers', 'Kitchen coolers'], ['applicants', 'Applicants'], ['games', 'Games not in SpotOn'], ['service_calls', 'Service calls open']];
 async function renderDetailHome(person) {
   const el = document.getElementById('detailHome');
@@ -609,25 +605,6 @@ async function setHomeLine(personId, key, enabled) {
   } catch (e) { showMsg(e.message, 'error'); const p = ALL_EMPLOYEES.find((x) => x.id === personId); if (p) renderDetailHome(p); }
 }
 
-function renderDetailNetworkAccess(person) {
-  document.getElementById('detailNetworkAccess').innerHTML = LOCATIONS.map(l => {
-    const on = !!(person.networkAccess && person.networkAccess[l.id]);
-    return `<div class="toggle-row"><span class="label">${escapeHtml(shortLoc(l.name))}</span>
-      <label class="switch"><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleNetworkAccess('${person.id}','${l.id}',this.checked)"><span class="slider"></span></label></div>`;
-  }).join('');
-}
-
-async function toggleNetworkAccess(personId, locationId, enabled) {
-  try {
-    const result = await withStepUp(() => api(`/api/employees/${personId}/network-access`, { method: 'POST', body: { locationId, enabled } }));
-    if (result && result.ok === false) { showMsg(result.error || 'Could not update access.', 'error'); }
-    await loadAllEmployees();
-    const p = ALL_EMPLOYEES.find(p => p.id === personId);
-    if (p) renderDetailNetworkAccess(p);
-  } catch (e) {
-    showMsg(e.message, 'error');
-  }
-}
 
 // ---- Review modal ----
 function openReviewModal(id) {
@@ -664,15 +641,6 @@ async function submitReview() {
 }
 
 // ---- Activate modal ----
-// One toggle row per active location, matching the fixed toggle-row
-// markup above but built at runtime since locations aren't a fixed enum
-// (see LOCATIONS in the init IIFE). shortLoc() gives "T1"/"T2"/"T3".
-function networkAccessRowsHtml(idPrefix) {
-  return LOCATIONS.map(l => `
-    <div class="toggle-row"><span class="label">Critical Systems — ${escapeHtml(shortLoc(l.name))}</span>
-      <label class="switch"><input type="checkbox" id="${idPrefix}_${l.id}"><span class="slider"></span></label></div>
-  `).join('');
-}
 
 function openActivateModal(id, name) {
   document.getElementById('activatePersonId').value = id;
@@ -685,7 +653,6 @@ function openActivateModal(id, name) {
   document.getElementById('accessServiceCalls').checked = false;
   document.getElementById('accessScheduling').checked = false;
   document.getElementById('accessMonitoring').checked = false;
-  document.getElementById('activateNetworkAccess').innerHTML = networkAccessRowsHtml('activateNet');
   document.getElementById('activateResult').innerHTML = '';
   document.getElementById('activateModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
@@ -706,13 +673,8 @@ async function submitActivate() {
     scheduling: document.getElementById('accessScheduling').checked,
     monitoring: document.getElementById('accessMonitoring').checked,
   };
-  const networkAccess = {};
-  LOCATIONS.forEach(l => {
-    const el = document.getElementById(`activateNet_${l.id}`);
-    if (el) networkAccess[l.id] = el.checked;
-  });
   try {
-    const result = await withStepUp(() => api(`/api/employees/${id}/activate`, { method: 'POST', body: { appAccess, networkAccess } }));
+    const result = await withStepUp(() => api(`/api/employees/${id}/activate`, { method: 'POST', body: { appAccess } }));
     if (!result.ok) { document.getElementById('activateResult').innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
     let box = `<div class="msg success">Activated — they're live.</div>`;
     if (result.tempPassword) {
@@ -811,12 +773,9 @@ function openEmployeeDetail(id) {
   document.getElementById('detailAppsFields').style.display = appsEditable ? '' : 'none';
   if (appsEditable) renderDetailApps(p);
 
-  const homeEditable = isOwner && p.role === 'manager' && p.status === 'active';
+  const homeEditable = isOwner && (p.role === 'manager' || p.role === 'maintenance') && p.status === 'active';
   document.getElementById('detailHomeFields').style.display = homeEditable ? '' : 'none';
   if (homeEditable) renderDetailHome(p);
-
-  document.getElementById('detailNetworkAccessFields').style.display = isOwner ? '' : 'none';
-  if (isOwner) renderDetailNetworkAccess(p);
 
   // Role is deliberately a separate section/action from the fields above —
   // see saveEmployeeRole(). Owner can't demote themselves (would leave the

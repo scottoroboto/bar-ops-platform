@@ -10,9 +10,7 @@
 // later; the registry/status/alert tables and the notify fan-out are
 // already generic across every kind.
 //
-// Ticket 3 used to be excluded here (it was being sold) — that block has
-// been removed (see db/patch_029_critical_systems_widget.sql) now that
-// it's being activated again; all three locations are in scope.
+// Every active location is in scope.
 const { withServiceClient } = require('./db');
 const notify = require('./notify');
 const servicecalls = require('./servicecalls');
@@ -195,57 +193,6 @@ async function listSystems(client, { locationId, category } = {}) {
     params
   );
   return rows;
-}
-
-// ---------------------------------------------------------------------
-// Critical Systems dashboard widget — WAN/LAN/WAP per location, reusing
-// this same registry rather than new tables: a location's WAN is its
-// registered 'unifi_gateway' system(s), LAN its 'unifi_switch'(es), WAP
-// its 'unifi_ap'(s), all under category='network'. One dot per kind per
-// location: 'offline' if anything in that group is down, 'online' only
-// if every system in the group is up, 'unknown' if nothing's registered
-// there yet (the honest starting state — no UniFi equipment is
-// registered anywhere as of this writing) or nothing's polled it yet.
-// ---------------------------------------------------------------------
-const NETWORK_KIND_TO_KEY = { unifi_gateway: 'wan', unifi_switch: 'lan', unifi_ap: 'wap' };
-
-function aggregateNetworkStatus(statuses) {
-  if (statuses.length === 0) return 'unknown';
-  if (statuses.some((s) => s === 'offline')) return 'offline';
-  if (statuses.every((s) => s === 'online')) return 'online';
-  return 'unknown';
-}
-
-async function getCriticalSystemsStatus(client, locationIds) {
-  if (!locationIds || locationIds.length === 0) return [];
-  const { rows: locRows } = await client.query(
-    'SELECT id, name FROM locations WHERE id = ANY($1::uuid[]) ORDER BY name',
-    [locationIds]
-  );
-  const byLocation = {};
-  locRows.forEach((l) => { byLocation[l.id] = { wan: [], lan: [], wap: [] }; });
-
-  const { rows } = await client.query(
-    `SELECT ms.location_id, ms.kind,
-            (SELECT status FROM system_status ss WHERE ss.system_id = ms.id ORDER BY checked_at DESC LIMIT 1) AS last_status
-     FROM monitored_systems ms
-     WHERE ms.active = true AND ms.category = 'network' AND ms.location_id = ANY($1::uuid[])
-       AND ms.kind IN ('unifi_gateway','unifi_switch','unifi_ap')`,
-    [locationIds]
-  );
-  for (const row of rows) {
-    const bucket = byLocation[row.location_id];
-    const key = NETWORK_KIND_TO_KEY[row.kind];
-    if (bucket && key) bucket[key].push(row.last_status || 'unknown');
-  }
-
-  return locRows.map((l) => ({
-    locationId: l.id,
-    locationName: l.name,
-    wan: aggregateNetworkStatus(byLocation[l.id].wan),
-    lan: aggregateNetworkStatus(byLocation[l.id].lan),
-    wap: aggregateNetworkStatus(byLocation[l.id].wap),
-  }));
 }
 
 // ---------------------------------------------------------------------
@@ -1474,5 +1421,4 @@ module.exports = {
   listAlertRoutes, addAlertRoute, removeAlertRoute,
   pollUnifiSystems, unifiConfigured,
   reportAvHealth, reportAgentSpeed, reportAgentWans, freshAgentSpeed,
-  getCriticalSystemsStatus,
 };
