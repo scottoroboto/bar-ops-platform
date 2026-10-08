@@ -12,6 +12,7 @@ const sensors = require('./sensors');
 const kitchenboard = require('./kitchenboard');
 
 const DEFAULT_TZ = 'America/Chicago';
+const GEAR_KINDS = new Set(['unifi_gateway', 'unifi_agg', 'unifi_switch', 'meraki_switch', 'unifi_ap']);
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 
 function localParts(date, tz) {
@@ -93,7 +94,7 @@ async function tvsFor(svc, locationId) {
 async function view(person, locationIds) {
   return withServiceClient(async (svc) => {
     const lines = await linesFor(svc, person);
-    const { rows: locs } = await svc.query('SELECT l.id, l.name, vs.timezone FROM locations l LEFT JOIN vc_sites vs ON vs.location_id = l.id WHERE l.id = ANY($1::uuid[]) AND l.active = true ORDER BY l.name', [locationIds]);
+    const { rows: locs } = await svc.query('SELECT l.id, l.name, vs.timezone, vs.net_clients, vs.net_clients_at FROM locations l LEFT JOIN vc_sites vs ON vs.location_id = l.id WHERE l.id = ANY($1::uuid[]) AND l.active = true ORDER BY l.name', [locationIds]);
     const net = lines.network ? await monitoring.getNetworkBoard(svc, locs.map((l) => l.id)) : [];
     const locations = [];
     for (const l of locs) {
@@ -110,7 +111,14 @@ async function view(person, locationIds) {
       const level = levels.includes('bad') ? 'bad' : levels.includes('warn') ? 'warn' : levels.includes('ok') ? 'ok' : 'none';
       locations.push({
         id: l.id, name: l.name, level,
-        network: n ? { status: n.status, gearUp: n.devices.filter((d) => d.status === 'online').length, gearTotal: n.devices.length, latencyMs: n.wan ? n.wan.latencyMs : null, lossPct: n.wan ? n.wan.lossPct : null, speed: n.speed, cascade: n.cascade } : null,
+        network: n ? (() => {
+          // "Gear" is the gateway, switches and access points that have
+          // ever reported; internet lines and never-polled rows don't count.
+          const gear = n.devices.filter((d) => GEAR_KINDS.has(d.kind) && d.reported);
+          const clientsFresh = l.net_clients_at && Date.now() - new Date(l.net_clients_at).getTime() < 15 * 60 * 1000;
+          return { status: n.status, gearUp: gear.filter((d) => d.status === 'online').length, gearTotal: gear.length,
+            latencyMs: n.wan ? n.wan.latencyMs : null, lossPct: n.wan ? n.wan.lossPct : null, clients: clientsFresh ? l.net_clients : null, speed: n.speed, cascade: n.cascade };
+        })() : null,
         bar: sides && lines.bar ? sides.bar : null,
         kitchen: sides && lines.kitchen ? sides.kitchen : null,
         asOf: sides ? sides.asOf : null,

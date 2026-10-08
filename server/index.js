@@ -1115,7 +1115,7 @@ res.json({ ok: true });
 // WAN port link states from the box (agent lib/health.js reportWans).
 app.post('/api/venue/agent/wans', requireAgentAuth(), async (req, res) => {
 try {
-res.json(await monitoring.reportAgentWans({ locationId: req.vcSite.location_id, wans: req.body && req.body.wans }));
+res.json(await monitoring.reportAgentWans({ locationId: req.vcSite.location_id, wans: req.body && req.body.wans, clients: req.body ? req.body.clients : null }));
 } catch (err) {
 res.status(500).json({ error: err.message });
 }

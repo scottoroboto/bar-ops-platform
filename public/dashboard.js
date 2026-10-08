@@ -138,7 +138,7 @@ function hmLevelClass(level) { return level === 'bad' ? 'bad' : level === 'warn'
 function hmCoolBtn(c, locId) {
   if (!c) return '';
   const cls = c.level === 'none' ? '' : hmLevelClass(c.level);
-  return `<a class="hm-obtn ${cls}" href="/sensors.html?location_id=${encodeURIComponent(locId)}"><span class="s">coolers</span><span>${c.total ? `${c.ok} of ${c.total}` : '—'}</span></a>`;
+  return `<a class="hm-obtn ${cls}" href="/sensors.html?location_id=${encodeURIComponent(locId)}"><span class="s">coolers</span><span>${c.total ? `${c.ok}/${c.total}` : '—'}</span></a>`;
 }
 function hmSide(label, d, c, locId, kitchen) {
   if (!d) return '';
@@ -147,7 +147,7 @@ function hmSide(label, d, c, locId, kitchen) {
     <span class="hm-area" style="${kitchen ? 'text-transform:none;' : ''}">${label}</span>
     <a class="hm-stat" href="${kitchen ? `/kitchen-board.html?location_id=${encodeURIComponent(locId)}` : '#'}"><span class="k">sales</span><span class="v">${d.hasData ? money0(d.sales) : '—'}</span></a>
     <a class="hm-stat" href="${kitchen ? `/kitchen-board.html?location_id=${encodeURIComponent(locId)}` : '#'}"><span class="k">labor</span><span class="v ${d.laborPct != null && d.laborPct > warnPct ? 'warn' : ''}">${d.laborPct != null ? d.laborPct + '%' : '—'}</span></a>
-    <a class="hm-stat" href="/scheduling.html"><span class="k">staff</span><span class="v ${d.staffScheduled > d.staffOn ? 'warn' : ''}">${d.hasData || d.staffScheduled ? `${d.staffOn} of ${Math.max(d.staffOn, d.staffScheduled)}` : '—'}</span></a>
+    <a class="hm-stat" href="/scheduling.html"><span class="k">staff</span><span class="v ${d.staffScheduled > d.staffOn ? 'warn' : ''}">${d.hasData || d.staffScheduled ? `${d.staffOn}/${Math.max(d.staffOn, d.staffScheduled)}` : '—'}</span></a>
     ${hmCoolBtn(c, locId)}
   </div>`;
 }
@@ -158,13 +158,13 @@ function hmBlock(l) {
       <a class="hm-code" href="/monitoring.html">${escapeHtml(shortLoc(l.name))}</a>
       <a class="hm-obtn ${netCls}" href="/monitoring.html">NETWORK</a>
       <div class="hm-net">
-        <span>${n.latencyMs != null ? n.latencyMs + ' ms' : (n.speed ? n.speed.down + '↓' : '—')}</span><span>${n.gearUp} of ${n.gearTotal} up</span>
-        <span style="${n.lossPct != null && n.lossPct > 1 ? 'color:#ffb454' : ''}">${n.lossPct != null ? n.lossPct + '% loss' : (n.speed ? n.speed.up + '↑ Mbps' : '')}</span><span>${l.tvs && l.tvs.total ? `TVs ${l.tvs.total - l.tvs.unreachable} of ${l.tvs.total}` : ''}</span>
+        <span>${n.latencyMs != null ? n.latencyMs + ' ms' : '— ms'}</span><span>${n.clients != null ? n.clients + ' clients' : '— clients'}</span>
+        <span style="${n.lossPct != null && n.lossPct > 1 ? 'color:#ffb454' : ''}">${n.lossPct != null ? n.lossPct + '% loss' : '— loss'}</span><span style="${n.gearTotal && n.gearUp < n.gearTotal ? 'color:#ffb454' : ''}">${n.gearTotal ? `${n.gearUp}/${n.gearTotal} up` : '— up'}</span>
       </div></div>`
     : `<div class="hm-top"><a class="hm-code" href="/dashboard.html">${escapeHtml(shortLoc(l.name))}</a><span class="muted" style="font-size:13px;">${escapeHtml(l.name)}</span></div>`;
   const coolers = l.coolers || {};
   const foot = [];
-  if (l.tvs && l.tvs.unreachable) foot.push(`${l.tvs.unreachable} TV${l.tvs.unreachable === 1 ? '' : 's'} unreachable`);
+  if (l.tvs && l.tvs.total) foot.push(`TVs ${l.tvs.total - l.tvs.unreachable}/${l.tvs.total} reachable`);
   if (l.co2) foot.push(`CO2 ${Number(l.co2.ppm).toLocaleString()} ppm${l.co2.state && l.co2.state !== 'normal' ? ' · ' + l.co2.state : ''}`);
   if (coolers.unassigned) foot.push(`${coolers.unassigned} new probe${coolers.unassigned === 1 ? '' : 's'} to name`);
   if (coolers.other && coolers.other.total) foot.push(`other coolers ${coolers.other.ok} of ${coolers.other.total}`);

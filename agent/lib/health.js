@@ -104,8 +104,10 @@ async function reportWans() {
   let wans;
   try { wans = await unifiLocal.wanLinks(); } catch (err) { return; } // UDM unreachable: say nothing rather than guess
   if (!wans.length) return;
+  let clients = null;
+  try { clients = await unifiLocal.clientCount(); } catch (err) { /* the WAN links still go up */ }
   try {
-    await sync.pushWans(wans);
+    await sync.pushWans(wans, clients);
     const sig = wans.map((w) => `${w.port}:${w.up ? 'up' : 'down'}:${w.ip || ''}`).join(' ');
     if (sig !== lastWanSig) { console.log(`[health] wan links: ${sig}`); lastWanSig = sig; }
   } catch (err) {

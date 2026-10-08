@@ -148,6 +148,14 @@ async function wanLinks() {
   return out;
 }
 
+// How many devices are on the network right now (every VLAN, wired and
+// wireless), for the home screen's NETWORK row.
+async function clientCount() {
+  const res = await authed('GET', `/proxy/network/api/s/${site()}/stat/sta`);
+  if (res.status !== 200) throw new Error(`UniFi client read failed (${res.status}).`);
+  return ((res.json && res.json.data) || []).length;
+}
+
 // For finding where a new Network version hides things: raw JSON of any path.
 async function raw(path) {
   const res = await authed('GET', path);
@@ -172,4 +180,4 @@ async function runSpeedTest({ waitMs = 120 * 1000 } = {}) {
   throw new Error('UniFi speed test did not finish in time.');
 }
 
-module.exports = { configured, lastResult, runSpeedTest, login, raw, gatewayDevice, wanLinks };
+module.exports = { configured, lastResult, runSpeedTest, login, raw, gatewayDevice, wanLinks, clientCount };

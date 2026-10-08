@@ -305,7 +305,7 @@ async function getNetworkBoard(client, locationIds) {
       // A reading that hasn't refreshed in 15 minutes is no longer a fact.
       if (status !== 'unknown' && r.last_checked_at && Date.now() - new Date(r.last_checked_at).getTime() > 15 * 60 * 1000) status = 'unknown';
       if (gatewayDown && r.kind !== 'unifi_gateway') status = 'unknown';
-      return { id: r.id, name: r.name, kind: r.kind, status, silenced: r.silenced };
+      return { id: r.id, name: r.name, kind: r.kind, status, silenced: r.silenced, reported: !!r.last_checked_at };
     });
     const line = mine.find((r) => r.kind === 'unifi_wan' && r.last_detail && r.last_detail.download_mbps != null);
     const d = line ? line.last_detail : null;
@@ -1120,8 +1120,11 @@ function wanDetail(system, sample) {
 // test on a standby line); the primary keeps its speed-based status from
 // the poll and only goes offline here when its link is actually down.
 const WAN_PORT_BY_KIND = { unifi_wan: 'wan1', fiber_wan: 'wan1', cable_wan: 'wan2', cell_wan: 'wan3' };
-async function reportAgentWans({ locationId, wans }) {
+async function reportAgentWans({ locationId, wans, clients }) {
   if (!locationId) return { ok: false, error: 'Missing location.' };
+  if (Number.isFinite(Number(clients)) && clients !== null) {
+    await withServiceClient((svc) => svc.query('UPDATE vc_sites SET net_clients = $2, net_clients_at = now() WHERE location_id = $1', [locationId, Math.max(0, Math.round(Number(clients)))]));
+  }
   const links = (Array.isArray(wans) ? wans : []).filter((w) => w && w.port);
   if (!links.length) return { ok: true, count: 0 };
   const byPort = new Map(links.map((w) => [String(w.port).toLowerCase(), w]));
@@ -1271,7 +1274,11 @@ async function pollUnifiSystems() {
       const agent = freshAgentSpeed(system);
       let sample;
       if (agent) {
-        sample = { downloadMbps: agent.download_mbps, uploadMbps: agent.upload_mbps, latencyMs: agent.latency_ms, packetLoss: null, metricTime: agent.measured_at, up: true, source: 'agent' };
+        // The box's test has the speed; packet loss (and latency when the
+        // box didn't measure one) still come from UniFi's 5-minute samples.
+        const cloud = cfg.hostId ? latestWanSample(metrics, cfg.hostId, cfg.wan) : null;
+        sample = { downloadMbps: agent.download_mbps, uploadMbps: agent.upload_mbps, latencyMs: agent.latency_ms != null ? agent.latency_ms : (cloud ? cloud.latencyMs : null),
+          packetLoss: cloud ? cloud.packetLoss : null, metricTime: agent.measured_at, up: true, source: 'agent' };
       } else if (cfg.hostId) {
         const cloud = latestWanSample(metrics, cfg.hostId, cfg.wan);
         sample = cloud ? { ...cloud, source: 'cloud' } : null;
