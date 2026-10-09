@@ -945,7 +945,11 @@ async function getNotifySettings(personId) {
 }
 
 // channel and/or prefs — either may be omitted. prefs: { category: mode }.
-async function setNotifySettings(personId, { channel, prefs } = {}) {
+// Texts need the person's own consent (patch_067): `self` is true when the
+// person is saving their own settings; `smsConsent` is the box they ticked.
+// Someone else (a manager) can only put a person on texts who already
+// agreed, and only the person's own save records the agreement.
+async function setNotifySettings(personId, { channel, prefs, smsConsent, self } = {}) {
   if (channel !== undefined && !['email', 'sms', 'both'].includes(channel)) return { ok: false, error: 'Invalid channel.' };
   const cleaned = {};
   if (prefs !== undefined) {
@@ -957,14 +961,27 @@ async function setNotifySettings(personId, { channel, prefs } = {}) {
     }
   }
   return withServiceClient(async (svc) => {
+    const wantsSms = channel === 'sms' || channel === 'both';
+    let consentAt = null; let consentPhone = null;
+    if (wantsSms) {
+      const { rows: pr } = await svc.query('SELECT phone FROM people WHERE id = $1', [personId]);
+      const phone = pr[0] && String(pr[0].phone || '').trim();
+      if (!phone) return { ok: false, error: self ? 'Add your mobile number under My Account first.' : 'This person has no mobile number on file.' };
+      const { rows: cur } = await svc.query('SELECT sms_consent_at, sms_consent_phone FROM monitoring_notify_settings WHERE person_id = $1', [personId]);
+      const already = cur[0] && cur[0].sms_consent_at && cur[0].sms_consent_phone === phone;
+      if (self && smsConsent) { consentAt = new Date(); consentPhone = phone; }
+      else if (!already) return { ok: false, error: self ? 'Tick the box to agree to text alerts.' : 'This person has not agreed to text alerts yet. They turn texts on themselves under Systems Monitoring.' };
+    }
     await svc.query(
-      `INSERT INTO monitoring_notify_settings (person_id, notify_channel, prefs, updated_at)
-       VALUES ($1, COALESCE($2, 'email'), COALESCE($3::jsonb, '{}'::jsonb), now())
+      `INSERT INTO monitoring_notify_settings (person_id, notify_channel, prefs, sms_consent_at, sms_consent_phone, updated_at)
+       VALUES ($1, COALESCE($2, 'email'), COALESCE($3::jsonb, '{}'::jsonb), $4, $5, now())
        ON CONFLICT (person_id) DO UPDATE SET
          notify_channel = COALESCE($2, monitoring_notify_settings.notify_channel),
          prefs = COALESCE($3::jsonb, monitoring_notify_settings.prefs),
+         sms_consent_at = COALESCE($4, monitoring_notify_settings.sms_consent_at),
+         sms_consent_phone = COALESCE($5, monitoring_notify_settings.sms_consent_phone),
          updated_at = now()`,
-      [personId, channel === undefined ? null : channel, prefs === undefined ? null : JSON.stringify(cleaned)]
+      [personId, channel === undefined ? null : channel, prefs === undefined ? null : JSON.stringify(cleaned), consentAt, consentPhone]
     );
     return { ok: true };
   });

@@ -3526,7 +3526,7 @@ app.get('/api/monitoring/notify-settings', auth.requireSession('light'), async (
   res.json(await monitoring.getNotifySettings(req.person.id));
 });
 app.post('/api/monitoring/notify-settings', auth.requireSession('light'), async (req, res) => {
-  res.json(await monitoring.setNotifySettings(req.person.id, { channel: req.body.channel, prefs: req.body.prefs }));
+  res.json(await monitoring.setNotifySettings(req.person.id, { channel: req.body.channel, prefs: req.body.prefs, smsConsent: req.body.smsConsent === true, self: true }));
 });
 // Managers/owner can set anyone's (patch_034: "a granular notification
 // option for every employee"). Managers only for people at their bars.
@@ -3538,7 +3538,7 @@ app.get('/api/monitoring/notify-settings/:personId', auth.requireSession('light'
 app.post('/api/monitoring/notify-settings/:personId', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
   if (!(await canManagePerson(req.person, req.params.personId))) return res.status(404).json({ error: 'Not found.' });
-  res.json(await monitoring.setNotifySettings(req.params.personId, { channel: req.body.channel, prefs: req.body.prefs }));
+  res.json(await monitoring.setNotifySettings(req.params.personId, { channel: req.body.channel, prefs: req.body.prefs, self: false }));
 });
 // TV hours per location — when a dark TV is worth flagging at all.
 app.post('/api/monitoring/locations/:id/av-hours', auth.requireSession('full'), async (req, res) => {

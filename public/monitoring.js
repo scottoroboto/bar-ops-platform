@@ -807,7 +807,13 @@ async function renderNotifications() {
         <option value="sms">Text (SMS)</option>
         <option value="both">Both</option>
       </select>
-      <p class="muted" id="smsNote" style="display:none;">Heads up — SMS isn't fully wired up yet on our end, so text alerts won't actually arrive until that's turned on. Email will still work.</p>
+      <div id="smsNote" style="display:none;">
+        <label class="toggle-row" style="gap:10px; align-items:flex-start; cursor:pointer;">
+          <input type="checkbox" id="smsConsent" style="margin-top:3px; width:auto;">
+          <span class="muted" style="font-size:13px;">I agree to receive automated text alerts from Bar Ops (Ticket Sports Bar) at the mobile number on my account, about equipment, scheduling and staffing at the bars where I work. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help. <a href="/privacy.html" target="_blank" rel="noopener">Privacy policy and texting terms</a>.</span>
+        </label>
+        <p class="muted" id="smsPhoneNote" style="font-size:12px;"></p>
+      </div>
       <button class="primary" onclick="submitNotifySettings()">Save</button>
     </div>
     ${IS_MANAGER ? `
@@ -923,6 +929,10 @@ async function loadNotifySettings() {
     if (settings.dailyBudget) document.getElementById('budgetNote').textContent = settings.dailyBudget;
     document.getElementById('notifyChannel').value = settings.notify_channel || 'email';
     document.getElementById('notifyChannel').onchange = updateSmsNote;
+    const consent = document.getElementById('smsConsent');
+    if (consent) consent.checked = !!settings.sms_consent_at;
+    const phoneNote = document.getElementById('smsPhoneNote');
+    if (phoneNote) phoneNote.textContent = settings.sms_consent_at ? `Agreed ${new Date(settings.sms_consent_at).toLocaleDateString()} for ${settings.sms_consent_phone || 'the number on file'}. Texts go to the mobile number under My Account.` : 'Texts go to the mobile number under My Account. Add it there first if it is missing.';
     updateSmsNote();
     if (IS_MANAGER) {
       const people = ROUTING_PEOPLE.length ? ROUTING_PEOPLE : await api('/api/employees');
@@ -937,8 +947,9 @@ async function loadNotifySettings() {
 
 async function submitNotifySettings() {
   const channel = document.getElementById('notifyChannel').value;
+  const smsConsent = !!(document.getElementById('smsConsent') && document.getElementById('smsConsent').checked);
   try {
-    const result = await api('/api/monitoring/notify-settings', { method: 'POST', body: { channel, prefs: readPrefs('pref') } });
+    const result = await api('/api/monitoring/notify-settings', { method: 'POST', body: { channel, prefs: readPrefs('pref'), smsConsent } });
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     showMsg('Saved.', 'success');
     loadNotifySettings();
