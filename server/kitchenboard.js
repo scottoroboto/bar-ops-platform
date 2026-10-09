@@ -140,7 +140,10 @@ function foodFromSales(sales, foodKeys) {
     if (foodKeys.some((k) => label.toLowerCase().includes(String(k).toLowerCase()))) { food += v; found = true; }
   }
   if (total == null) total = sales.reduce((a, r) => a + (r && typeof r === 'object' && !/total/i.test(labelOf(r)) ? num(moneyField(r, prefer)) : 0), 0);
-  return { food: found ? food : null, total };
+  // Sales rows with no food line yet (the bar is open, the kitchen has not
+  // rung anything) mean $0 of food, not "no data": the home screen's bar
+  // number is total minus food and must not go blank until lunch.
+  return { food: found ? food : (total != null ? 0 : null), total };
 }
 
 async function ownerPhones(client) {
