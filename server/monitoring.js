@@ -261,7 +261,11 @@ async function getNetworkBoard(client, locationIds) {
       at: d.measured_at || null,
       stale: !d.measured_at || Date.now() - new Date(d.measured_at).getTime() > STALE_MS,
     } : null;
-    const wanRow = mine.find((r) => ['unifi_wan', 'fiber_wan', 'cable_wan'].includes(r.kind) && r.last_detail) || null;
+    // Latency and loss come from whichever WAN row has measured them (the
+    // fiber line's agent/ISP sample), not the first WAN row in sort order:
+    // T1's CABLE WAN sits first and only carries link state.
+    const wanRows = mine.filter((r) => ['unifi_wan', 'fiber_wan', 'cable_wan'].includes(r.kind) && r.last_detail);
+    const wanRow = wanRows.find((r) => r.last_detail.latency_ms != null || r.last_detail.packet_loss != null) || wanRows[0] || null;
     const wd = wanRow ? wanRow.last_detail : null;
     const wan = wd ? { latencyMs: Number.isFinite(Number(wd.latency_ms)) ? Number(wd.latency_ms) : null, lossPct: Number.isFinite(Number(wd.packet_loss)) ? Number(wd.packet_loss) : null, at: wd.metric_time || wd.measured_at || null } : null;
     return { locationId: l.id, locationName: l.name, status: barStatusFrom(devices), cascade: gatewayDown, speed, wan, devices };
