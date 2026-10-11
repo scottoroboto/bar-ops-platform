@@ -1105,13 +1105,15 @@ const rid = String(it.receiverId || '').trim().slice(0, 64);
 const ip = typeof it.ip === 'string' && /^\d{1,3}(\.\d{1,3}){3}$/.test(it.ip) ? it.ip : null;
 const mac = typeof it.mac === 'string' && /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(it.mac) ? it.mac : null;
 if (!Number.isFinite(slot) || !rid || !ip) { out.push({ slot: it.slot, ok: false, error: 'bad item' }); continue; }
+const force = it.force === true; // the owner's mapping tool: this slot IS this box, whatever was recorded
 const { rows: clash } = await client.query('SELECT slot FROM vc_sources WHERE site_id = $1 AND receiver_id = $2 AND slot <> $3', [req.vcSite.site_id, rid, slot]);
-if (clash.length) { out.push({ slot, ok: false, error: `receiver ${rid} is already slot ${clash[0].slot}` }); continue; }
+if (clash.length && !force) { out.push({ slot, ok: false, error: `receiver ${rid} is already slot ${clash[0].slot}` }); continue; }
+if (clash.length && force) await client.query('UPDATE vc_sources SET receiver_id = NULL, updated_at = now() WHERE site_id = $1 AND receiver_id = $2 AND slot <> $3', [req.vcSite.site_id, rid, slot]);
 const r = await client.query(
-`UPDATE vc_sources SET receiver_id = COALESCE(receiver_id, $3), mac = COALESCE($4::macaddr, mac), ip = $5::inet, updated_at = now()
- WHERE site_id = $1 AND slot = $2 AND kind = 'directv' AND (receiver_id IS NULL OR receiver_id = $3)
+`UPDATE vc_sources SET receiver_id = CASE WHEN $6 THEN $3 ELSE COALESCE(receiver_id, $3) END, mac = COALESCE($4::macaddr, mac), ip = $5::inet, updated_at = now()
+ WHERE site_id = $1 AND slot = $2 AND kind = 'directv' AND ($6 OR receiver_id IS NULL OR receiver_id = $3)
  RETURNING slot, host(ip) AS ip, receiver_id`,
-[req.vcSite.site_id, slot, rid, mac, ip]);
+[req.vcSite.site_id, slot, rid, mac, ip, force]);
 out.push({ slot, ok: r.rowCount > 0, row: r.rows[0] || null });
 if (r.rowCount && it.moved) console.log(`[venue] ${req.vcSite.site_id} slot ${slot}: receiver ${rid} moved to ${ip}`);
 }
