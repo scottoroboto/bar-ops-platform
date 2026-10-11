@@ -23,6 +23,7 @@ const layouts = require('./lib/layouts');
 const events = require('./lib/events');
 const activity = require('./lib/activity');
 const directv = require('./lib/drivers/directv');
+const program = require('./lib/program');
 const roku = require('./lib/drivers/roku');
 const samsungWs = require('./lib/drivers/samsung-ws');
 const { driverFor, KEY_METHODS } = require('./lib/drivers'); // Samsung or LG per TV (cloud patch_039)
@@ -587,7 +588,12 @@ app.get('/api/sources/:slot/proginfo', async (req, res) => {
   try {
     const source = requireKind(findSource(req.params.slot), 'directv', 'read program info for');
     if (!req.query.major) return res.status(400).json({ error: 'Missing "major" query param.' });
-    const info = await directv.getProgInfo(source.ip, source.port || 8080, req.query.major, req.query.minor);
+    // Now-playing asks (no `time`) come back with what's on next and are
+    // cached until the program ends (lib/program.js); a guide lookup for
+    // a specific moment goes straight to the receiver as before.
+    const info = req.query.time != null
+      ? await directv.getProgInfo(source.ip, source.port || 8080, req.query.major, req.query.minor, Number(req.query.time))
+      : await program.withNext(source.ip, source.port || 8080, req.query.major, req.query.minor);
     res.json(info);
   } catch (err) {
     res.status(400).json({ error: err.message });

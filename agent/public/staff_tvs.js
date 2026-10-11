@@ -298,7 +298,7 @@ async function fillSourceTitles() {
     try {
       const info = await api(`/api/sources/${s.slot}/proginfo?major=${encodeURIComponent(s.live.major)}${s.live.minor != null ? `&minor=${encodeURIComponent(s.live.minor)}` : ''}`);
       if (myToken !== titleFillToken) return;
-      SOURCE_TITLES.set(Number(s.slot), { title: info && info.title, callsign: info && info.callsign });
+      SOURCE_TITLES.set(Number(s.slot), { title: info && info.title, callsign: info && info.callsign, next: (info && info.next) || null });
     } catch (e) {
       // Leave whatever title this slot already had.
     }
@@ -344,6 +344,7 @@ function renderSourceColumn() {
   box.innerHTML = `
     <div class="tvs-col-header"><span class="tvs-col-title">1 &middot; Pick a source</span></div>
     <div class="tvsrc-scroll"><div class="tvsrc-list">${SOURCES.map(sourceRowHtml).join('')}</div></div>`;
+  armTickers(box);
 }
 
 // One row per configured source. State language mirrors the Sources page's
@@ -387,9 +388,10 @@ function sourceRowHtml(s) {
     const t = SOURCE_TITLES.get(slot) || {};
     const headline = t.title || s.label;
     const callsign = t.callsign || s.label;
-    return `<button type="button" class="tvsrc-row${picked ? ' picked' : ''}" onclick="tvsrcTap(${slot})">
+    const nextHtml = nextLineHtml(t.next, 'tvsrc-next');
+    return `<button type="button" class="tvsrc-row${picked ? ' picked' : ''}${nextHtml ? ' has-next' : ''}" onclick="tvsrcTap(${slot})">
       <span class="tvsrc-slot">${escapeHtml(s.qam_channel || '')}</span>
-      <span class="tvsrc-title">${escapeHtml(headline)}</span>
+      ${nextHtml ? `<span class="tvsrc-mid"><span class="tvsrc-title">${escapeHtml(headline)}</span>${nextHtml}</span>` : `<span class="tvsrc-title">${escapeHtml(headline)}</span>`}
       <span class="tvsrc-callsign">${escapeHtml(callsign)}</span>
       <span class="tvsrc-count">${count}</span>
     </button>`;

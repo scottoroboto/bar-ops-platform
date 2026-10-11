@@ -206,7 +206,7 @@ async function fillSourceTitles() {
     try {
       const info = await api(`/api/sources/${s.slot}/proginfo?major=${encodeURIComponent(s.live.major)}${s.live.minor != null ? `&minor=${encodeURIComponent(s.live.minor)}` : ''}`);
       if (myToken !== titleFillToken) return; // a newer refresh cycle started
-      SOURCE_TITLES.set(Number(s.slot), { title: info && info.title, callsign: info && info.callsign });
+      SOURCE_TITLES.set(Number(s.slot), { title: info && info.title, callsign: info && info.callsign, next: (info && info.next) || null });
     } catch (e) {
       // Leave whatever title this slot already had -- a blank/failed
       // proginfo call shouldn't blank out a headline that was showing fine
@@ -282,11 +282,15 @@ function sourceCardHtml(s) {
     const gi = typeof sourceGameInfo === 'function' ? sourceGameInfo(slot) : null;
     const headline = (gi && gi.headline) || t.title || s.label;
     const callsign = t.callsign || s.label;
+    // What's on next, under the current program -- unless a game is already
+    // planned to switch onto this source, which is the better "coming up".
+    const nextHtml = (gi && gi.plan) ? '' : nextLineHtml(t.next, 'sc-next');
     return `
-      <button type="button" class="source-card${gi && gi.headline ? ' sc-game' : ''}" data-slot="${slot}" data-kind="directv" onclick="cardTap(${slot}, '${s.kind}')">
+      <button type="button" class="source-card${gi && gi.headline ? ' sc-game' : ''}${nextHtml ? ' has-next' : ''}" data-slot="${slot}" data-kind="directv" onclick="cardTap(${slot}, '${s.kind}')">
         <div class="sc-top"><span class="sc-slot">${escapeHtml(s.qam_channel)}</span><span class="sc-count">${tvCountLabel(slot, false)}</span></div>
         <div class="sc-headline">${escapeHtml(headline)}</div>
         ${gi && gi.line ? `<div class="sc-gameline">${escapeHtml(gi.line)}</div>` : ''}
+        ${nextHtml}
         ${gi && gi.plan ? `<div class="sc-plan">${escapeHtml(gi.plan)}</div>` : ''}
         <div class="sc-meta"><span class="sc-callsign">${escapeHtml(callsign)}</span><span class="sc-sub">${escapeHtml(formatChannel(live))}</span></div>
       </button>`;
@@ -342,6 +346,7 @@ function renderSources() {
   const box = document.getElementById('sourcesBox');
   if (!SOURCES.length) { box.innerHTML = '<p class="muted">No sources configured yet. Add one from TSB Platform: Venue Control &rarr; Sources.</p>'; return; }
   box.innerHTML = SOURCES.map(sourceCardHtml).join('');
+  armTickers(box);
 }
 
 async function sendKey(slot, key) {

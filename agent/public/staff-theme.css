@@ -1480,3 +1480,32 @@ body.gm-dragging, body.gm-dragging * { cursor: grabbing !important; }
 /* TV Remote as an icon button, left of ALL TVs ON (2026-10-05). */
 .staff-topbar .tva-btn.tva-remote-icon { padding: 7px 10px; }
 .staff-topbar .tva-remote-icon svg { display: block; }
+
+/* ---------------------------------------------------------------------
+   NEXT program (Oct 2026): one muted line under the current program on
+   the source cards and the TVs rail. Cards stay 160px: a game card's
+   headline drops to one line to make room. A line too long for its box
+   scrolls sideways on a loop (staff_ticker.js adds .scroll and .inner).
+   --------------------------------------------------------------------- */
+.staff .source-card .sc-next {
+  font-size: 13px; line-height: 1.3; color: var(--muted-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-top: -6px; position: relative; display: block;
+}
+.staff .source-card .sc-next .t, .staff .tvsrc-row .tvsrc-next .t { font-weight: 700; font-variant-numeric: tabular-nums; }
+.staff .source-card .sc-next .k, .staff .tvsrc-row .tvsrc-next .k { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted); margin-right: 5px; }
+.staff .source-card.sc-game.has-next .sc-headline { -webkit-line-clamp: 1; }
+.staff .source-card.sc-game .sc-next { margin-top: 0; }
+
+.staff .tvsrc-row .tvsrc-mid { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; line-height: 1.15; }
+.staff .tvsrc-row .tvsrc-mid .tvsrc-title { font-size: 15px; flex-grow: 0; }
+.staff .tvsrc-row .tvsrc-next {
+  font-size: 11px; font-weight: 500; color: var(--muted-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-top: 1px; position: relative; display: block;
+}
+.staff .tvsrc-row.picked .tvsrc-next, .staff .tvsrc-row.picked .tvsrc-next .k { color: var(--text); opacity: 0.8; }
+
+.staff .sc-next.scroll, .staff .tvsrc-next.scroll { text-overflow: clip; }
+.staff .sc-next.scroll .inner, .staff .tvsrc-next.scroll .inner { display: inline-block; white-space: nowrap; padding-right: 48px; animation: next-ticker var(--dur, 12s) linear infinite; }
+.staff .sc-next.scroll .inner::after, .staff .tvsrc-next.scroll .inner::after { content: attr(data-text); }
+@keyframes next-ticker { 0% { transform: translateX(0); } 8% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .staff .sc-next.scroll .inner, .staff .tvsrc-next.scroll .inner { animation: none; } }
