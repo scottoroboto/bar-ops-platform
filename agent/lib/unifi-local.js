@@ -156,6 +156,48 @@ async function clientCount() {
   return ((res.json && res.json.data) || []).length;
 }
 
+// Active clients with what a DHCP reservation needs (Oct 2026: pinning
+// the DirecTV receivers after T1's power cut moved them).
+async function clients() {
+  const res = await authed('GET', `/proxy/network/api/s/${site()}/stat/sta`);
+  if (res.status !== 200) throw new Error(`UniFi client read failed (${res.status}).`);
+  return ((res.json && res.json.data) || []).map((c) => ({
+    mac: String(c.mac || '').toLowerCase(), ip: c.ip || c.last_ip || null, name: c.name || c.hostname || null, oui: c.oui || null,
+    userId: c.user_id || c._id || null, networkId: c.network_id || null, fixed: !!c.use_fixedip, fixedIp: c.fixed_ip || null,
+  }));
+}
+
+function inSubnet(ip, cidr) {
+  const toInt = (s) => s.split('.').reduce((a, o) => (a << 8) + Number(o), 0) >>> 0;
+  const [net, bits] = String(cidr).split('/');
+  if (!net || !bits) return false;
+  const mask = bits === '0' ? 0 : (~0 << (32 - Number(bits))) >>> 0;
+  return (toInt(ip) & mask) === (toInt(net) & mask);
+}
+
+// Give one client a fixed address in the gateway's DHCP: the client's
+// persistent record (/rest/user) gets use_fixedip + the address + which
+// network it lives on. Reserving the address the box already has changes
+// nothing on the wire; the box simply keeps it from now on.
+async function reserveIp(mac, ip) {
+  const m = String(mac || '').toLowerCase();
+  const users = await authed('GET', `/proxy/network/api/s/${site()}/rest/user`);
+  if (users.status !== 200) throw new Error(`UniFi client list failed (${users.status}).`);
+  const u = ((users.json && users.json.data) || []).find((x) => String(x.mac || '').toLowerCase() === m);
+  if (!u) throw new Error(`UniFi has no client record for ${m}.`);
+  let networkId = u.network_id || null;
+  if (!networkId) { const c = (await clients()).find((x) => x.mac === m); networkId = c && c.networkId; }
+  if (!networkId) {
+    const nets = await authed('GET', `/proxy/network/api/s/${site()}/rest/networkconf`);
+    const n = ((nets.json && nets.json.data) || []).find((x) => x.ip_subnet && inSubnet(ip, x.ip_subnet));
+    networkId = n && n._id;
+  }
+  if (!networkId) throw new Error(`Could not tell which UniFi network ${ip} belongs to.`);
+  const res = await authed('PUT', `/proxy/network/api/s/${site()}/rest/user/${u._id}`, { use_fixedip: true, fixed_ip: ip, network_id: networkId });
+  if (res.status !== 200) throw new Error(`UniFi reservation failed (${res.status}): ${(res.json && res.json.meta && res.json.meta.msg) || String(res.text || '').slice(0, 120)}`);
+  return { mac: m, ip, name: u.name || u.hostname || null, alreadyFixed: !!u.use_fixedip && u.fixed_ip === ip };
+}
+
 // For finding where a new Network version hides things: raw JSON of any path.
 async function raw(path) {
   const res = await authed('GET', path);
@@ -180,4 +222,4 @@ async function runSpeedTest({ waitMs = 120 * 1000 } = {}) {
   throw new Error('UniFi speed test did not finish in time.');
 }
 
-module.exports = { configured, lastResult, runSpeedTest, login, raw, gatewayDevice, wanLinks, clientCount };
+module.exports = { configured, lastResult, runSpeedTest, login, raw, gatewayDevice, wanLinks, clientCount, clients, reserveIp };

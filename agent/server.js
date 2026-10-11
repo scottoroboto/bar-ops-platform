@@ -1180,6 +1180,62 @@ app.post('/api/scenes/capture', requireManager, async (req, res) => {
   }
 });
 
+// Receiver addresses (Oct 2026). Each DirecTV slot with its configured
+// address, the box's receiver ID check (lib/identity.js), its MAC, and
+// whether the gateway already reserves that address for it. "Reserve"
+// pins every receiver to the address it has right now via the UDM's own
+// API, so DHCP can never move it again, and records the MAC in the cloud.
+const unifiLocal = require('./lib/unifi-local');
+async function receiverRows() {
+  const config = cache.get('config') || {};
+  const sources = (config.sources || []).filter((s) => s.kind === 'directv' && s.enabled !== false);
+  let clients = [];
+  let unifiError = null;
+  if (unifiLocal.configured()) { try { clients = await unifiLocal.clients(); } catch (err) { unifiError = err.message; } }
+  const arp = require('./lib/discovery/scanner').readArpTable();
+  const rows = sources.map((s) => {
+    const idn = identity.get(s.slot);
+    const c = s.ip ? clients.find((x) => x.ip === s.ip) : null;
+    const mac = (c && c.mac) || (idn && idn.mac) || (s.ip && arp.get(s.ip)) || s.mac || null;
+    return {
+      slot: s.slot, qam_channel: s.qam_channel, label: s.label, ip: s.ip || null, ip_configured: s.ip_configured || null,
+      receiver_id: s.receiver_id || null, identity: idn, mac,
+      unifi: c ? { name: c.name, fixed: c.fixed, fixedIp: c.fixedIp } : null,
+    };
+  });
+  return { rows, unifiConfigured: unifiLocal.configured(), unifiError };
+}
+app.get('/api/admin/receivers', requireManager, async (req, res) => {
+  try { res.json(await receiverRows()); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/admin/receivers/reserve', requireManager, async (req, res) => {
+  try {
+    if (!unifiLocal.configured()) return res.status(400).json({ error: 'This box has no UniFi login (UNIFI_URL/USER/PASS in agent/.env).' });
+    const want = Array.isArray(req.body && req.body.slots) ? req.body.slots.map(Number) : null;
+    const { rows } = await receiverRows();
+    const results = [];
+    const report = [];
+    for (const r of rows) {
+      if (want && !want.includes(Number(r.slot))) continue;
+      if (!r.ip || !r.mac) { results.push({ slot: r.slot, ok: false, error: !r.ip ? 'no address configured' : 'MAC unknown (box not seen on the network)' }); continue; }
+      if (r.identity && (r.identity.status === 'mismatch' || r.identity.status === 'duplicate')) { results.push({ slot: r.slot, ok: false, error: `not reserving: ${r.identity.status === 'duplicate' ? 'shares its address with another receiver' : 'the box at this address is not this receiver'}` }); continue; }
+      try {
+        const out = await unifiLocal.reserveIp(r.mac, r.ip);
+        results.push({ slot: r.slot, ok: true, ip: r.ip, mac: r.mac, name: out.name, alreadyFixed: out.alreadyFixed });
+        const rid = r.receiver_id || (r.identity && r.identity.found) || null;
+        if (rid) report.push({ slot: r.slot, receiverId: rid, ip: r.ip, mac: r.mac });
+      } catch (err) {
+        results.push({ slot: r.slot, ok: false, error: err.message });
+      }
+    }
+    if (report.length) sync.reportSourceIdentity(report).catch((err) => console.warn('[receivers] identity report failed:', err.message));
+    activity.record('receivers.reserve', { actor: req.vcActor, targetType: 'source', targetId: null, detail: { ok: results.filter((x) => x.ok).length, failed: results.filter((x) => !x.ok).length } });
+    res.json({ ok: true, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/layouts/:id/capture', async (req, res) => {
   try {
     const items = layouts.captureCurrentState();

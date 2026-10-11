@@ -22,6 +22,17 @@
   <p class="muted">Setup and disaster-recovery actions — not for day-to-day use. <a href="/">&larr; Agent status</a> · <a href="/discovery.html">Discovery &amp; Diagnostics &rarr;</a></p>
 
   <div class="card">
+    <h2>Receiver addresses</h2>
+    <p class="muted">Each DirecTV receiver is reached by its network address. <b>Reserve</b> pins every receiver to the address it has right now in the gateway's DHCP, so a power cut can never shuffle them again. Nothing changes on the wire. A red row is a receiver the box is not sure about; fix it under Venue Control before reserving.</p>
+    <div id="receiversBox"><p class="muted">Loading…</p></div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+      <button onclick="loadReceivers()">Refresh</button>
+      <button class="primary" id="reserveBtn" onclick="reserveReceivers()">Reserve these addresses in UniFi</button>
+    </div>
+    <div id="receiversMsg"></div>
+  </div>
+
+  <div class="card">
     <h2>Capture current state into a layout</h2>
     <p class="muted">Reads what every source is tuned to and what every TV is showing right now, and saves it as that layout's preset. Do this once the room actually looks the way you want the layout to reproduce.</p>
     <div class="field">

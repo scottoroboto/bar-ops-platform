@@ -14,6 +14,7 @@ function submitPin() {
     document.getElementById('pinGate').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     loadLayoutsForCapture();
+    loadReceivers();
     loadBackups();
   }).catch(() => {
     document.getElementById('pinMsg').innerHTML = '<div class="msg error">Incorrect PIN.</div>';
@@ -29,6 +30,52 @@ async function api(path, opts = {}) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
   return data;
+}
+
+// ---- Receiver addresses ----
+let RECEIVERS = [];
+async function loadReceivers() {
+  const box = document.getElementById('receiversBox');
+  try {
+    const d = await api('/api/admin/receivers');
+    RECEIVERS = d.rows || [];
+    const idText = (r) => {
+      const i = r.identity;
+      if (!i) return '<span class="muted">not checked yet</span>';
+      if (i.status === 'ok') return `<span style="color:#4caf3a">ok · ${escapeHtml(i.found || i.expected || '')}</span>${i.movedFrom ? ` <span class="muted">(moved from ${escapeHtml(i.movedFrom)})</span>` : ''}`;
+      if (i.status === 'mismatch') return `<span style="color:#e3242b">wrong box · found ${escapeHtml(i.found || '?')}, expected ${escapeHtml(i.expected || '?')}</span>`;
+      if (i.status === 'duplicate') return `<span style="color:#e3242b">same address as Rcvr ${escapeHtml(i.sharedWith.join(', '))}</span>`;
+      if (i.status === 'unreachable') return '<span style="color:#e8931c">not answering</span>';
+      return '<span class="muted">no receiver ID yet</span>';
+    };
+    box.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:13px;">
+      <tr class="muted"><th style="text-align:left">Rcvr</th><th style="text-align:left">Address</th><th style="text-align:left">MAC</th><th style="text-align:left">Box check</th><th style="text-align:left">UniFi</th></tr>
+      ${RECEIVERS.map((r) => `<tr style="border-top:1px solid #333;">
+        <td style="padding:6px 4px;"><b>${escapeHtml(r.qam_channel || r.slot)}</b> <span class="muted">${escapeHtml(r.label || '')}</span></td>
+        <td style="padding:6px 4px;">${escapeHtml(r.ip || '—')}</td>
+        <td style="padding:6px 4px; font-family:monospace;">${escapeHtml(r.mac || '—')}</td>
+        <td style="padding:6px 4px;">${idText(r)}</td>
+        <td style="padding:6px 4px;">${r.unifi ? (r.unifi.fixed ? `<span style="color:#4caf3a">reserved ${escapeHtml(r.unifi.fixedIp || '')}</span>` : 'dynamic') : '<span class="muted">not seen</span>'}</td>
+      </tr>`).join('')}
+    </table>${d.unifiConfigured ? '' : '<p class="muted">This box has no UniFi login, so it can list but not reserve.</p>'}${d.unifiError ? `<p class="msg error">UniFi: ${escapeHtml(d.unifiError)}</p>` : ''}`;
+  } catch (e) {
+    box.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+async function reserveReceivers() {
+  const btn = document.getElementById('reserveBtn');
+  const msg = document.getElementById('receiversMsg');
+  btn.disabled = true; msg.innerHTML = '<p class="muted">Reserving…</p>';
+  try {
+    const d = await api('/api/admin/receivers/reserve', { method: 'POST', body: JSON.stringify({}) });
+    const ok = d.results.filter((x) => x.ok); const bad = d.results.filter((x) => !x.ok);
+    msg.innerHTML = `<p class="msg ${bad.length ? 'error' : 'success'}">${ok.length} reserved${bad.length ? `, ${bad.length} skipped` : ''}.</p>` +
+      (bad.length ? `<ul class="muted">${bad.map((x) => `<li>Rcvr ${escapeHtml(x.slot)}: ${escapeHtml(x.error)}</li>`).join('')}</ul>` : '');
+    loadReceivers();
+  } catch (e) {
+    msg.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+  btn.disabled = false;
 }
 
 function escapeHtml(s) {
