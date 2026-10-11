@@ -57,9 +57,35 @@ async function loadReceivers() {
         <td style="padding:6px 4px;">${idText(r)}</td>
         <td style="padding:6px 4px;">${r.unifi ? (r.unifi.fixed ? `<span style="color:#4caf3a">reserved ${escapeHtml(r.unifi.fixedIp || '')}</span>` : 'dynamic') : '<span class="muted">not seen</span>'}</td>
       </tr>`).join('')}
-    </table>${d.unifiConfigured ? '' : '<p class="muted">This box has no UniFi login, so it can list but not reserve.</p>'}${d.unifiError ? `<p class="msg error">UniFi: ${escapeHtml(d.unifiError)}</p>` : ''}`;
+    </table>${d.unifiConfigured ? '' : '<p class="muted">This box has no UniFi login, so it can list but not reserve.</p>'}${d.unifiError ? `<p class="msg error">UniFi: ${escapeHtml(d.unifiError)}</p>` : ''}
+    ${(d.unassigned || []).length ? `<h3 style="margin:16px 0 6px;">New receivers on the network</h3>
+      <p class="muted">DirecTV boxes answering on the LAN that belong to no slot. Give each its receiver number (10 for channel 10.1) and Adopt.</p>
+      ${d.unassigned.map((u, i) => `<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:6px 0; border-top:1px solid #333;">
+        <span style="font-family:monospace;">${escapeHtml(u.ip)}</span><span class="muted" style="font-family:monospace;">${escapeHtml(u.mac || 'MAC unknown')}</span><span class="muted">ID ${escapeHtml(u.receiverId)}</span>
+        <input id="adoptSlot${i}" type="number" min="1" max="999" placeholder="Rcvr #" style="width:90px;">
+        <button class="primary" onclick="adoptReceiver('${escapeHtml(u.receiverId)}', ${i})">Adopt</button>
+      </div>`).join('')}` : '<p class="muted" style="margin-top:10px;">No unassigned receivers on the network (checked hourly, and on Refresh).</p>'}`;
   } catch (e) {
     box.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+async function recheckReceivers() {
+  const msg = document.getElementById('receiversMsg');
+  msg.innerHTML = '<p class="muted">Asking every box who it is and sweeping the network (about 20 seconds)…</p>';
+  try { await api('/api/sources/identity/check', { method: 'POST', body: JSON.stringify({}) }); msg.innerHTML = ''; } catch (e) { msg.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
+  loadReceivers();
+}
+async function adoptReceiver(receiverId, i) {
+  const slot = Number(document.getElementById(`adoptSlot${i}`).value);
+  const msg = document.getElementById('receiversMsg');
+  if (!slot) { msg.innerHTML = '<p class="msg error">Enter the receiver number first.</p>'; return; }
+  msg.innerHTML = '<p class="muted">Adopting…</p>';
+  try {
+    const d = await api('/api/admin/receivers/adopt', { method: 'POST', body: JSON.stringify({ receiverId, slot }) });
+    msg.innerHTML = `<p class="msg success">Added ${escapeHtml((d.source && d.source.label) || `Rcvr ${slot}`)} on channel ${escapeHtml((d.source && d.source.qam_channel) || `${slot}.1`)}. Reserve its address when you are done.</p>`;
+    setTimeout(loadReceivers, 1500);
+  } catch (e) {
+    msg.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
 }
 async function reserveReceivers() {

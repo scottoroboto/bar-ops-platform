@@ -1203,8 +1203,28 @@ async function receiverRows() {
       unifi: c ? { name: c.name, fixed: c.fixed, fixedIp: c.fixedIp } : null,
     };
   });
-  return { rows, unifiConfigured: unifiLocal.configured(), unifiError };
+  return { rows, unassigned: identity.unowned(), unifiConfigured: unifiLocal.configured(), unifiError };
 }
+// A box the hourly sweep found that belongs to no slot: give it a receiver
+// number and it becomes "Directv Rcvr N" on channel N.1, pinned to its
+// receiver ID from the start. The cloud refuses a number already in use.
+app.post('/api/admin/receivers/adopt', requireManager, async (req, res) => {
+  try {
+    const slot = Number(req.body && req.body.slot);
+    const rid = String((req.body && req.body.receiverId) || '').trim();
+    if (!Number.isInteger(slot) || slot < 1 || slot > 999) return res.status(400).json({ error: 'Receiver number must be a whole number (10 for channel 10.1).' });
+    const box = identity.unowned().find((u) => u.receiverId === rid);
+    if (!box) return res.status(404).json({ error: 'That box is no longer on the list. Refresh and try again.' });
+    const out = await sync.adoptReceiver({ slot, receiverId: rid, ip: box.ip, mac: box.mac });
+    identity.forget(rid);
+    await sync.pullConfig().catch(() => {});
+    identity.check(true).catch(() => {});
+    activity.record('receivers.adopt', { actor: req.vcActor, targetType: 'source', targetId: slot, detail: { receiverId: rid, ip: box.ip } });
+    res.json({ ok: true, source: out.source || null });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 app.get('/api/admin/receivers', requireManager, async (req, res) => {
   try { res.json(await receiverRows()); } catch (err) { res.status(500).json({ error: err.message }); }
 });

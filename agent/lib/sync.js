@@ -172,6 +172,16 @@ async function reportSourceIdentity(items) {
   return res.json().catch(() => ({}));
 }
 
+// A receiver on the network that no slot owns, given a receiver number.
+async function adoptReceiver(item) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/sources/adopt`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(item),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `adopt failed: ${res.status}`);
+  return data;
+}
+
 // Kitchen board (Oct 2026): one pull of SpotOn's reports, or a failure.
 async function kitchenPull(payload) {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/kitchen/pull`, {
@@ -514,7 +524,7 @@ function stop() {
 module.exports = {
   musicWrite, managerList, managerPass,
   pushPlugsSeen, pushPlugStatus, plugScheduleWrite,
-  pushWans, reportSourceIdentity,
+  pushWans, reportSourceIdentity, adoptReceiver,
   pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
   reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems, kitchenPull, kitchenHave,

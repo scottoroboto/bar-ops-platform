@@ -25,6 +25,7 @@ const scanner = require('./discovery/scanner');
 const CHECK_MS = 5 * 60 * 1000;
 const FIRST_CHECK_MS = 20 * 1000;
 const SCAN_COOLDOWN_MS = 10 * 60 * 1000;
+const SWEEP_EVERY_MS = 60 * 60 * 1000; // look for boxes no slot owns (a new receiver on the network)
 
 const state = new Map(); // slot -> { slot, status, ip, mac, expected, found, sharedWith, checkedAt, movedFrom }
 let overrides = cache.get('identityOverrides') || {}; // slot -> ip the box was found at
@@ -32,6 +33,8 @@ let reporter = null; // async (items) => cloud
 let timer = null;
 let lastScanAt = 0;
 let running = false;
+let unassigned = []; // DirecTV boxes answering on the LAN whose receiver ID is in no slot: { receiverId, ip, mac, seenAt }
+let lastSweepAt = 0;
 
 function lanCidr() {
   const nets = os.networkInterfaces();
@@ -102,18 +105,38 @@ async function check(force) {
     const clean = learn.filter((l) => state.get(l.slot).status === 'ok');
     if (clean.length && reporter) await reporter(clean).catch((err) => console.warn('[identity] report failed:', err.message));
     if (needScan && (force || Date.now() - lastScanAt > SCAN_COOLDOWN_MS)) await relocate(sources);
+    else if (force || Date.now() - lastSweepAt > SWEEP_EVERY_MS) await sweepLan(sources);
   } finally { running = false; }
+}
+
+// Every DirecTV box answering on the LAN: receiver ID -> address. Also
+// refreshes the list of boxes no slot owns, for the admin page's
+// "new receiver on the network".
+async function sweepLan(sources) {
+  lastSweepAt = Date.now();
+  const cidr = lanCidr();
+  if (!cidr) return new Map();
+  const open = await scanner.tcpSweep(scanner.expandCidr(cidr), [8080], { concurrency: 64, timeoutMs: 400 });
+  const atIp = new Map();
+  await Promise.all([...open.keys()].map(async (ip) => { const rid = await readId(ip, 8080); if (rid) atIp.set(rid, ip); }));
+  const owned = new Set();
+  for (const s of sources) {
+    if (s.receiver_id) owned.add(String(s.receiver_id).trim());
+    const e = state.get(Number(s.slot));
+    if (e && e.found && e.status === 'ok') owned.add(e.found);
+  }
+  const arp = scanner.readArpTable();
+  const seenAt = new Date().toISOString();
+  unassigned = [...atIp.entries()].filter(([rid]) => !owned.has(rid)).map(([rid, ip]) => ({ receiverId: rid, ip, mac: arp.get(ip) || null, seenAt }));
+  if (unassigned.length) console.log(`[identity] ${unassigned.length} receiver(s) on the network belong to no slot: ${unassigned.map((u) => `${u.receiverId}@${u.ip}`).join(', ')}`);
+  return atIp;
 }
 
 // Sweep the LAN for DirecTV boxes and move any lost slot to the address
 // its receiver ID is answering from.
 async function relocate(sources) {
   lastScanAt = Date.now();
-  const cidr = lanCidr();
-  if (!cidr) return;
-  const open = await scanner.tcpSweep(scanner.expandCidr(cidr), [8080], { concurrency: 64, timeoutMs: 400 });
-  const atIp = new Map();
-  await Promise.all([...open.keys()].map(async (ip) => { const rid = await readId(ip, 8080); if (rid) atIp.set(rid, ip); }));
+  const atIp = await sweepLan(sources);
   const arp = scanner.readArpTable();
   const moved = [];
   for (const s of sources) {
@@ -135,6 +158,8 @@ async function relocate(sources) {
 
 function get(slot) { return state.get(Number(slot)) || null; }
 function all() { return Array.from(state.values()); }
+function unowned() { return unassigned.slice(); }
+function forget(receiverId) { unassigned = unassigned.filter((u) => u.receiverId !== receiverId); }
 function blocked(slot) {
   const e = get(slot);
   if (!e) return null;
@@ -150,4 +175,4 @@ function start() {
 }
 function stop() { if (timer) clearInterval(timer); timer = null; }
 
-module.exports = { start, stop, check, get, all, blocked, applyOverrides, setReporter, lanCidr };
+module.exports = { start, stop, check, get, all, blocked, applyOverrides, setReporter, lanCidr, unowned, forget };

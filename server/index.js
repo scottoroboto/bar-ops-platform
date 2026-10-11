@@ -1123,6 +1123,43 @@ res.status(500).json({ error: err.message });
 }
 });
 
+// A new DirecTV box the agent found on the LAN, adopted into a slot by
+// receiver number from the box's admin page. Channel N.1, label
+// "Directv Rcvr N", receiver ID and MAC stored from the start.
+app.post('/api/venue/agent/sources/adopt', requireAgentAuth(), async (req, res) => {
+try {
+const b = req.body || {};
+const slot = Number(b.slot);
+const rid = String(b.receiverId || '').trim().slice(0, 64);
+const ip = typeof b.ip === 'string' && /^\d{1,3}(\.\d{1,3}){3}$/.test(b.ip) ? b.ip : null;
+const mac = typeof b.mac === 'string' && /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(b.mac) ? b.mac : null;
+if (!Number.isInteger(slot) || slot < 1 || !rid || !ip) return res.status(400).json({ error: 'Need a receiver number, receiver ID and address.' });
+const source = await withServiceClient(async (client) => {
+const { rows: taken } = await client.query('SELECT id, slot, label, kind, host(ip) AS ip FROM vc_sources WHERE site_id = $1 AND slot = $2', [req.vcSite.site_id, slot]);
+if (taken.length && taken[0].kind !== 'spare') throw Object.assign(new Error(`Receiver number ${slot} is already "${taken[0].label}" (${taken[0].ip || 'no address'}). Retire that source under Venue Control first, or pick another number.`), { status: 409 });
+const { rows: dup } = await client.query('SELECT slot FROM vc_sources WHERE site_id = $1 AND receiver_id = $2', [req.vcSite.site_id, rid]);
+if (dup.length) throw Object.assign(new Error(`That box is already Rcvr ${dup[0].slot}.`), { status: 409 });
+if (taken.length) { // an open slot with that number becomes the receiver
+const { rows } = await client.query(
+`UPDATE vc_sources SET qam_channel = $2, label = $3, kind = 'directv', ip = $4::inet, port = 8080, mac = $5::macaddr, receiver_id = $6, enabled = true, updated_at = now()
+ WHERE id = $1 RETURNING slot, qam_channel, label, host(ip) AS ip, receiver_id`,
+[taken[0].id, `${slot}.1`, `Directv Rcvr ${slot}`, ip, mac, rid]);
+return rows[0];
+}
+const { rows: maxSort } = await client.query('SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM vc_sources WHERE site_id = $1', [req.vcSite.site_id]);
+const { rows } = await client.query(
+`INSERT INTO vc_sources (site_id, slot, qam_channel, label, kind, ip, port, mac, receiver_id, enabled, sort_order)
+ VALUES ($1, $2, $3, $4, 'directv', $5::inet, 8080, $6::macaddr, $7, true, $8) RETURNING slot, qam_channel, label, host(ip) AS ip, receiver_id`,
+[req.vcSite.site_id, slot, `${slot}.1`, `Directv Rcvr ${slot}`, ip, mac, rid, maxSort[0].n]);
+return rows[0];
+});
+console.log(`[venue] ${req.vcSite.site_id}: adopted receiver ${rid} at ${ip} as slot ${slot}`);
+res.json({ ok: true, source });
+} catch (err) {
+res.status(err.status || 500).json({ error: err.message });
+}
+});
+
 app.post('/api/venue/agent/heartbeat', requireAgentAuth(), async (req, res) => {
 const { status, agentVersion, configEtag, lanIp } = req.body || {};
 await withServiceClient((client) => client.query(
