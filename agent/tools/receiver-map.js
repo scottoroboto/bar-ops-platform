@@ -8,7 +8,8 @@
 // the right box for each receiver number in the cloud.
 //
 //   node tools/receiver-map.js scan              every box on the LAN: letter, address, receiver ID, what it is tuned to, which slot(s) point at it
-//   node tools/receiver-map.js label             tune box A to CNN, B to ESPN, ... (prints the table) -- then walk the TVs
+//   node tools/receiver-map.js info B            press INFO on box B: the channel banner pops on whichever TV channel it feeds (changes nothing)
+//   node tools/receiver-map.js label             tune box A to CNN, B to ESPN, ... (prints the table) -- only when changing channels is OK
 //   node tools/receiver-map.js apply 10=B 11=A ... record "Rcvr 10 is box B" and so on in the cloud, overriding what is there
 //   node tools/receiver-map.js restore           put every box back on the channel it was on before `label`
 //
@@ -85,6 +86,12 @@ async function cloud(pathname, body) {
     fs.writeFileSync(SAVE, JSON.stringify({ at: new Date().toISOString(), boxes }, null, 1));
     console.log(table(boxes, true));
     console.log('\nNow look at the TVs. For each TV channel, note which network is on it, then:\n  node tools/receiver-map.js apply 10=B 11=A 12=D ...   (receiver number = box letter)\nWhen done: node tools/receiver-map.js restore');
+  } else if (cmd === 'info') {
+    const saved = JSON.parse(fs.readFileSync(SAVE, 'utf8'));
+    const b = saved.boxes.find((x) => x.letter === String(process.argv[3] || '').toUpperCase());
+    if (!b) { console.log('Give a box letter from the last scan, like: node tools/receiver-map.js info B'); process.exit(1); }
+    await directv.processKey(b.ip, 8080, 'info');
+    console.log(`INFO sent to box ${b.letter} (${b.ip}). Look for the channel banner on the TVs; it clears on its own. Send again if you missed it.`);
   } else if (cmd === 'apply') {
     const saved = JSON.parse(fs.readFileSync(SAVE, 'utf8'));
     const pairs = process.argv.slice(3).map((a) => a.split('='));
@@ -105,7 +112,7 @@ async function cloud(pathname, body) {
       try { await directv.tune(b.ip, 8080, b.before.major, b.before.minor); console.log(`${b.letter} ${b.ip} back to ${b.before.major}`); } catch (e) { console.log(`${b.letter} ${b.ip}: ${e.message}`); }
     }
   } else {
-    console.log('Usage: node tools/receiver-map.js scan | label | apply 10=B 11=A ... | restore');
+    console.log('Usage: node tools/receiver-map.js scan | info B | label | apply 10=B 11=A ... | restore');
   }
   process.exit(0);
 })().catch((e) => { console.error(e.message); process.exit(1); });
