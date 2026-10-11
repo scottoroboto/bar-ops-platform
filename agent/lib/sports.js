@@ -109,6 +109,10 @@ function channelSettings() { return cache.get('sportsChannels') || {}; }     // 
 function gameChannels() { return cache.get('sportsGameChannels') || {}; }    // gameId -> { major, minor, until }
 function myTeams() { return cache.get('sportsMyTeams') || []; }              // ['nfl:10', ...]
 function scanExtra() { return String(cache.get('sportsScanExtra') || ''); }  // "700-719, 620"
+// Channels the guide scan always looks at on top of the networks: the
+// commercial NFL Sunday Ticket block (T1 sees games on 9554-9561), so a
+// FOX/CBS game that isn't the local affiliate's game still gets a channel.
+const DEFAULT_SCAN = '9550-9575';
 
 // ------------------------------------------------------------------ dates
 function localDate(when, tz) {
@@ -297,7 +301,7 @@ function scanChannels() {
   const put = (major, minor) => { if (major > 0 && major < 10000) out.set(`${major}-${minor == null ? '' : minor}`, { major, minor: minor == null ? null : minor }); };
   for (const n of NETWORKS) { const c = channelFor(n.keys[0]); if (c && c.major) put(c.major, c.minor); }
   for (const v of Object.values(channelSettings())) if (v && !v.off && v.major) put(Number(v.major), v.minor != null ? Number(v.minor) : null);
-  for (const part of scanExtra().split(/[,\s]+/)) {
+  for (const part of `${DEFAULT_SCAN} ${scanExtra()}`.split(/[,\s]+/)) {
     const m = part.match(/^(\d{1,4})(?:-(\d{1,4}))?$/);
     if (!m) continue;
     const a = Number(m[1]); const b = m[2] ? Number(m[2]) : a;
@@ -326,6 +330,15 @@ function guideMatches(g) {
 
 function chKey(c) { return `${c.major}-${c.minor == null ? '' : c.minor}`; }
 
+function gameAt(g) { return g.state === 'in' ? Date.now() : new Date(g.start).getTime(); }
+function gameMentioned(g, text) { const t = String(text || '').toLowerCase(); return mentions(t, g.away) && mentions(t, g.home); }
+
+// The guide entry for a channel at game time, when the scan has one.
+function guideShowing(g, major, minor) {
+  const at = gameAt(g);
+  return (guide.entries || []).find((e) => e.major === major && (e.minor ?? null) === (minor ?? null) && e.start <= at + 5 * 60 * 1000 && e.end > at) || null;
+}
+
 // What a game can be tuned to, best first.
 function optionsFor(g) {
   const opts = [];
@@ -346,13 +359,22 @@ function optionsFor(g) {
     if (have) have.confirmed = true;
     else opts.push({ name: e.callsign || `Ch ${e.major}`, kind: 'tv', major: e.major, minor: e.minor, from: 'guide', confirmed: true });
   }
+  // A network's default number (FOX = 10) is only a guess: on an NFL
+  // Sunday the local affiliate carries one FOX game and the others are on
+  // Sunday Ticket. When the guide says that channel has a different
+  // program at game time, say so and never tune it by default.
+  for (const o of opts) {
+    if (o.kind !== 'tv' || o.confirmed) continue;
+    const e = guideShowing(g, o.major, o.minor);
+    if (e && e.title && !gameMentioned(g, `${e.title} ${e.episode || ''}`)) o.showing = e.episode ? `${e.title}: ${e.episode}` : e.title;
+  }
   const set = gameChannels()[g.id];
   if (set && set.major) {
     const have = opts.find((o) => o.kind === 'tv' && o.major === Number(set.major));
     if (have) have.pinned = true;
     else opts.unshift({ name: `Ch ${set.major}`, kind: 'tv', major: Number(set.major), minor: set.minor != null ? Number(set.minor) : null, from: 'owner', pinned: true });
   }
-  const score = (o) => (o.kind !== 'tv' ? 9 : o.pinned ? 0 : o.confirmed ? 1 : 2);
+  const score = (o) => (o.kind !== 'tv' ? 9 : o.pinned ? 0 : o.confirmed ? 1 : o.showing ? 3 : 2);
   return opts.map((o, i) => ({ o, i })).sort((a, b) => score(a.o) - score(b.o) || a.i - b.i).map((x) => x.o);
 }
 
@@ -428,6 +450,29 @@ async function scanGuideNow() {
   return guide;
 }
 
+// ------------------------------------------------------------------ pre-tune check
+// Ask a receiver what `major` is showing at game time. ok=true when the
+// program names both teams, ok=false (with `showing`) when it is some
+// other program, ok=null when the receiver can't say (lookup failed, no
+// title, or the game is too far off for the guide).
+async function checkChannel(g, major, minor) {
+  if (!g) return { ok: null };
+  const at = Math.max(Date.now(), gameAt(g) + 5 * 60 * 1000);
+  if (at > Date.now() + 4 * 60 * 60 * 1000) return { ok: null };
+  const r = (deps.receivers() || []).find((x) => x.ip);
+  if (!r) return { ok: null };
+  try {
+    const p = await directv.getProgInfo(r.ip, r.port || 8080, major, minor, at / 1000);
+    if (!p || p.isOffAir) return { ok: false, showing: 'off air' };
+    const text = `${p.title || ''} ${p.episodeTitle || ''}`;
+    if (!text.trim()) return { ok: null };
+    if (gameMentioned(g, text)) return { ok: true, showing: p.title };
+    return { ok: false, showing: p.episodeTitle ? `${p.title}: ${p.episodeTitle}` : p.title, callsign: p.callsign || null };
+  } catch (err) {
+    return { ok: null, error: err.message };
+  }
+}
+
 // ------------------------------------------------------------------ plans
 function savePlans() { cache.set('sportsPlans', plans); bump(); }
 
@@ -449,6 +494,14 @@ async function runPlans() {
     p.status = 'tuning';
     savePlans();
     try {
+      const chk = g ? await checkChannel(g, p.major, p.minor) : { ok: null };
+      if (chk.ok === false) {
+        p.status = 'failed';
+        p.result = `Not tuned: channel ${p.major} is showing ${chk.showing}, not this game`;
+        p.doneAt = Date.now();
+        dirty = true;
+        continue;
+      }
       const r = await deps.tune(p.slots, p.major, p.minor, `game plan: ${p.title}`, p.by);
       p.status = r.ok === r.total ? 'done' : r.ok ? 'partial' : 'failed';
       p.result = r.text;
@@ -567,11 +620,13 @@ function buildView() {
   const mine = new Set(myTeams());
   const games = allGames().map((g) => {
     const options = optionsFor(g);
-    const best = options.find((o) => o.kind === 'tv') || null;
+    const best = options.find((o) => o.kind === 'tv' && !o.showing) || null;
+    const blocked = !best ? options.find((o) => o.kind === 'tv' && o.showing) || null : null;
     return {
       id: g.id, league: g.league, start: g.start, localDate: localDate(g.start, tz), state: g.state, detail: g.detail,
       postponed: g.postponed, name: g.name, note: g.note, away: clientTeam(g.away), home: clientTeam(g.home),
       options, channel: best ? { major: best.major, minor: best.minor, name: best.name, confirmed: !!best.confirmed, from: best.from } : null,
+      blocked: blocked ? { major: blocked.major, minor: blocked.minor, name: blocked.name, showing: blocked.showing } : null,
       myTeam: mine.has(`${g.league}:${g.away.id}`) || mine.has(`${g.league}:${g.home.id}`),
     };
   });
@@ -616,5 +671,5 @@ function version_() { return version; }
 module.exports = {
   LEAGUES, NETWORKS, start, tick, sweep, scanGuide, view, version: version_, gameById, optionsFor,
   addPlan, cancelPlan, setNetworkChannel, setGameChannel, setMyTeam, setScanExtra, scanExtra, channelList, guideMatches,
-  canonical, normalizeEvent, fetchDay, channelFor,
+  canonical, normalizeEvent, fetchDay, channelFor, checkChannel,
 };

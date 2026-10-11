@@ -108,7 +108,7 @@ async function api(path, opts = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) { forgetPass(); STAFF_PASS = ''; showGate('Your TV session has ended. Open TV Staff from the Bar Ops app again.'); }
-  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `${res.status} ${res.statusText}`), { status: res.status, data });
   return data;
 }
 

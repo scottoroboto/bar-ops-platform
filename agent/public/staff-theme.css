@@ -1402,6 +1402,12 @@ body.staff input, body.staff textarea, body.staff select, body.staff [contentedi
 .staff .gm-ch b { color: var(--text); font-weight: 700; }
 .staff .gm-ch i { font-style: normal; color: var(--neon-green, var(--on-fg)); }
 .staff .gm-ch.none { color: var(--muted); font-weight: 600; }
+.staff .gm-ch.none.warn { color: var(--neon-orange, #f0a040); }
+.staff .gs-chip i.warn { color: var(--neon-orange, #f0a040); }
+.staff .gm-confirm { max-width: 520px; }
+.staff .gm-confirm-text { font-size: 17px; margin: 6px 0 4px; }
+.staff .gm-confirm-text b { color: var(--neon-orange, #f0a040); }
+.staff .gm-confirm-hint { color: var(--muted); font-size: 14px; margin: 0 0 10px; }
 .staff .gm-tag { border-radius: 9px; padding: 1px 7px; font-weight: 800; font-size: 11px; }
 .staff .gm-tag.on { background: rgba(57, 255, 136, .14); color: var(--neon-green, var(--on-fg)); }
 .staff .gm-tag.plan { background: rgba(255, 176, 32, .14); color: var(--amber); }

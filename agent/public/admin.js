@@ -28,7 +28,7 @@ async function api(path, opts = {}) {
     headers: { 'Content-Type': 'application/json', 'x-admin-pin': ADMIN_PIN, ...(opts.headers || {}) },
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `${res.status} ${res.statusText}`), { status: res.status, data });
   return data;
 }
 

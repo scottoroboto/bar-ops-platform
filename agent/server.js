@@ -682,10 +682,21 @@ app.get('/api/sports', (req, res) => {
 });
 
 app.post('/api/sports/tune', async (req, res) => {
-  const { gameId, slots, major, minor } = req.body || {};
+  const { gameId, slots, major, minor, force } = req.body || {};
   if (!(Number(major) > 0)) return res.status(400).json({ error: 'This game has no channel yet.' });
   if (!Array.isArray(slots) || !slots.length) return res.status(400).json({ error: 'Pick at least one receiver.' });
   const g = gameId ? sports.gameById(gameId) : null;
+  // Never put a game on a channel that is carrying a different program:
+  // the receiver's own guide is asked first, and staff must say "anyway".
+  if (g && !force) {
+    const chk = await sports.checkChannel(g, Number(major), minor != null && minor !== '' ? Number(minor) : null);
+    if (chk.ok === false) {
+      return res.status(409).json({
+        error: `Channel ${major} is showing ${chk.showing}, not ${g.name}.`,
+        showing: chk.showing, major: Number(major), needConfirm: true,
+      });
+    }
+  }
   const r = await tuneSlots(slots, Number(major), minor != null && minor !== '' ? Number(minor) : null, g ? `game: ${g.name}` : 'game', req.vcActor);
   res.json({ ok: true, ...r });
 });

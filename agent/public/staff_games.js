@@ -139,7 +139,9 @@ function gameCardHtml(g) {
   if (plans.length) tags.push(`<span class="gm-tag plan">⏰ ${escapeHtml(plans.flatMap((p) => p.slots).map(srcLabel).join(', '))}</span>`);
   const chHtml = ch
     ? `<span class="gm-ch">${escapeHtml(chLabel(ch))} <b>${escapeHtml(ch.name)}</b>${ch.confirmed ? ' <i title="Checked on the receiver’s guide">✓</i>' : ''}</span>`
-    : `<span class="gm-ch none">${escapeHtml(((g.options || [])[0] || {}).name || 'No TV listed')}</span>`;
+    : g.blocked
+      ? `<span class="gm-ch none warn" title="${escapeHtml(`Channel ${chLabel(g.blocked)} is showing ${g.blocked.showing}`)}">Not on ${escapeHtml(chLabel(g.blocked))} (${escapeHtml(g.blocked.showing)})</span>`
+      : `<span class="gm-ch none">${escapeHtml(((g.options || [])[0] || {}).name || 'No TV listed')}</span>`;
   return `
     <button type="button" class="gm-card ${g.state}${g.postponed ? ' ppd' : ''}${showing.length ? ' showing' : ''}${g.myTeam ? ' mine' : ''}" data-game="${escapeHtml(g.id)}">
       <div class="gm-top"><span class="gm-lg">${escapeHtml(leagueLabel(g.league))}${g.note ? ` · ${escapeHtml(g.note)}` : ''}</span><span class="gm-st">${g.state === 'in' ? '<span class="gm-live"></span>' : ''}${escapeHtml(statusText(g))}</span></div>
@@ -202,6 +204,33 @@ function gamesToast(text, bad) {
   t._h = setTimeout(() => t.classList.remove('show'), 3500);
 }
 
+// A yes/no sheet in the games strip's own style (window.confirm is
+// clunky on the iPad and blocked in some kiosk setups).
+function gamesConfirm(html, yes, no) {
+  return new Promise((resolve) => {
+    let back = document.getElementById('gmConfirmBack');
+    if (back) back.remove();
+    back = document.createElement('div');
+    back.id = 'gmConfirmBack';
+    back.className = 'gm-sheet-back';
+    back.style.display = 'flex';
+    back.style.zIndex = '70';
+    back.innerHTML = `<div class="gm-sheet gm-confirm">
+        <div class="gs-label">Different game on that channel</div>
+        <p class="gm-confirm-text">${html}</p>
+        <p class="gm-confirm-hint">This game isn’t on a channel the receiver knows about yet. Pick another channel in the game sheet, or put it on anyway.</p>
+        <div class="mu-sheet-btns"><button type="button" class="mu-sheet-cancel" data-a="no">${escapeHtml(no || 'Cancel')}</button><button type="button" class="mu-sheet-go" data-a="yes">${escapeHtml(yes || 'OK')}</button></div>
+      </div>`;
+    const done = (v) => { back.remove(); resolve(v); };
+    back.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-a]');
+      if (b) done(b.dataset.a === 'yes');
+      else if (e.target === back) done(false);
+    });
+    document.body.appendChild(back);
+  });
+}
+
 // ------------------------------------------------------------------ actions
 async function putGameOn(g, slots, opt, when) {
   if (!opt) { gamesToast('This game has no DirecTV channel yet.', true); return false; }
@@ -211,7 +240,17 @@ async function putGameOn(g, slots, opt, when) {
       await api('/api/sports/plans', { method: 'POST', body: JSON.stringify({ gameId: g.id, slots, major: opt.major, minor: opt.minor }) });
       gamesToast(`${label} goes on ${slots.map(srcLabel).join(', ')} at ${timeOf(g.start)} (channel ${chLabel(opt)}).`);
     } else {
-      const r = await api('/api/sports/tune', { method: 'POST', body: JSON.stringify({ gameId: g.id, slots, major: opt.major, minor: opt.minor }) });
+      let r;
+      try {
+        r = await api('/api/sports/tune', { method: 'POST', body: JSON.stringify({ gameId: g.id, slots, major: opt.major, minor: opt.minor }) });
+      } catch (e) {
+        // The receiver's guide says that channel has a different program.
+        if (!(e.status === 409 && e.data && e.data.needConfirm)) throw e;
+        const anyway = await gamesConfirm(`Channel ${chLabel(opt)} is showing <b>${escapeHtml(e.data.showing || 'something else')}</b>, not ${escapeHtml(label)}.`,
+          'Put it on anyway', 'Leave it');
+        if (!anyway) return false;
+        r = await api('/api/sports/tune', { method: 'POST', body: JSON.stringify({ gameId: g.id, slots, major: opt.major, minor: opt.minor, force: true }) });
+      }
       gamesToast(r.ok === r.total ? `${label} is on ${slots.map(srcLabel).join(', ')} (channel ${chLabel(opt)}).` : `Only ${r.text}`, r.ok !== r.total);
       refreshSources();
     }
@@ -275,7 +314,7 @@ function renderGameSheet() {
   if (SHEET.ch >= opts.length) SHEET.ch = opts.length ? 0 : -1;
   const opt = opts[SHEET.ch] || null;
   const others = (g.options || []).filter((o) => o.kind !== 'tv');
-  const chips = opts.map((o, i) => `<button type="button" class="gs-chip${i === SHEET.ch ? ' sel' : ''}" onclick="SHEET.ch=${i};renderGameSheet()"><b>${escapeHtml(chLabel(o))}</b> ${escapeHtml(o.name)}${o.confirmed ? ' <i>✓ guide</i>' : ''}</button>`).join('')
+  const chips = opts.map((o, i) => `<button type="button" class="gs-chip${i === SHEET.ch ? ' sel' : ''}" onclick="SHEET.ch=${i};renderGameSheet()"><b>${escapeHtml(chLabel(o))}</b> ${escapeHtml(o.name)}${o.confirmed ? ' <i>✓ guide</i>' : o.showing ? ` <i class="warn">✗ showing ${escapeHtml(o.showing)}</i>` : ''}</button>`).join('')
     + others.map((o) => `<span class="gs-chip off">${escapeHtml(o.name)} <i>${o.kind === 'streaming' ? 'streaming' : o.kind === 'package' ? 'package — set channel' : o.kind === 'regional' ? 'regional — set channel if we get it' : o.kind === 'off' ? 'not on DirecTV' : 'no channel set'}</i></span>`).join('');
   const firstNet = (g.options || []).find((o) => o.kind !== 'streaming' && !/^Ch \d/.test(o.name));
   const edit = !GAMES_EDIT ? '' : SHEET.editing ? `
