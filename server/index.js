@@ -1089,6 +1089,40 @@ res.status(500).json({ error: err.message });
 }
 });
 
+// Receiver identity from the box (agent/lib/identity.js): each DirecTV
+// receiver's own ID and MAC, learned the first time it answers, and a new
+// address when the agent found a known receiver somewhere else on the LAN
+// (DHCP moved it). One receiver ID per site; the address only moves for a
+// slot whose receiver ID matches.
+app.post('/api/venue/agent/sources/identity', requireAgentAuth(), async (req, res) => {
+try {
+const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 64) : [];
+const results = await withServiceClient(async (client) => {
+const out = [];
+for (const it of items) {
+const slot = Number(it.slot);
+const rid = String(it.receiverId || '').trim().slice(0, 64);
+const ip = typeof it.ip === 'string' && /^\d{1,3}(\.\d{1,3}){3}$/.test(it.ip) ? it.ip : null;
+const mac = typeof it.mac === 'string' && /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(it.mac) ? it.mac : null;
+if (!Number.isFinite(slot) || !rid || !ip) { out.push({ slot: it.slot, ok: false, error: 'bad item' }); continue; }
+const { rows: clash } = await client.query('SELECT slot FROM vc_sources WHERE site_id = $1 AND receiver_id = $2 AND slot <> $3', [req.vcSite.site_id, rid, slot]);
+if (clash.length) { out.push({ slot, ok: false, error: `receiver ${rid} is already slot ${clash[0].slot}` }); continue; }
+const r = await client.query(
+`UPDATE vc_sources SET receiver_id = COALESCE(receiver_id, $3), mac = COALESCE($4::macaddr, mac), ip = $5::inet, updated_at = now()
+ WHERE site_id = $1 AND slot = $2 AND kind = 'directv' AND (receiver_id IS NULL OR receiver_id = $3)
+ RETURNING slot, host(ip) AS ip, receiver_id`,
+[req.vcSite.site_id, slot, rid, mac, ip]);
+out.push({ slot, ok: r.rowCount > 0, row: r.rows[0] || null });
+if (r.rowCount && it.moved) console.log(`[venue] ${req.vcSite.site_id} slot ${slot}: receiver ${rid} moved to ${ip}`);
+}
+return out;
+});
+res.json({ ok: true, results });
+} catch (err) {
+res.status(500).json({ error: err.message });
+}
+});
+
 app.post('/api/venue/agent/heartbeat', requireAgentAuth(), async (req, res) => {
 const { status, agentVersion, configEtag, lanIp } = req.body || {};
 await withServiceClient((client) => client.query(

@@ -261,6 +261,16 @@ function sourceCardHtml(s) {
   const live = s.live;
 
   if (s.kind === 'directv') {
+    const idn = s.identity;
+    if (idn && (idn.status === 'mismatch' || idn.status === 'duplicate')) {
+      const why = idn.status === 'duplicate' ? `Same address as Rcvr ${idn.sharedWith.join(', ')}` : 'Wrong box at this address';
+      return `
+        <button type="button" class="source-card sc-alert" onclick="identityRecheck()" title="Tap to look for the right box">
+          <div class="sc-top"><span class="sc-slot">${escapeHtml(s.qam_channel)}</span><span class="sc-count">${tvCountLabel(slot, true)}</span></div>
+          <div class="sc-headline"><span class="sc-dot"></span>${why}</div>
+          <div class="sc-meta"><span class="sc-callsign">${escapeHtml(s.label)}</span><span class="sc-sub">${escapeHtml(idn.ip || '')} · tap to re-scan</span></div>
+        </button>`;
+    }
     if (!live || !live.ok) {
       return `
         <button type="button" class="source-card sc-alert" onclick="cardTap(${slot}, '${s.kind}')" title="Tap to check again">
@@ -327,6 +337,17 @@ function sourceCardHtml(s) {
 // the old channel-picker-first / apps-dialog-first behavior below). Asleep
 // and not-responding taps are unchanged: those still wake/recheck inline
 // rather than opening a remote for a device that isn't actually up yet.
+// A red "wrong box" card: ask the agent to re-check every receiver's ID and
+// sweep the LAN for any that moved, then redraw.
+let identityBusy = false;
+async function identityRecheck() {
+  if (identityBusy) return;
+  identityBusy = true;
+  try { await api('/api/sources/identity/check', { method: 'POST', body: JSON.stringify({}) }); } catch (e) { /* the refresh shows whatever it found */ }
+  identityBusy = false;
+  refreshSources();
+}
+
 function cardTap(slot, kind) {
   const s = SOURCES.find((x) => Number(x.slot) === Number(slot));
   if (!s) return;

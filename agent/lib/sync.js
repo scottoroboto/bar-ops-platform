@@ -59,7 +59,7 @@ async function pullConfig() {
     return cache.get('config');
   }
   if (!res.ok) throw new Error(`config pull failed: ${res.status} ${await res.text()}`);
-  const config = await res.json();
+  const config = require('./identity').applyOverrides(await res.json());
   cache.set('config', config);
   cache.set('configEtag', res.headers.get('etag'));
   cache.set('lastConfigCheckAt', new Date().toISOString());
@@ -159,6 +159,16 @@ async function pushWans(wans, clients = null) {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({ wans, clients }),
   });
   if (!res.ok) throw new Error(`wan push failed: ${res.status} ${await res.text()}`);
+  return res.json().catch(() => ({}));
+}
+
+// Receiver identity (lib/identity.js): what box answers at each slot's
+// address, learned IDs and MACs, and a slot whose box moved addresses.
+async function reportSourceIdentity(items) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/sources/identity`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ items }),
+  });
+  if (!res.ok) throw new Error(`identity report failed: ${res.status} ${await res.text()}`);
   return res.json().catch(() => ({}));
 }
 
@@ -504,7 +514,7 @@ function stop() {
 module.exports = {
   musicWrite, managerList, managerPass,
   pushPlugsSeen, pushPlugStatus, plugScheduleWrite,
-  pushWans,
+  pushWans, reportSourceIdentity,
   pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
   reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems, kitchenPull, kitchenHave,

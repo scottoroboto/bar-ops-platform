@@ -24,6 +24,7 @@ const events = require('./lib/events');
 const activity = require('./lib/activity');
 const directv = require('./lib/drivers/directv');
 const program = require('./lib/program');
+const identity = require('./lib/identity');
 const roku = require('./lib/drivers/roku');
 const samsungWs = require('./lib/drivers/samsung-ws');
 const { driverFor, KEY_METHODS } = require('./lib/drivers'); // Samsung or LG per TV (cloud patch_039)
@@ -53,6 +54,7 @@ app.get('/api/status', (req, res) => {
     lastHeartbeatOk: cache.get('lastHeartbeatOk'),
     kitchen: kitchen.status(),
     sensors: sensors.status(),
+    identity: identity.all(),
   });
 });
 
@@ -485,6 +487,8 @@ function findSource(slotParam) {
   if (!source) throw new Error(`No source at slot ${slotParam}.`);
   if (source.kind !== 'directv' && source.kind !== 'roku') throw new Error(`Source at slot ${slotParam} is a "${source.kind}" -- nothing to control (static/spare slots have no driver).`);
   if (!source.ip) throw new Error(`Source at slot ${slotParam} has no IP address configured yet.`);
+  const why = source.kind === 'directv' ? identity.blocked(slot) : null;
+  if (why) throw new Error(why);
   return source;
 }
 
@@ -513,7 +517,19 @@ app.get('/api/sources', (req, res) => {
     slot: s.slot, qam_channel: s.qam_channel, label: s.label, kind: s.kind,
     ip: s.ip, port: s.port, notes: s.notes,
     live: liveBySlot.get(Number(s.slot)) || null,
+    identity: s.kind === 'directv' ? identity.get(s.slot) : null,
   })));
+});
+
+// Re-check which box answers at each receiver's address right now, with
+// a LAN sweep for any that moved. The red "wrong box" card taps this.
+app.post('/api/sources/identity/check', async (req, res) => {
+  try {
+    await identity.check(true);
+    res.json({ ok: true, identity: identity.all() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Registered BEFORE /api/sources/:slot/tune below -- Express matches routes
@@ -1215,6 +1231,8 @@ app.listen(config.PORT, () => {
   console.log(`[server] Venue Control agent listening on :${config.PORT}`);
   sync.start();
   poller.start();
+  identity.setReporter(sync.reportSourceIdentity);
+  identity.start();
   tvPoller.start();
   health.start();
   speedtest.start();

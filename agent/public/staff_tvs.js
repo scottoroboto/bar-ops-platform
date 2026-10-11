@@ -370,6 +370,14 @@ function sourceRowHtml(s) {
   const live = s.live;
 
   if (s.kind === 'directv') {
+    const idn = s.identity;
+    if (idn && (idn.status === 'mismatch' || idn.status === 'duplicate')) {
+      return `<button type="button" class="tvsrc-row sc-alert" onclick="identityRecheck()" title="Tap to look for the right box">
+        <span class="tvsrc-slot">${escapeHtml(s.qam_channel || '')}</span>
+        <span class="tvsrc-title">${idn.status === 'duplicate' ? `Same address as ${idn.sharedWith.join(', ')}` : 'Wrong box here'}</span>
+        <span class="tvsrc-count">${count}</span>
+      </button>`;
+    }
     if (!live || !live.ok) {
       return `<button type="button" class="tvsrc-row sc-alert" onclick="tvsrcTap(${slot})" title="Tap to check again">
         <span class="tvsrc-slot">${escapeHtml(s.qam_channel || '')}</span>
@@ -423,6 +431,15 @@ function sourceRowHtml(s) {
 
 // Tap dispatch -- not responding rechecks now, asleep wakes, anything else
 // (live directv/roku, static) picks that source as the commit target.
+let identityBusy = false;
+async function identityRecheck() {
+  if (identityBusy) return;
+  identityBusy = true;
+  try { await api('/api/sources/identity/check', { method: 'POST', body: JSON.stringify({}) }); } catch (e) { /* refresh shows the result */ }
+  identityBusy = false;
+  refreshAll();
+}
+
 async function tvsrcTap(slot) {
   const s = sourceForSlot(slot);
   if (!s) return;
