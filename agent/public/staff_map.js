@@ -435,9 +435,13 @@ function initMapEditing() {
     if (dot) { const n = Number(dot.dataset.n); const d = EDIT.layout.tvs.find((t) => t.n === n); if (!d) return; EDIT.sel = n; MDRAG.kind = 'tv'; MDRAG.id = n; MDRAG.dx = p.x - d.x; MDRAG.dy = p.y - d.y; }
     else { const it = EDIT.layout.items.find((i) => i.id === lab.dataset.item); if (!it) return; MDRAG.kind = 'item'; MDRAG.id = it.id; MDRAG.dx = p.x - it.x; MDRAG.dy = p.y - it.y; }
     MDRAG.on = true; MDRAG.moved = false; MDRAG.x0 = ev.clientX; MDRAG.y0 = ev.clientY;
-    box.setPointerCapture(ev.pointerId);
+    try { box.setPointerCapture(ev.pointerId); } catch (e) { /* older Safari */ }
     ev.preventDefault();
-    renderMap();
+    // No re-render here: iPad Safari stops sending the touch's moves if
+    // the element under the finger is replaced. Just mark the selection.
+    box.querySelectorAll('.map-tv.sel').forEach((el) => el.classList.remove('sel'));
+    if (dot) dot.classList.add('sel');
+    renderMapBar();
   });
   box.addEventListener('pointermove', (ev) => {
     if (!MDRAG.on || !EDIT) return;
