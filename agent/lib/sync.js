@@ -216,6 +216,20 @@ async function reportTvSlot(tvId, slot) {
   if (!res.ok) throw new Error(`tv slot push failed: ${res.status} ${await res.text()}`);
 }
 
+// patch_068: the Map tab's Edit mode saves the floor plan to the cloud,
+// then the box's own copy is updated at once (the next config pull
+// carries the same thing back).
+async function pushMap(layout) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/map`, {
+    method: 'PUT', headers: authHeaders(), body: JSON.stringify({ layout }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `map push failed: ${res.status}`);
+  const config = cache.get('config') || {};
+  if (config.site) { config.site.map = data.layout || layout; cache.set('config', config); }
+  return data.layout || layout;
+}
+
 // Phase 5 (docs/venue-control.md §12/§6): pushes a captured layout's items
 // up wholesale after an admin-PIN-gated "Capture current state"
 // (lib/layouts.js's captureCurrentState(), called from agent/server.js).
@@ -522,6 +536,7 @@ function stop() {
 }
 
 module.exports = {
+  pushMap,
   musicWrite, managerList, managerPass,
   pushPlugsSeen, pushPlugStatus, plugScheduleWrite,
   pushWans, reportSourceIdentity, adoptReceiver,

@@ -1521,7 +1521,19 @@ body.gm-dragging, body.gm-dragging * { cursor: grabbing !important; }
    every set position, the receiver rail under it, and the put-on / TV
    sheets. Items and TVs are placed in percent of a 10:7 box.
    ======================================================================= */
-.staff .map-hint { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.staff .map-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; min-height: 36px; }
+.staff .map-bar-note { color: var(--muted); font-size: 13px; }
+.staff .map-bar-gap { flex: 1; }
+.staff .map-bar-btn { min-height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--border-strong); background: var(--card-alt); color: var(--text); font-family: inherit; font-weight: 700; font-size: 13px; }
+.staff .map-bar-btn.go { background: var(--neon-green, var(--on-fg)); color: #06110A; border-color: transparent; }
+.staff .map-bar-btn:disabled { opacity: .4; }
+.staff .map-stage.editing { border-color: var(--neon-magenta, var(--amber)); box-shadow: 0 0 0 2px rgba(255, 59, 212, .25) inset; }
+.staff .map-stage.editing .map-tv { cursor: grab; }
+.staff .map-stage.editing .map-tv.sel { border-color: var(--neon-magenta, var(--amber)) !important; box-shadow: 0 0 0 4px rgba(255, 59, 212, .4); z-index: 5; }
+.staff .map-stage.editing .map-item.label.draggable { pointer-events: auto; cursor: grab; border: 1px dashed rgba(255, 59, 212, .6); border-radius: 4px; padding: 1px 4px; }
+.staff .map-edit-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.staff .map-edit-row input, .staff .map-edit-row select { min-height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-strong); background: #101015; color: var(--text); font: inherit; font-size: 16px; }
+.staff .map-edit-row input { width: 90px; }
 .staff .map-row { display: flex; gap: 10px; align-items: flex-start; justify-content: center; }
 .staff .map-stage {
   position: relative; width: 100%; min-height: 240px; aspect-ratio: 10 / 7; flex: 0 0 auto;

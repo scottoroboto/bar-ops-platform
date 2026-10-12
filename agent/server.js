@@ -758,7 +758,21 @@ app.post('/api/sports/scan', requireManager, async (req, res) => {
 // The site's drawn floor plan (patch_068) for the staff Map tab.
 app.get('/api/map', (req, res) => {
   const config = cache.get('config') || {};
-  res.json({ layout: (config.site || {}).map || null });
+  res.json({ layout: (config.site || {}).map || null, canEdit: isManager(req) });
+});
+
+// Edit mode on the Map tab (owner or manager): the whole layout comes
+// back, goes to the cloud, and the box keeps the saved copy.
+app.post('/api/map', requireManager, async (req, res) => {
+  try {
+    const layout = (req.body || {}).layout;
+    if (!layout || !Array.isArray(layout.items) || !Array.isArray(layout.tvs)) return res.status(400).json({ error: 'A map needs items and tvs.' });
+    const saved = await sync.pushMap(layout);
+    activity.record('map.save', { actor: req.vcActor, targetType: 'site', targetId: null, detail: { tvs: saved.tvs.length, items: saved.items.length } });
+    res.json({ ok: true, layout: saved });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
 });
 
 // Read-only passthrough so the staff TVs tab can group/label TVs by zone

@@ -1129,6 +1129,28 @@ res.status(500).json({ error: err.message });
 // A new DirecTV box the agent found on the LAN, adopted into a slot by
 // receiver number from the box's admin page. Channel N.1, label
 // "Directv Rcvr N", receiver ID and MAC stored from the start.
+// patch_068: the staff Map tab's Edit mode saves the floor plan here.
+// Items and TV dots in percent of a 10:7 box; shape checked, size capped.
+app.put('/api/venue/agent/map', requireAgentAuth(), async (req, res) => {
+const layout = (req.body || {}).layout;
+if (!layout || !Array.isArray(layout.items) || !Array.isArray(layout.tvs)) return res.status(400).json({ error: 'A map needs items and tvs.' });
+const num = (v, lo, hi) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v * 10) / 10)) : null);
+const items = layout.items.slice(0, 200).map((it) => ({
+  id: String(it.id || '').slice(0, 24), type: ['room', 'bar', 'pool', 'booth', 'door', 'label'].includes(it.type) ? it.type : 'room',
+  x: num(it.x, -10, 110) ?? 0, y: num(it.y, -10, 110) ?? 0, w: num(it.w, 0, 110) ?? 0, h: num(it.h, 0, 110) ?? 0,
+  text: String(it.text || '').slice(0, 40), ...(it.outer ? { outer: true } : {}),
+})).filter((it) => it.id);
+const seen = new Set();
+const tvs = layout.tvs.slice(0, 200).map((t) => ({
+  n: Number.isInteger(t.n) && t.n > 0 && t.n < 1000 ? t.n : null, x: num(t.x, 0, 100) ?? 50, y: num(t.y, 0, 100) ?? 50,
+  ...(Number.isInteger(t.tvId) ? { tvId: t.tvId } : {}),
+})).filter((t) => t.n && !seen.has(t.n) && seen.add(t.n));
+const clean = { items, tvs };
+if (JSON.stringify(clean).length > 64 * 1024) return res.status(400).json({ error: 'That map is too big.' });
+await withServiceClient((client) => client.query('UPDATE vc_sites SET map_layout = $1, updated_at = now() WHERE id = $2', [JSON.stringify(clean), req.vcSite.site_id]));
+res.json({ ok: true, layout: clean });
+});
+
 app.post('/api/venue/agent/sources/adopt', requireAgentAuth(), async (req, res) => {
 try {
 const b = req.body || {};

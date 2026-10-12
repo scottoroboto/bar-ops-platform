@@ -8,6 +8,14 @@ let SOURCES = [];
 let TVS = [];
 let LAYOUT = null;
 let refreshTimer = null;
+let CAN_EDIT = false;
+// Per-iPad: the bar's iPad sits with the front doors away from the
+// bartender, so the map can be turned 180° (positions mirrored, text
+// kept upright). Remembered on this device only.
+let FLIP = (function () { try { return localStorage.getItem('vc_map_flip') === '1'; } catch (e) { return false; } }());
+// Edit mode (owner/manager): drag TVs and labels, add a TV, link a dot to
+// a TV in the inventory, delete, then Save to the cloud.
+let EDIT = null; // { layout (working copy), sel: n|null, dirty }
 const PASS_KEY = 'vc_staff_pass';
 function readPassFromUrl() {
   // A bar iPad's permanent pass rides in the query (?barpass=): Add to Home
@@ -124,7 +132,15 @@ async function loadTvs() {
   try { TVS = await api('/api/tvs'); } catch (e) { /* keep the last list */ }
 }
 async function loadLayout() {
-  try { LAYOUT = (await api('/api/map')).layout || null; } catch (e) { LAYOUT = null; }
+  try { const r = await api('/api/map'); LAYOUT = r.layout || null; CAN_EDIT = !!r.canEdit; } catch (e) { LAYOUT = null; }
+}
+// Mirror for the flipped view: a point, or a box's far corner becomes its near one.
+function fx(x, w) { return FLIP ? 100 - x - (w || 0) : x; }
+function fy(y, h) { return FLIP ? 100 - y - (h || 0) : y; }
+function toggleFlip() {
+  FLIP = !FLIP;
+  try { localStorage.setItem('vc_map_flip', FLIP ? '1' : '0'); } catch (e) { /* private mode */ }
+  renderMap();
 }
 // The games strip calls these by name (it was written for the Sources tab).
 function renderSources() { renderMap(); }
@@ -227,15 +243,17 @@ function renderMap() {
   if (!LAYOUT || !Array.isArray(LAYOUT.tvs)) {
     box.innerHTML = '<p class="muted" style="padding:16px;">No map drawn for this bar yet.</p>';
     if (rail) rail.innerHTML = '';
+    renderMapBar();
     return;
   }
-  const items = (LAYOUT.items || []).map((it) => {
-    const cls = `map-item ${it.type}${it.outer ? ' outer' : ''}${it.type === 'door' && (it.w || 0) === 0 ? ' v' : ''}`;
-    const style = `left:${it.x}%;top:${it.y}%;width:${it.w || 0}%;height:${it.h || 0}%`;
+  const L = EDIT ? EDIT.layout : LAYOUT;
+  const items = (L.items || []).map((it) => {
+    const cls = `map-item ${it.type}${it.outer ? ' outer' : ''}${it.type === 'door' && (it.w || 0) === 0 ? ' v' : ''}${EDIT && it.type === 'label' ? ' draggable' : ''}`;
+    const style = `left:${fx(it.x, it.w)}%;top:${fy(it.y, it.h)}%;width:${it.w || 0}%;height:${it.h || 0}%`;
     const text = it.text ? `<span>${escapeHtml(it.text)}</span>` : '';
-    return `<div class="${cls}" style="${style}">${text}</div>`;
+    return `<div class="${cls}" data-item="${escapeHtml(it.id)}" style="${style}">${text}</div>`;
   }).join('');
-  const dots = LAYOUT.tvs.map((d) => {
+  const dots = L.tvs.map((d) => {
     const t = tvForDot(d);
     const cls = ['map-tv'];
     let slot = null; let text = ''; let title = `TV ${d.n}`;
@@ -252,10 +270,14 @@ function renderMap() {
       else text = dotText(slot);
       title = `${tvName(t)}${s ? ` · ${s.label}` : ''}`;
     }
-    const attrs = t ? `data-tv="${t.id}" data-slot="${slot == null ? '' : slot}" onclick="openTvSheet(${Number(t.id)})"` : `onclick="gamesToast('TV ${Number(d.n)} isn’t set up in Venue Control yet.', true)"`;
-    return `<button type="button" class="${cls.join(' ')}" style="left:${d.x}%;top:${d.y}%;--c:${slotColor(slot)}" title="${escapeHtml(title)}" ${attrs}><span class="n">${Number(d.n)}</span><span class="src">${escapeHtml(text)}</span></button>`;
+    let attrs;
+    if (EDIT) { if (EDIT.sel === d.n) cls.push('sel'); attrs = `data-n="${Number(d.n)}"`; }
+    else attrs = t ? `data-tv="${t.id}" data-slot="${slot == null ? '' : slot}" onclick="openTvSheet(${Number(t.id)})"` : `onclick="gamesToast('TV ${Number(d.n)} isn’t set up in Venue Control yet.', true)"`;
+    return `<button type="button" class="${cls.join(' ')}" style="left:${fx(d.x)}%;top:${fy(d.y)}%;--c:${slotColor(slot)}" title="${escapeHtml(title)}" ${attrs}><span class="n">${Number(d.n)}</span><span class="src">${escapeHtml(EDIT && !t ? 'no TV' : text)}</span></button>`;
   }).join('');
   box.innerHTML = items + dots;
+  box.classList.toggle('editing', !!EDIT);
+  renderMapBar();
   fitMap();
   if (rail) rail.innerHTML = SOURCES.filter((s) => s.kind === 'directv').map((s) => {
     const now = sourceNowInfo(s);
@@ -286,6 +308,160 @@ function fitMap() {
   if (rail) rail.style.maxHeight = side ? `${Math.round(width * 7 / 10)}px` : '';
 }
 window.addEventListener('resize', () => fitMap());
+
+// The row above the map: Flip for everyone, Edit for owner/manager.
+function renderMapBar() {
+  const bar = document.getElementById('mapBar');
+  if (!bar) return;
+  if (EDIT) {
+    const sel = EDIT.sel != null ? EDIT.layout.tvs.find((t) => t.n === EDIT.sel) : null;
+    bar.innerHTML = `
+      <span class="map-bar-note">Editing: drag a TV or a label. Tap a TV to renumber, link or remove it.</span>
+      <button type="button" class="map-bar-btn" onclick="editAddTv()">+ TV</button>
+      ${sel ? `<button type="button" class="map-bar-btn" onclick="openEditTvSheet(${sel.n})">TV ${sel.n}…</button>` : ''}
+      <button type="button" class="map-bar-btn" onclick="toggleFlip()">${FLIP ? 'Unflip' : 'Flip'}</button>
+      <span class="map-bar-gap"></span>
+      <button type="button" class="map-bar-btn" onclick="editCancel()">Cancel</button>
+      <button type="button" class="map-bar-btn go" onclick="editSave()" ${EDIT.dirty ? '' : 'disabled'}>Save map</button>`;
+  } else {
+    bar.innerHTML = `
+      <span class="map-bar-note">Hold a game, then drop it on a TV. Tap a TV to pick what it shows.</span>
+      <span class="map-bar-gap"></span>
+      <button type="button" class="map-bar-btn" onclick="toggleFlip()">${FLIP ? 'Unflip' : 'Flip'}</button>
+      ${CAN_EDIT && LAYOUT ? '<button type="button" class="map-bar-btn" onclick="editStart()">Edit map</button>' : ''}`;
+  }
+}
+
+function editStart() {
+  if (!LAYOUT) return;
+  EDIT = { layout: JSON.parse(JSON.stringify(LAYOUT)), sel: null, dirty: false };
+  renderMap();
+}
+function editCancel() { EDIT = null; renderMap(); }
+async function editSave() {
+  if (!EDIT) return;
+  try {
+    const r = await api('/api/map', { method: 'POST', body: JSON.stringify({ layout: EDIT.layout }) });
+    LAYOUT = r.layout || EDIT.layout;
+    EDIT = null;
+    gamesToast('Map saved.');
+  } catch (e) {
+    gamesToast(`Couldn’t save the map: ${e.message}`, true);
+  }
+  renderMap();
+}
+function editTouch() { if (EDIT) { EDIT.dirty = true; renderMapBar(); } }
+
+// Add a TV dot with the next free number, mid-map, and open its settings.
+function editAddTv() {
+  if (!EDIT) return;
+  const used = new Set(EDIT.layout.tvs.map((t) => t.n));
+  let n = 1; while (used.has(n)) n++;
+  EDIT.layout.tvs.push({ n, x: 50, y: 50 });
+  EDIT.sel = n;
+  editTouch();
+  renderMap();
+  openEditTvSheet(n);
+}
+
+// One dot's settings: number, which inventory TV it is, remove.
+function openEditTvSheet(n) {
+  if (!EDIT) return;
+  const d = EDIT.layout.tvs.find((t) => t.n === Number(n));
+  if (!d) return;
+  EDIT.sel = d.n;
+  const back = sheetBack();
+  const linked = tvForDot(d);
+  const onMap = new Set(EDIT.layout.tvs.filter((t) => t !== d).map((t) => { const x = tvForDot(t); return x ? Number(x.id) : null; }).filter((x) => x != null));
+  const choices = TVS.filter((t) => t.enabled !== false).slice().sort((a, b) => (tvNumber(a) || 999) - (tvNumber(b) || 999) || String(a.name).localeCompare(String(b.name)));
+  const opts = choices.map((t) => `<option value="${t.id}" ${linked && Number(linked.id) === Number(t.id) ? 'selected' : ''}>${escapeHtml(tvName(t))}${onMap.has(Number(t.id)) ? ' (on another dot)' : ''}</option>`).join('');
+  back.innerHTML = `
+    <div class="gm-sheet gm-confirm">
+      <div class="gs-head"><span>Dot ${d.n}</span><button type="button" class="gs-x" onclick="closeMapSheet()">&times;</button></div>
+      <div class="gs-label">Number on the map</div>
+      <div class="map-edit-row"><input id="mapEditNum" inputmode="numeric" value="${d.n}"><span class="muted">Matches the TV named “TV ${d.n}” unless you link one below.</span></div>
+      <div class="gs-label">Which TV is this</div>
+      <div class="map-edit-row"><select id="mapEditLink"><option value="">By number (TV ${d.n})</option>${opts}</select></div>
+      <p class="muted" style="margin:6px 0 0">${linked ? `Now: ${escapeHtml(tvName(linked))}` : `No TV named “TV ${d.n}” in Venue Control yet.`}</p>
+      <div class="mu-sheet-btns">
+        <button type="button" class="mu-sheet-cancel" onclick="editRemoveTv(${d.n})">Remove dot</button>
+        <button type="button" class="mu-sheet-go" onclick="editApplyTv(${d.n})">Done</button>
+      </div>
+    </div>`;
+}
+function editApplyTv(n) {
+  const d = EDIT && EDIT.layout.tvs.find((t) => t.n === Number(n));
+  if (!d) { closeMapSheet(); return; }
+  const num = Number((document.getElementById('mapEditNum') || {}).value);
+  const link = (document.getElementById('mapEditLink') || {}).value;
+  if (!Number.isInteger(num) || num < 1 || num > 999) { gamesToast('A TV number is 1 to 999.', true); return; }
+  if (num !== d.n && EDIT.layout.tvs.some((t) => t !== d && t.n === num)) { gamesToast(`TV ${num} is already on the map.`, true); return; }
+  d.n = num;
+  if (link) d.tvId = Number(link); else delete d.tvId;
+  EDIT.sel = num;
+  editTouch();
+  closeMapSheet();
+  renderMap();
+}
+function editRemoveTv(n) {
+  if (!EDIT) return;
+  EDIT.layout.tvs = EDIT.layout.tvs.filter((t) => t.n !== Number(n));
+  EDIT.sel = null;
+  editTouch();
+  closeMapSheet();
+  renderMap();
+}
+
+// Dragging in edit mode: TV dots and labels. Positions are stored
+// unflipped, so a flipped view converts the finger back.
+const MDRAG = { on: false, kind: null, id: null, moved: false, x0: 0, y0: 0 };
+function mapPct(ev) {
+  const box = document.getElementById('mapBox');
+  const r = box.getBoundingClientRect();
+  let x = ((ev.clientX - r.left) / r.width) * 100;
+  let y = ((ev.clientY - r.top) / r.height) * 100;
+  if (FLIP) { x = 100 - x; y = 100 - y; }
+  return { x: Math.max(0, Math.min(100, x)), y: Math.max(0, Math.min(100, y)) };
+}
+function initMapEditing() {
+  const box = document.getElementById('mapBox');
+  if (!box) return;
+  box.addEventListener('pointerdown', (ev) => {
+    if (!EDIT) return;
+    const dot = ev.target.closest('.map-tv[data-n]');
+    const lab = ev.target.closest('.map-item.label[data-item]');
+    if (!dot && !lab) return;
+    const p = mapPct(ev);
+    if (dot) { const n = Number(dot.dataset.n); const d = EDIT.layout.tvs.find((t) => t.n === n); if (!d) return; EDIT.sel = n; MDRAG.kind = 'tv'; MDRAG.id = n; MDRAG.dx = p.x - d.x; MDRAG.dy = p.y - d.y; }
+    else { const it = EDIT.layout.items.find((i) => i.id === lab.dataset.item); if (!it) return; MDRAG.kind = 'item'; MDRAG.id = it.id; MDRAG.dx = p.x - it.x; MDRAG.dy = p.y - it.y; }
+    MDRAG.on = true; MDRAG.moved = false; MDRAG.x0 = ev.clientX; MDRAG.y0 = ev.clientY;
+    box.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+    renderMap();
+  });
+  box.addEventListener('pointermove', (ev) => {
+    if (!MDRAG.on || !EDIT) return;
+    if (!MDRAG.moved && Math.abs(ev.clientX - MDRAG.x0) < 4 && Math.abs(ev.clientY - MDRAG.y0) < 4) return;
+    MDRAG.moved = true;
+    const p = mapPct(ev);
+    if (MDRAG.kind === 'tv') { const d = EDIT.layout.tvs.find((t) => t.n === MDRAG.id); if (d) { d.x = Math.round((p.x - MDRAG.dx) * 10) / 10; d.y = Math.round((p.y - MDRAG.dy) * 10) / 10; } }
+    else { const it = EDIT.layout.items.find((i) => i.id === MDRAG.id); if (it) { it.x = Math.round((p.x - MDRAG.dx) * 10) / 10; it.y = Math.round((p.y - MDRAG.dy) * 10) / 10; } }
+    // cheap move: just the one element
+    const el = MDRAG.kind === 'tv' ? box.querySelector(`.map-tv[data-n="${MDRAG.id}"]`) : box.querySelector(`.map-item[data-item="${MDRAG.id}"]`);
+    const o = MDRAG.kind === 'tv' ? EDIT.layout.tvs.find((t) => t.n === MDRAG.id) : EDIT.layout.items.find((i) => i.id === MDRAG.id);
+    if (el && o) { el.style.left = `${fx(o.x, MDRAG.kind === 'tv' ? 0 : o.w)}%`; el.style.top = `${fy(o.y, MDRAG.kind === 'tv' ? 0 : o.h)}%`; }
+  });
+  const end = (ev) => {
+    if (!MDRAG.on) return;
+    MDRAG.on = false;
+    const wasTap = !MDRAG.moved && MDRAG.kind === 'tv';
+    if (MDRAG.moved) editTouch();
+    if (wasTap) openEditTvSheet(MDRAG.id); else renderMap();
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
+}
+initMapEditing();
 
 // Tap a receiver in the rail: light up its TVs for a moment.
 function flashSlotTvs(slot) {
