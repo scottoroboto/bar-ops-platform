@@ -24,6 +24,7 @@ let timer = null;
 let lastStationDidl = '';        // the playing station's own metadata, for auto-save
 const autoSaveTried = new Set(); // station ids already tried this run (one try each)
 let lastDiscoverAt = 0;
+let players = [];               // every Sonos seen on the last discovery: { ip, name, uuid, coordinator, invisible }
 
 // ---------------------------------------------------------------- SOAP
 const SERVICES = {
@@ -31,6 +32,7 @@ const SERVICES = {
   RenderingControl: { path: '/MediaRenderer/RenderingControl/Control', urn: 'urn:schemas-upnp-org:service:RenderingControl:1' },
   ContentDirectory: { path: '/MediaServer/ContentDirectory/Control', urn: 'urn:schemas-upnp-org:service:ContentDirectory:1' },
   DeviceProperties: { path: '/DeviceProperties/Control', urn: 'urn:schemas-upnp-org:service:DeviceProperties:1' },
+  ZoneGroupTopology: { path: '/ZoneGroupTopology/Control', urn: 'urn:schemas-upnp-org:service:ZoneGroupTopology:1' },
 };
 
 function esc(s) {
@@ -71,8 +73,11 @@ async function soap(ip, service, action, args = {}) {
 }
 
 // ---------------------------------------------------------------- discovery
-// SSDP M-SEARCH for ZonePlayers; SONOS_IP in .env skips this. One player
-// per bar is the setup, so the first answer wins.
+// SSDP M-SEARCH for ZonePlayers. Every answer is kept (2.5 s window):
+// a bar can have a second Sonos on the LAN -- a factory-reset or not yet
+// set-up unit answers as "Unnamed Room" and can't play anything, and a
+// grouped player can only be driven through its group coordinator -- so
+// pickPlayer() below chooses, instead of the first answer winning.
 function discover() {
   return new Promise((resolve) => {
     const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
@@ -80,17 +85,69 @@ function discover() {
       'M-SEARCH * HTTP/1.1', 'HOST: 239.255.255.250:1900', 'MAN: "ssdp:discover"', 'MX: 2',
       'ST: urn:schemas-upnp-org:device:ZonePlayer:1', '', '',
     ].join('\r\n'));
+    const found = new Set();
     let done = false;
-    const finish = (ip) => { if (done) return; done = true; try { sock.close(); } catch (e) { /* closed */ } resolve(ip); };
+    const finish = () => { if (done) return; done = true; try { sock.close(); } catch (e) { /* closed */ } resolve([...found]); };
     sock.on('message', (buf, rinfo) => {
-      if (/ZonePlayer/i.test(buf.toString())) finish(rinfo.address);
+      if (/ZonePlayer/i.test(buf.toString())) found.add(rinfo.address);
     });
-    sock.on('error', () => finish(null));
+    sock.on('error', () => finish());
     sock.bind(() => {
-      try { sock.setBroadcast(true); sock.send(msg, 0, msg.length, 1900, '239.255.255.250'); } catch (e) { finish(null); }
+      try { sock.setBroadcast(true); sock.send(msg, 0, msg.length, 1900, '239.255.255.250'); } catch (e) { finish(); }
     });
-    setTimeout(() => finish(null), 2500);
+    setTimeout(finish, 2500);
   });
+}
+
+// The household's zone groups as one player reports them: who is in a
+// group, who coordinates it, and which members are hidden (a Boost, the
+// second speaker of a pair). Any member of the household can answer.
+async function topology(ip) {
+  const xml = unesc(tag(await soap(ip, 'ZoneGroupTopology', 'GetZoneGroupState'), 'ZoneGroupState') || '');
+  const groups = [];
+  const gre = /<ZoneGroup\b([^>]*)>([\s\S]*?)<\/ZoneGroup>/g;
+  let g;
+  while ((g = gre.exec(xml))) {
+    const coordinator = (/Coordinator="([^"]+)"/.exec(g[1]) || [])[1] || '';
+    const members = [];
+    const mre = /<ZoneGroupMember\b([^>]*?)\/?>/g;
+    let m;
+    while ((m = mre.exec(g[2]))) {
+      const a = m[1];
+      const attr = (k) => unesc((new RegExp(`\\b${k}="([^"]*)"`).exec(a) || [])[1] || '');
+      const loc = attr('Location');
+      members.push({ uuid: attr('UUID'), ip: (/https?:\/\/([^:/]+)/.exec(loc) || [])[1] || null, name: attr('ZoneName'), invisible: attr('Invisible') === '1', coordinator: attr('UUID') === coordinator });
+    }
+    groups.push({ coordinator, members });
+  }
+  return groups;
+}
+
+function unnamed(name) { return !name || /^unnamed room$/i.test(String(name).trim()); }
+
+// Which Sonos to drive. Prefer a group that has a real, set-up room in it
+// (a name that isn't "Unnamed Room") and talk to that group's coordinator;
+// a lone unnamed unit is used only when nothing else is there.
+async function pickPlayer(ips) {
+  let groups = [];
+  for (const ip of ips) {
+    try { groups = await topology(ip); if (groups.length) break; } catch (e) { /* try the next one */ }
+  }
+  const seen = [];
+  for (const grp of groups) for (const m of grp.members) if (m.ip) seen.push({ ip: m.ip, name: m.name, uuid: m.uuid, coordinator: m.coordinator, invisible: m.invisible });
+  for (const ip of ips) if (!seen.some((x) => x.ip === ip)) seen.push({ ip, name: '', uuid: '', coordinator: true, invisible: false, outside: true });
+  players = seen;
+  const named = groups.filter((grp) => grp.members.some((m) => !m.invisible && !unnamed(m.name)));
+  const pickFrom = named.length ? named : groups;
+  const best = pickFrom.map((grp) => grp.members.find((m) => m.coordinator && m.ip) || grp.members.find((m) => m.ip)).filter(Boolean)[0];
+  const ip = best ? best.ip : ips[0];
+  if (!ip) return null;
+  const d = await describe(ip);
+  if (best && !unnamed(best.name)) d.name = best.name;
+  const others = seen.filter((x) => x.ip !== ip && !x.invisible);
+  if (others.length) console.log(`[sonos] also on this network: ${others.map((x) => `${x.name || 'Unnamed Room'} at ${x.ip}`).join(', ')}`);
+  if (unnamed(d.name)) console.warn(`[sonos] the only Sonos found (${ip}) is "Unnamed Room": it isn't set up in the Sonos app and can't play`);
+  return d;
 }
 
 async function describe(ip) {
@@ -111,9 +168,9 @@ async function ensurePlayer() {
   if (player) return player;
   if (Date.now() - lastDiscoverAt < 15000) return null;
   lastDiscoverAt = Date.now();
-  const ip = config.SONOS_IP || await discover();
-  if (!ip) return null;
-  try { player = await describe(ip); console.log(`[sonos] using ${player.name} (${player.model}) at ${player.ip}`); } catch (e) { player = null; }
+  const ips = config.SONOS_IP ? [config.SONOS_IP] : await discover();
+  if (!ips.length) return null;
+  try { player = await pickPlayer(ips); if (player) console.log(`[sonos] using ${player.name} (${player.model}) at ${player.ip}`); } catch (e) { player = null; }
   return player;
 }
 
@@ -158,7 +215,8 @@ async function readState() {
       playing: transport === 'PLAYING' || transport === 'TRANSITIONING',
       track: t && (t.title || t.artist) ? { title: t.title, artist: t.artist, album: t.album, art: t.art } : null,
       station: stationMeta && stationMeta.title ? { title: stationMeta.title, uri: currentUri } : (currentUri ? { title: null, uri: currentUri } : null),
-      player: { name: p.name, model: p.model, ip: p.ip },
+      player: { name: p.name, model: p.model, ip: p.ip, unnamed: unnamed(p.name) },
+      players: players.filter((x) => !x.invisible).map((x) => ({ ip: x.ip, name: x.name || 'Unnamed Room', coordinator: x.coordinator })),
       updatedAt: new Date().toISOString(),
     };
     lastStationDidl = stationDidl;
@@ -229,14 +287,30 @@ async function transport(action) {
   return state;
 }
 
+// A play that the Sonos refused (701 = it can't start this on this unit).
+// The next call discovers again, in case a better unit has shown up or the
+// group changed; the message says which unit refused and why that happens.
+function playError(p, err) {
+  player = null;
+  lastDiscoverAt = 0;
+  const who = `${p.name} at ${p.ip}`;
+  if (unnamed(p.name)) return new Error(`The Sonos the box found (${who}) is "Unnamed Room": it isn't set up in the Sonos app, so it can't play. Finish its setup there, or unplug it so the bar's Sonos is found instead. (${err.message})`);
+  const others = players.filter((x) => x.ip !== p.ip && !x.invisible);
+  return new Error(`${who} wouldn't play it (${err.message}).${others.length ? ` Other Sonos units here: ${others.map((x) => `${x.name || 'Unnamed Room'} at ${x.ip}`).join(', ')}.` : ''} Try once more; if it keeps failing, play something from the Sonos app on that unit.`);
+}
+
 async function playFavorite(id) {
   const p = await ensurePlayer();
   if (!p) throw new Error('No Sonos found on this network.');
   const favs = await readFavorites(true);
   const fav = favs.find((f) => f.id === id);
   if (!fav) throw new Error('That station is no longer in My Sonos.');
-  await soap(p.ip, 'AVTransport', 'SetAVTransportURI', { InstanceID: 0, CurrentURI: fav.uri, CurrentURIMetaData: fav.meta });
-  await soap(p.ip, 'AVTransport', 'Play', { InstanceID: 0, Speed: 1 });
+  try {
+    await soap(p.ip, 'AVTransport', 'SetAVTransportURI', { InstanceID: 0, CurrentURI: fav.uri, CurrentURIMetaData: fav.meta });
+    await soap(p.ip, 'AVTransport', 'Play', { InstanceID: 0, Speed: 1 });
+  } catch (err) {
+    throw playError(p, err);
+  }
   await readState().catch(() => {});
   return { state, station: fav.title };
 }
@@ -368,6 +442,7 @@ async function playPandoraStation({ stationId, name, art }) {
     }
   } catch (err) {
     console.warn(`[sonos] Pandora station ${stationId} wouldn't start: ${err.message} (uri ${uri}; learned from a real station: ${!!pandoraTpl})`);
+    if (unnamed(p.name)) throw playError(p, err);
     if (!pandoraTpl) throw new Error(`The Sonos wouldn't start it (${err.message}). Play any Pandora station once from the Sonos app so the box learns this account's settings, then try again.`);
     throw new Error(`The Sonos wouldn't start it (${err.message}). Play it once from the Sonos app; it'll work from here after that.`);
   }
@@ -406,4 +481,5 @@ function start() {
 module.exports = {
   start, getState, getFavorites, readFavorites, currentFavoriteId, transport, playFavorite, readState, removeFavorite,
   autoSaveStation, pandoraStationId, playPandoraStation, currentStationKey, learnPandora, pandoraTemplate, forgetPandoraTemplate, ensurePlayer, soap,
+  topology, discover, players: () => players,
 };

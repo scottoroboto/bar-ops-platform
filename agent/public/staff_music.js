@@ -118,11 +118,17 @@ function renderNowPlaying() {
       <p class="muted">Check the Sonos has power and a network cable. The Sonos app on this iPad still works in the meantime.</p></div>`;
     return;
   }
+  // The box found a Sonos that isn't set up ("Unnamed Room"): say so up
+  // top, because every station tap will fail until it's fixed.
+  const unnamedWarn = m.player && m.player.unnamed
+    ? `<div class="mu-warn">This Sonos (${escapeHtml(m.player.ip || '')}) is <b>Unnamed Room</b>: it isn’t set up in the Sonos app and can’t play. ${(m.players || []).length > 1 ? `Also here: ${escapeHtml((m.players || []).filter((x) => x.ip !== m.player.ip).map((x) => `${x.name} (${x.ip})`).join(', '))}.` : 'Finish its setup in the Sonos app, or unplug it so the bar’s Sonos is found.'}</div>`
+    : '';
   const t = m.track || {};
   const station = m.station && m.station.title ? m.station.title : (m.transport === 'STOPPED' ? 'Nothing playing' : '');
   const busy = (k) => (MUSIC_BUSY === k ? ' busy' : '');
   box.innerHTML = `
     <div class="tvs-col-header"><span class="tvs-col-title">Now playing</span><span class="mu-who">${who}</span></div>
+    ${unnamedWarn}
     <div class="mu-art">${t.art ? `<img src="${escapeHtml(t.art)}" alt="">` : '<div class="mu-art-blank"></div>'}</div>
     <div class="mu-song">${escapeHtml(t.title || (m.playing ? '…' : 'Paused'))}</div>
     <div class="mu-artist">${escapeHtml(t.artist || '')}</div>

@@ -1585,3 +1585,7 @@ body.gm-dragging, body.gm-dragging * { cursor: grabbing !important; }
   .staff .map-rcvs { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; width: auto; flex: 0 0 auto; max-height: none !important; }
   .staff .map-rcv { flex: 0 0 180px; }
 }
+
+/* Music: the Sonos the box found isn't set up (staff_music.js). */
+.staff .mu-warn { margin: 8px 0 10px; padding: 8px 12px; border-radius: 10px; background: rgba(229, 86, 109, .12); border: 1px solid #7A2430; color: #FFB3BC; font-size: 13px; font-weight: 700; line-height: 1.35; }
+.staff .mu-warn b { color: #fff; }
