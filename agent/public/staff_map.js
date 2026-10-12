@@ -165,8 +165,10 @@ function isSlotDead(slot) {
   return !(s.live && s.live.ok);
 }
 function tvName(t) { return t.tag || t.name; }
+// The number in "TV 12": the name decides, the tag only fills in when
+// the name has no number (a bar that names TVs by spot and tags them).
 function tvNumber(t) {
-  const m = String(t.tag || '').match(/^\s*TV[\s-]*(\d+)\s*$/i) || String(t.name || '').match(/^\s*TV[\s-]*(\d+)\s*$/i);
+  const m = String(t.name || '').match(/^\s*TV[\s-]*(\d+)\s*$/i) || String(t.tag || '').match(/^\s*TV[\s-]*(\d+)\s*$/i);
   return m ? Number(m[1]) : null;
 }
 // The inventory TV a map dot stands for: by id when the layout says, else
