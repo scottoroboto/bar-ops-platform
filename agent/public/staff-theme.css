@@ -1417,7 +1417,8 @@ body.staff input, body.staff textarea, body.staff select, body.staff [contentedi
 .staff .source-card .sc-plan { font-size: 12px; font-weight: 700; color: var(--amber); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .staff .source-card.gm-drop { border-color: var(--neon-magenta, var(--amber)) !important; box-shadow: 0 0 0 3px rgba(255, 59, 212, .35); transform: scale(1.03); }
 body.gm-dragging, body.gm-dragging * { cursor: grabbing !important; }
-.gm-ghost { position: fixed; z-index: 80; width: 214px; pointer-events: none; opacity: .92; transform: rotate(-3deg) scale(1.04); box-shadow: 0 16px 40px rgba(0, 0, 0, .6); }
+.gm-ghost { position: fixed; z-index: 80; width: 214px; pointer-events: none; opacity: .9; transform: rotate(-3deg) scale(1.04); box-shadow: 0 16px 40px rgba(0, 0, 0, .6); }
+.staff.map-page .gm-ghost { width: 170px; }
 
 /* Game sheet */
 .staff .gm-sheet-back { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, .6); display: none; align-items: center; justify-content: center; padding: 16px; }

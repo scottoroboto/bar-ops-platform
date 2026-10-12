@@ -473,6 +473,19 @@ function markShowing(g) {
   });
 }
 
+// The floating card rides above the finger, so whatever is under the
+// finger (a TV dot on the map, a receiver tile) stays visible and its
+// highlight can be seen. Flips below the finger near the top of the screen.
+function placeGhost(x, y) {
+  const g = DRAG.ghost;
+  if (!g) return;
+  const w = g.offsetWidth || 214; const h = g.offsetHeight || 130;
+  const left = Math.max(4, Math.min(window.innerWidth - w - 4, x - w / 2));
+  const top = y - h - 28 >= 4 ? y - h - 28 : y + 28;
+  g.style.left = `${left}px`;
+  g.style.top = `${top}px`;
+}
+
 function endDrag() {
   clearTimeout(DRAG.timer);
   DRAG.timer = null;
@@ -501,10 +514,9 @@ function initGameGestures() {
       document.body.classList.add('gm-dragging');
       const ghost = card.cloneNode(true);
       ghost.classList.add('gm-ghost');
-      ghost.style.left = `${DRAG.x - 90}px`;
-      ghost.style.top = `${DRAG.y - 50}px`;
       document.body.appendChild(ghost);
       DRAG.ghost = ghost;
+      placeGhost(DRAG.x, DRAG.y);
       markShowing(g);
       if (navigator.vibrate) navigator.vibrate(15);
     }, 450);
@@ -515,8 +527,7 @@ function initGameGestures() {
       if (Math.abs(e.clientX - DRAG.x) > 8 || Math.abs(e.clientY - DRAG.y) > 8) { DRAG.moved = true; clearTimeout(DRAG.timer); DRAG.timer = null; }
       return;
     }
-    DRAG.ghost.style.left = `${e.clientX - 90}px`;
-    DRAG.ghost.style.top = `${e.clientY - 50}px`;
+    placeGhost(e.clientX, e.clientY);
     const t = dragTargetAt(e.clientX, e.clientY);
     if (t !== DRAG.target) {
       if (DRAG.target) DRAG.target.classList.remove('gm-drop');
