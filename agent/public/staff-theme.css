@@ -1543,8 +1543,8 @@ body.gm-dragging, body.gm-dragging * { cursor: grabbing !important; }
 .staff .map-item span { white-space: nowrap; }
 .staff .map-item.room { border: 1.5px solid #3a3a4a; background: rgba(255, 255, 255, .02); }
 .staff .map-item.room.outer { border-color: #70708a; border-width: 2px; background: transparent; }
-.staff .map-item.bar { background: rgba(255, 176, 32, .16); border: 1.5px solid var(--amber); border-radius: 5px; color: var(--amber); }
-.staff .map-item.pool { background: rgba(47, 138, 79, .22); border: 1.5px solid #2f8a4f; border-radius: 4px; color: #7fd79a; align-items: center; justify-content: center; }
+.staff .map-item.bar { background: #23232d; border: 1.5px solid #4b4b60; border-radius: 5px; color: var(--muted-strong); }
+.staff .map-item.pool { background: #23232d; border: 1.5px solid #4b4b60; border-radius: 4px; color: var(--muted-strong); align-items: center; justify-content: center; }
 .staff .map-item.booth { background: #1b1b27; border: 1.5px solid #4b4b66; border-radius: 6px; }
 .staff .map-item.door { background: var(--neon-cyan, var(--blue-fg)); min-height: 4px; min-width: 4px; padding: 0; overflow: visible; }
 .staff .map-item.door span { position: absolute; top: 6px; left: 0; color: var(--neon-cyan, var(--blue-fg)); font-size: 10px; }
