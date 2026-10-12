@@ -481,6 +481,73 @@ function initMapEditing() {
 }
 initMapEditing();
 
+// ---------------------------------------------------------------- lens
+// While a game is dragged over the map, a circle above the finger shows
+// that part of the floor plan at double size with the TV it would land
+// on lit magenta (the "lens" board Scotto picked, Oct 2026). The lens is
+// a scaled copy of the map taken when the finger first comes over it.
+const LENS = { el: null, inner: null, label: null, hit: null, sw: 0, sh: 0 };
+const LENS_D = 210;   // diameter on screen
+const LENS_ZOOM = 2;
+const LENS_LIFT = 96; // the circle sits this far above the finger
+
+function lensShow() {
+  const box = document.getElementById('mapBox');
+  if (!box || LENS.el) return;
+  const r = box.getBoundingClientRect();
+  const el = document.createElement('div');
+  el.className = 'map-lens';
+  el.style.width = `${LENS_D}px`; el.style.height = `${LENS_D}px`;
+  const inner = document.createElement('div');
+  inner.className = 'map-lens-inner';
+  inner.style.width = `${r.width}px`; inner.style.height = `${r.height}px`;
+  inner.innerHTML = box.innerHTML;
+  inner.querySelectorAll('.gm-drop').forEach((x) => x.classList.remove('gm-drop'));
+  inner.querySelectorAll('[onclick]').forEach((x) => x.removeAttribute('onclick'));
+  const label = document.createElement('div');
+  label.className = 'map-lens-label';
+  el.appendChild(inner); el.appendChild(label);
+  document.body.appendChild(el);
+  LENS.el = el; LENS.inner = inner; LENS.label = label; LENS.hit = null; LENS.sw = r.width; LENS.sh = r.height;
+  if (typeof DRAG === 'object') DRAG.lens = true;
+}
+function lensHide() {
+  if (LENS.el) LENS.el.remove();
+  LENS.el = null; LENS.inner = null; LENS.label = null; LENS.hit = null;
+  if (typeof DRAG === 'object') { DRAG.lens = false; if (DRAG.ghost) DRAG.ghost.style.visibility = ''; }
+}
+function onGameDragMove(x, y, target, g) {
+  const box = document.getElementById('mapBox');
+  if (!box || EDIT) { lensHide(); return; }
+  const r = box.getBoundingClientRect();
+  const over = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  if (!over) { lensHide(); return; }
+  if (!LENS.el) lensShow();
+  const el = LENS.el;
+  const R = LENS_D / 2;
+  // Where the circle goes: above the finger, kept on screen.
+  let cx = x; let cy = y - LENS_LIFT;
+  if (cy - R < 4) cy = y + LENS_LIFT; // near the top edge, show it below
+  cx = Math.max(R + 4, Math.min(window.innerWidth - R - 4, cx));
+  el.style.left = `${cx - R}px`; el.style.top = `${cy - R}px`;
+  // The finger's point on the map lands at the circle's centre.
+  const px = x - r.left; const py = y - r.top;
+  LENS.inner.style.transform = `translate(${R - px * LENS_ZOOM}px, ${R - py * LENS_ZOOM}px) scale(${LENS_ZOOM})`;
+  // Light the same dot in the copy.
+  const id = target && target.dataset && target.dataset.tv != null ? target.dataset.tv : null;
+  if (id !== LENS.hit) {
+    LENS.inner.querySelectorAll('.gm-drop').forEach((d) => d.classList.remove('gm-drop'));
+    if (id != null) { const d = LENS.inner.querySelector(`.map-tv[data-tv="${id}"]`); if (d) d.classList.add('gm-drop'); }
+    LENS.hit = id;
+  }
+  const t = id != null ? tvById(id) : null;
+  const who = g ? `${g.away.abbr || g.away.name} @ ${g.home.abbr || g.home.name}` : '';
+  LENS.label.textContent = t ? `${who} → ${tvName(t)}` : who;
+  LENS.label.classList.toggle('on', !!t);
+  if (typeof DRAG === 'object' && DRAG.ghost) DRAG.ghost.style.visibility = 'hidden';
+}
+function onGameDragEnd() { lensHide(); }
+
 // Tap a receiver in the rail: light up its TVs for a moment.
 function flashSlotTvs(slot) {
   document.querySelectorAll('.map-tv.hl').forEach((el) => el.classList.remove('hl'));

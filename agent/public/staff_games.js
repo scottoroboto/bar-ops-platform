@@ -479,6 +479,7 @@ function markShowing(g) {
 function placeGhost(x, y) {
   const g = DRAG.ghost;
   if (!g) return;
+  g.style.visibility = DRAG.lens ? 'hidden' : ''; // the map's magnifier stands in for it
   const w = g.offsetWidth || 214; const h = g.offsetHeight || 130;
   const left = Math.max(4, Math.min(window.innerWidth - w - 4, x - w / 2));
   const top = y - h - 28 >= 4 ? y - h - 28 : y + 28;
@@ -487,6 +488,7 @@ function placeGhost(x, y) {
 }
 
 function endDrag() {
+  if (typeof onGameDragEnd === 'function') onGameDragEnd();
   clearTimeout(DRAG.timer);
   DRAG.timer = null;
   if (DRAG.ghost) DRAG.ghost.remove();
@@ -534,6 +536,8 @@ function initGameGestures() {
       DRAG.target = t;
       if (t) t.classList.add('gm-drop');
     }
+    // The Map tab draws a magnifier around the finger (staff_map.js).
+    if (typeof onGameDragMove === 'function') onGameDragMove(e.clientX, e.clientY, t, gameById(DRAG.id));
     if (e.clientY > window.innerHeight - 70) window.scrollBy(0, 14);
     else if (e.clientY < 90) window.scrollBy(0, -14);
   });

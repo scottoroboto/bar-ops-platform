@@ -1603,3 +1603,10 @@ body.gm-dragging, body.gm-dragging * { cursor: grabbing !important; }
 .staff .mu-warn { margin: 8px 0 10px; padding: 8px 12px; border-radius: 10px; background: rgba(229, 86, 109, .12); border: 1px solid #7A2430; color: #FFB3BC; font-size: 13px; font-weight: 700; line-height: 1.35; }
 .staff .mu-warn b { color: #fff; }
 .staff .map-bar-note i { font-style: normal; color: var(--amber); }
+
+/* Map lens: the magnifier that follows a dragged game over the floor plan. */
+.map-lens { position: fixed; z-index: 85; border-radius: 50%; overflow: hidden; pointer-events: none; background: #0c0c11; border: 3px solid var(--neon-magenta, #FF3BD4); box-shadow: 0 0 0 6px rgba(255, 59, 212, .18), 0 18px 50px rgba(0, 0, 0, .7); }
+.map-lens-inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; container-type: size; }
+.map-lens-inner .map-tv.gm-drop { transform: translate(-50%, -50%) scale(1.25); }
+.map-lens-label { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 10px 9px; text-align: center; font-size: 13px; font-weight: 800; color: var(--text); background: linear-gradient(transparent, rgba(0, 0, 0, .85) 40%); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-lens-label.on { color: var(--neon-magenta, #FF3BD4); }
