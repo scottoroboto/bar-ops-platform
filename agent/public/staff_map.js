@@ -498,6 +498,8 @@ function lensShow() {
   const el = document.createElement('div');
   el.className = 'map-lens';
   el.style.width = `${LENS_D}px`; el.style.height = `${LENS_D}px`;
+  const clip = document.createElement('div');
+  clip.className = 'map-lens-clip';
   const inner = document.createElement('div');
   inner.className = 'map-lens-inner';
   inner.style.width = `${r.width}px`; inner.style.height = `${r.height}px`;
@@ -506,7 +508,7 @@ function lensShow() {
   inner.querySelectorAll('[onclick]').forEach((x) => x.removeAttribute('onclick'));
   const label = document.createElement('div');
   label.className = 'map-lens-label';
-  el.appendChild(inner); el.appendChild(label);
+  clip.appendChild(inner); el.appendChild(clip); el.appendChild(label);
   document.body.appendChild(el);
   LENS.el = el; LENS.inner = inner; LENS.label = label; LENS.hit = null; LENS.sw = r.width; LENS.sh = r.height;
   if (typeof DRAG === 'object') DRAG.lens = true;
