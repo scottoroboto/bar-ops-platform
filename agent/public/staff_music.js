@@ -23,6 +23,10 @@ function readPassFromUrl() {
   let barIpad = false;
   try { barIpad = JSON.parse(atob(decodeURIComponent(m[1]).split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))).actor === 'device'; } catch (e) { /* not a pass */ }
   if (!barIpad) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ }
+  // A pass handed over by the Bar Ops app is this person's own: drop any
+  // bar-iPad base pass left on this device, or staff_pass_boot.js would
+  // swap the owner's pass back out for it on the next page.
+  if (!barIpad) try { localStorage.removeItem('vc_base_pass'); localStorage.removeItem('vc_mgr_seen'); } catch (e) { /* ignore */ }
   return decodeURIComponent(m[1]);
 }
 function passInfo(pass) {

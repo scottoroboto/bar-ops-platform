@@ -29,6 +29,10 @@ function readPassFromUrl() {
   let barIpad = false;
   try { barIpad = JSON.parse(atob(decodeURIComponent(m[1]).split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))).actor === 'device'; } catch (e) { /* not a pass */ }
   if (!barIpad) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ }
+  // A pass handed over by the Bar Ops app is this person's own: drop any
+  // bar-iPad base pass left on this device, or staff_pass_boot.js would
+  // swap the owner's pass back out for it on the next page.
+  if (!barIpad) try { localStorage.removeItem('vc_base_pass'); localStorage.removeItem('vc_mgr_seen'); } catch (e) { /* ignore */ }
   return decodeURIComponent(m[1]);
 }
 function passInfo(pass) {
@@ -325,11 +329,19 @@ function renderMapBar() {
       <button type="button" class="map-bar-btn go" onclick="editSave()" ${EDIT.dirty ? '' : 'disabled'}>Save map</button>`;
   } else {
     bar.innerHTML = `
-      <span class="map-bar-note">Hold a game, then drop it on a TV. Tap a TV to pick what it shows.</span>
+      <span class="map-bar-note">Hold a game, then drop it on a TV. Tap a TV to pick what it shows.${CAN_EDIT ? '' : ` <i>${escapeHtml(whoLine())} · Edit map needs the owner or a manager (open TV Staff from the Bar Ops app).</i>`}</span>
       <span class="map-bar-gap"></span>
       <button type="button" class="map-bar-btn" onclick="toggleFlip()">${FLIP ? 'Unflip' : 'Flip'}</button>
       ${CAN_EDIT && LAYOUT ? '<button type="button" class="map-bar-btn" onclick="editStart()">Edit map</button>' : ''}`;
   }
+}
+
+// Who this page thinks is here, from the pass: "Scotto · owner".
+function whoLine() {
+  const info = STAFF_PASS ? passInfo(STAFF_PASS) : null;
+  if (!info) return 'No pass';
+  const role = info.actor === 'admin' ? 'owner' : info.actor === 'device' ? 'bar iPad' : info.actor || 'staff';
+  return `${info.name || 'Staff'} · ${role}`;
 }
 
 function editStart() {
