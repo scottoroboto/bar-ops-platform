@@ -133,6 +133,7 @@ app.use('/api/favorites', requireStaffPin);
 app.use('/api/sports', requireStaffPin);
 app.use('/api/tvs', requireStaffPin);
 app.use('/api/zones', requireStaffPin);
+app.use('/api/map', requireStaffPin);
 app.use('/api/layouts', requireStaffPin);
 app.use('/api/events', requireStaffPin);
 app.use('/api/scenes', requireStaffPin);
