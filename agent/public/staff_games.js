@@ -79,7 +79,8 @@ function gameOnSlot(slot) {
     if (g.postponed) return false;
     const t = new Date(g.start).getTime();
     const near = g.state === 'in' || (g.state === 'pre' && t - now < 15 * 60000 && t - now > -60 * 60000);
-    return near && tvOptions(g).some((o) => Number(o.major) === Number(s.live.major) && (o.minor == null || s.live.minor == null || Number(o.minor) === Number(s.live.minor)));
+    // A channel the guide says is carrying another program doesn't count.
+    return near && tvOptions(g).some((o) => !o.showing && Number(o.major) === Number(s.live.major) && (o.minor == null || s.live.minor == null || Number(o.minor) === Number(s.live.minor)));
   });
   if (list.length <= 1) return list[0] || null;
   const title = ((SOURCE_TITLES.get(Number(slot)) || {}).title || '').toLowerCase();
@@ -454,10 +455,22 @@ async function saveChannelSheet(btn) {
 // DirecTV receiver tile: tune it there (or set it for the start).
 const DRAG = { timer: null, active: false, id: null, x: 0, y: 0, ghost: null, target: null, moved: false };
 
+// A receiver tile (Sources tab, the Map tab's receiver rail) or a TV on
+// the map (Map tab).
 function dragTargetAt(x, y) {
   const el = document.elementFromPoint(x, y);
+  const tv = el && el.closest('.map-tv[data-tv]');
+  if (tv) return tv;
   const card = el && el.closest('.source-card[data-slot]');
   return card && card.dataset.kind === 'directv' ? card : null;
+}
+
+// While a game is held, everything already showing it lights up.
+function markShowing(g) {
+  const slots = new Set(slotsShowing(g).map((s) => Number(s.slot)));
+  document.querySelectorAll('[data-slot]').forEach((el) => {
+    if (el.dataset.slot !== '' && slots.has(Number(el.dataset.slot))) el.classList.add('gm-showing');
+  });
 }
 
 function endDrag() {
@@ -465,6 +478,7 @@ function endDrag() {
   DRAG.timer = null;
   if (DRAG.ghost) DRAG.ghost.remove();
   if (DRAG.target) DRAG.target.classList.remove('gm-drop');
+  document.querySelectorAll('.gm-showing').forEach((el) => el.classList.remove('gm-showing'));
   document.body.classList.remove('gm-dragging');
   DRAG.active = false;
   DRAG.ghost = null;
@@ -491,6 +505,7 @@ function initGameGestures() {
       ghost.style.top = `${DRAG.y - 50}px`;
       document.body.appendChild(ghost);
       DRAG.ghost = ghost;
+      markShowing(g);
       if (navigator.vibrate) navigator.vibrate(15);
     }, 450);
   });
@@ -520,6 +535,7 @@ function initGameGestures() {
     endDrag();
     DRAG.justDragged = Date.now();
     if (!target || !g) return;
+    if (target.dataset.tv != null && typeof dropGameOnTv === 'function') { dropGameOnTv(g, Number(target.dataset.tv)); return; }
     const opt = tvOptions(g)[0];
     putGameOn(g, [Number(target.dataset.slot)], opt, g.state === 'pre' && new Date(g.start).getTime() - Date.now() > 2 * 60000 ? 'start' : 'now');
   });

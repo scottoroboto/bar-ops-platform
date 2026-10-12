@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<!-- Add to Home Screen opens these full screen, no Safari bars (bar iPads, patch_053) -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Ticket TVs">
+<link rel="apple-touch-icon" href="/ticket-logo.png">
+<!-- Whole site is one Home Screen app, so every tab stays full screen.
+     No start_url on purpose: it defaults to the page you add, ?barpass= included. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<script src="/staff_pass_boot.js"></script>
+<title>Venue Control Agent — Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="staff-theme.css">
+</head>
+<body class="staff map-page">
+<div class="wrap" id="pinGate" style="display:none;">
+  <div class="card">
+    <h2>Map</h2>
+    <p class="muted">This screen opens from the Bar Ops app. Tap <strong>TV Staff</strong> there and you'll land back here signed in.</p>
+    <a class="primary" id="openFromApp" href="#" style="display:inline-block; text-decoration:none;">Open the Bar Ops app</a>
+    <div id="pinMsg"></div>
+  </div>
+</div>
+
+<div id="app">
+  <!-- Branded top bar (screens/01-staff-sources.html), shared shape across all
+       three staff pages -- see staff-theme.css's .staff-topbar rules. The green
+       dot doubles as the old "Agent status" link so that page is still one tap
+       away without cluttering this header with its own text link. -->
+  <div class="staff-topbar">
+    <div class="staff-topbar-inner">
+      <div class="tb-brand">
+        <img class="tb-logo" src="ticket-logo.png" alt="Ticket Sports Bar">
+        <a href="/" title="Agent status"><span class="tb-conn-dot"></span></a>
+      </div>
+      <div class="tb-nav">
+        <a href="/staff_sources.html">Sources</a>
+        <a href="/staff_tvs.html">TVs</a>
+        <a href="/staff_map.html" class="active">Map</a>
+        <a href="/staff_layouts.html">Routines</a>
+        <a href="/staff_events.html">Events</a>
+        <a href="/staff_power.html">Power</a>
+        <a href="/staff_lights.html">Lights</a>
+        <a href="/staff_music.html">Music</a>
+        <a id="navCashOut" href="#" style="display:none;">Cash Out</a>
+        <div class="tb-divider" style="height:40px; margin:0 6px;"></div>
+        <div class="tb-clock">
+          <div class="day" id="tbDay">—</div>
+          <div class="time" id="tbTime">—</div>
+          <div class="date" id="tbDate">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap" id="mapWrap">
+    <!-- Games strip (staff_games.js): hold a game and drop it on a TV below. -->
+    <div class="games" id="gamesBox">
+      <div class="gm-tabs" id="gamesTabs"></div>
+      <div class="gm-row" id="gamesRow"><p class="muted gm-empty">Loading games…</p></div>
+    </div>
+    <p class="map-hint" id="mapHint">Hold a game, then drop it on a TV. Tap a TV to pick what it shows.</p>
+    <div class="map-row">
+      <div class="map-stage" id="mapBox"><p class="muted" style="padding:16px;">Loading…</p></div>
+      <div class="map-rcvs" id="mapRcvs"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/staff_ticker.js"></script>
+<script src="staff_map.js"></script>
+<script src="staff_games.js"></script>
+</body>
+</html>

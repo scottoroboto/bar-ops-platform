@@ -755,6 +755,12 @@ app.post('/api/sports/scan', requireManager, async (req, res) => {
   }
 });
 
+// The site's drawn floor plan (patch_068) for the staff Map tab.
+app.get('/api/map', (req, res) => {
+  const config = cache.get('config') || {};
+  res.json({ layout: (config.site || {}).map || null });
+});
+
 // Read-only passthrough so the staff TVs tab can group/label TVs by zone
 // name without a second admin-only endpoint -- same shape as /api/favorites.
 app.get('/api/zones', (req, res) => {

@@ -577,7 +577,7 @@ const token = header.startsWith('Bearer ') ? header.slice(7) : null;
 if (!token) return res.status(401).json({ error: 'Missing agent bearer token.' });
 const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 const { rows } = await withServiceClient((client) => client.query(
-`SELECT vs.id AS site_id, vs.location_id, vs.timezone, vs.scan_ranges, vs.enabled, l.name AS location_name
+`SELECT vs.id AS site_id, vs.location_id, vs.timezone, vs.scan_ranges, vs.enabled, vs.map_layout, l.name AS location_name
    FROM vc_sites vs JOIN locations l ON l.id = vs.location_id
    WHERE vs.agent_token_hash = $1`,
 [tokenHash]
@@ -931,6 +931,7 @@ location_id: req.vcSite.location_id,
 name: req.vcSite.location_name,
 timezone: req.vcSite.timezone,
 scan_ranges: req.vcSite.scan_ranges,
+map: req.vcSite.map_layout || null, // patch_068: floor plan for the staff Map tab
 },
 sources: sources.map((s) => ({
 // id added in Phase 5 -- vc_layout_items.target_id (target_type "source")

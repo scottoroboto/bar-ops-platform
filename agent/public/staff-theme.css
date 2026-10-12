@@ -1515,3 +1515,73 @@ body.gm-dragging, body.gm-dragging * { cursor: grabbing !important; }
 .staff .sc-next.scroll .inner::after, .staff .tvsrc-next.scroll .inner::after { content: attr(data-text); }
 @keyframes next-ticker { 0% { transform: translateX(0); } 8% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
 @media (prefers-reduced-motion: reduce) { .staff .sc-next.scroll .inner, .staff .tvsrc-next.scroll .inner { animation: none; } }
+
+/* =======================================================================
+   Map tab (staff_map.js, patch_068): the drawn floor plan, a TV button at
+   every set position, the receiver rail under it, and the put-on / TV
+   sheets. Items and TVs are placed in percent of a 10:7 box.
+   ======================================================================= */
+.staff .map-hint { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.staff .map-row { display: flex; gap: 10px; align-items: flex-start; justify-content: center; }
+.staff .map-stage {
+  position: relative; width: 100%; min-height: 240px; aspect-ratio: 10 / 7; flex: 0 0 auto;
+  background: #0c0c11; border: 1px solid var(--border-strong); border-radius: 12px; overflow: hidden; touch-action: none; container-type: size;
+}
+.staff .map-item { position: absolute; box-sizing: border-box; display: flex; align-items: flex-start; padding: 3px 6px; font-size: 11px; font-weight: 700; color: var(--muted-strong); letter-spacing: .02em; pointer-events: none; }
+.staff .map-item span { white-space: nowrap; }
+.staff .map-item.room { border: 1.5px solid #3a3a4a; background: rgba(255, 255, 255, .02); }
+.staff .map-item.room.outer { border-color: #70708a; border-width: 2px; background: transparent; }
+.staff .map-item.bar { background: rgba(255, 176, 32, .16); border: 1.5px solid var(--amber); border-radius: 5px; color: var(--amber); }
+.staff .map-item.pool { background: rgba(47, 138, 79, .22); border: 1.5px solid #2f8a4f; border-radius: 4px; color: #7fd79a; align-items: center; justify-content: center; }
+.staff .map-item.booth { background: #1b1b27; border: 1.5px solid #4b4b66; border-radius: 6px; }
+.staff .map-item.door { background: var(--neon-cyan, var(--blue-fg)); min-height: 4px; min-width: 4px; padding: 0; overflow: visible; }
+.staff .map-item.door span { position: absolute; top: 6px; left: 0; color: var(--neon-cyan, var(--blue-fg)); font-size: 10px; }
+.staff .map-item.door.v span { top: 0; left: 8px; }
+.staff .map-item.label { padding: 0; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.staff .map-tv {
+  position: absolute; transform: translate(-50%, -50%); width: min(7.4cqh, 54px); height: min(7.4cqh, 54px); border-radius: 22%;
+  border: 2px solid var(--c, #55556a); background: #15151d; color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  font-family: inherit; padding: 0; cursor: pointer; -webkit-touch-callout: none; z-index: 2; box-shadow: 0 2px 8px rgba(0, 0, 0, .5);
+}
+.staff .map-tv .n { font-size: min(3cqh, 17px); font-weight: 800; line-height: 1; }
+.staff .map-tv .src { display: none; font-size: min(1.6cqh, 9px); font-weight: 800; line-height: 1; color: var(--c, #8a8aa0); max-width: 96%; overflow: hidden; white-space: nowrap; letter-spacing: 0; }
+@container (min-height: 480px) { .staff .map-tv .src { display: block; } }
+.staff .map-tv.unset { opacity: .35; border-style: dashed; }
+.staff .map-tv.off { opacity: .55; }
+.staff .map-tv.dead { border-color: var(--off-fg) !important; }
+.staff .map-tv.dead .src { color: var(--off-fg); }
+.staff .map-tv.hl, .staff .map-tv.gm-showing { box-shadow: 0 0 0 4px rgba(57, 255, 136, .55), 0 2px 8px rgba(0, 0, 0, .5); }
+.staff .map-tv.gm-drop { border-color: var(--neon-magenta, var(--amber)) !important; box-shadow: 0 0 0 5px rgba(255, 59, 212, .45); transform: translate(-50%, -50%) scale(1.2); z-index: 4; }
+.staff .map-tv.work-working { animation: tvWorkPulse 1s infinite; border-color: var(--amber) !important; }
+.staff .map-tv.work-done { border-color: var(--neon-green, var(--on-fg)) !important; box-shadow: 0 0 0 4px rgba(57, 255, 136, .4); }
+.staff .map-tv.work-failed { border-color: var(--off-fg) !important; box-shadow: 0 0 0 4px rgba(229, 86, 109, .4); }
+.staff .map-rcvs { display: flex; flex-direction: column; gap: 6px; width: 226px; flex: 0 0 226px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.staff .map-rcv {
+  display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; min-height: 54px; text-align: left; padding: 6px 10px 7px;
+  border-radius: 10px; border: 1px solid var(--border-strong); border-left: 5px solid var(--c, #55556a); background: var(--card-alt); color: var(--text); font-family: inherit; cursor: pointer;
+}
+.staff .map-rcv .r { font-size: 12px; font-weight: 800; color: var(--c, #8a8aa0); letter-spacing: .03em; }
+.staff .map-rcv .r i { font-style: normal; color: var(--muted); font-weight: 700; }
+.staff .map-rcv .h { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.staff .map-rcv .s { font-size: 11px; color: var(--muted-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.staff .map-rcv.dead { opacity: .5; }
+.staff .map-rcv.gm-showing { box-shadow: 0 0 0 3px rgba(57, 255, 136, .45); }
+.staff .map-rcv.gm-drop { border-color: var(--neon-magenta, var(--amber)) !important; box-shadow: 0 0 0 3px rgba(255, 59, 212, .35); transform: scale(1.03); }
+.staff .map-sheet-lead { margin: 8px 0 2px; font-size: 15px; }
+.staff .map-sheet-lead b { color: var(--text); }
+.staff .map-sheet-warn { margin: 8px 0 0; padding: 8px 12px; border-radius: 10px; background: rgba(255, 176, 32, .12); border: 1px solid rgba(255, 176, 32, .4); color: var(--amber); font-size: 14px; font-weight: 700; }
+.staff .gs-rcv.sel { border-color: var(--c, var(--neon-magenta, var(--amber))); }
+/* A tighter games strip on the Map page so the floor plan gets the room. */
+.staff.map-page .games { padding: 8px 10px 9px; margin-bottom: 8px; }
+.staff.map-page .gm-card { flex-basis: 196px; padding: 7px 10px 8px; gap: 4px; }
+.staff.map-page .gm-team { min-height: 24px; }
+.staff.map-page .gm-team img, .staff.map-page .gm-logo-txt { width: 22px; height: 22px; flex-basis: 22px; }
+.staff.map-page .gm-leagues button, .staff.map-page .gm-pill { min-height: 34px; }
+.staff.map-page .gm-seg button { min-height: 30px; }
+.staff.map-page .gm-row { margin-top: 8px; }
+@media (max-width: 760px) {
+  .staff .map-row { flex-direction: column; align-items: stretch; }
+  .staff .map-stage { width: 100% !important; }
+  .staff .map-rcvs { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; width: auto; flex: 0 0 auto; max-height: none !important; }
+  .staff .map-rcv { flex: 0 0 180px; }
+}
