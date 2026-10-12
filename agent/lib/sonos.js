@@ -293,6 +293,7 @@ async function transport(action) {
 function playError(p, err) {
   player = null;
   lastDiscoverAt = 0;
+  pandoraSn = { value: null, at: 0 };
   const who = `${p.name} at ${p.ip}`;
   if (unnamed(p.name)) return new Error(`The Sonos the box found (${who}) is "Unnamed Room": it isn't set up in the Sonos app, so it can't play. Finish its setup there, or unplug it so the bar's Sonos is found instead. (${err.message})`);
   const others = players.filter((x) => x.ip !== p.ip && !x.invisible);
@@ -403,9 +404,45 @@ function swapId(text, oldId, newId) {
   return String(text).split(oldId).join(newId);
 }
 
-function pandoraUri(stationId) {
-  if (pandoraTpl && pandoraTpl.uri) return swapId(pandoraTpl.uri, pandoraTpl.id, stationId);
-  return `x-sonosapi-radio:ST%3a${encodeURIComponent(stationId)}?sid=236&flags=8300&sn=1`;
+// Which Pandora login this Sonos system holds, as the serial number the
+// player's own /status/accounts page lists for service type 236. A
+// station URI must carry that number in sn=; one learned from an earlier
+// system (T1's Connect was set up fresh after the Oct 2026 power cut)
+// carries the old number, and the Sonos then plays a single track and
+// stops. Cached for ten minutes.
+let pandoraSn = { value: null, at: 0 };
+async function pandoraAccountSn(ip) {
+  if (Date.now() - pandoraSn.at < 10 * 60 * 1000) return pandoraSn.value;
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), SOAP_TIMEOUT_MS);
+  try {
+    const res = await fetch(`http://${ip}:${config.SONOS_PORT}/status/accounts`, { signal: controller.signal });
+    const xml = await res.text();
+    const re = /<Account\b([^>]*)>/g;
+    let m; let value = null;
+    while ((m = re.exec(xml))) {
+      const a = m[1];
+      if (!/Type="236"/.test(a) || /Deleted="1"/.test(a)) continue;
+      const sn = (/SerialNum="(\d+)"/.exec(a) || [])[1];
+      if (sn) { value = sn; break; }
+    }
+    pandoraSn = { value, at: Date.now() };
+  } catch (err) {
+    pandoraSn = { value: pandoraSn.value, at: Date.now() - 9 * 60 * 1000 }; // try again in a minute
+  } finally {
+    clearTimeout(t);
+  }
+  return pandoraSn.value;
+}
+
+function withSn(uri, sn) {
+  if (!sn) return uri;
+  return /[?&]sn=\d+/.test(uri) ? uri.replace(/([?&]sn=)\d+/, `$1${sn}`) : `${uri}${uri.includes('?') ? '&' : '?'}sn=${sn}`;
+}
+
+function pandoraUri(stationId, sn) {
+  if (pandoraTpl && pandoraTpl.uri) return withSn(swapId(pandoraTpl.uri, pandoraTpl.id, stationId), sn);
+  return `x-sonosapi-radio:ST%3a${encodeURIComponent(stationId)}?sid=236&flags=8300&sn=${sn || 1}`;
 }
 
 function pandoraDidl({ stationId, name, art }) {
@@ -428,7 +465,9 @@ function pandoraDidl({ stationId, name, art }) {
 async function playPandoraStation({ stationId, name, art }) {
   const p = await ensurePlayer();
   if (!p) throw new Error('No Sonos found on this network.');
-  const uri = pandoraUri(stationId);
+  const sn = await pandoraAccountSn(p.ip);
+  if (sn === null && pandoraSn.at) throw new Error('This Sonos system has no Pandora account yet. Add Pandora in the Sonos app (Settings → Services & Voice), then try again.');
+  const uri = pandoraUri(stationId, sn);
   const didl = pandoraDidl({ stationId, name, art });
   try {
     await soap(p.ip, 'AVTransport', 'SetAVTransportURI', { InstanceID: 0, CurrentURI: uri, CurrentURIMetaData: didl });
@@ -481,5 +520,5 @@ function start() {
 module.exports = {
   start, getState, getFavorites, readFavorites, currentFavoriteId, transport, playFavorite, readState, removeFavorite,
   autoSaveStation, pandoraStationId, playPandoraStation, currentStationKey, learnPandora, pandoraTemplate, forgetPandoraTemplate, ensurePlayer, soap,
-  topology, discover, players: () => players,
+  topology, discover, players: () => players, pandoraAccountSn,
 };
