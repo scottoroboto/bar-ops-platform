@@ -20,6 +20,7 @@ const cache = require('./cache');
 const sourcePoller = require('./poller');
 const tvPoller = require('./tv-poller');
 const sync = require('./sync');
+const sonos = require('./sonos');
 
 const REPORT_INTERVAL_MS = 60 * 1000; // matches the cloud's own monitoring poll cadence (server/index.js)
 const FIRST_REPORT_DELAY_MS = 20 * 1000; // let the pollers complete at least one cycle first
@@ -65,6 +66,22 @@ function buildItems() {
       name: source ? source.label : `Source slot ${state.slot}`,
       status: sourceStatus(state),
       detail: { kind: state.kind, active: state.active, error: state.error || null, updatedAt: state.updatedAt },
+    });
+  }
+
+  // The bar's Sonos (Oct 2026: T1's Connect came back from a power cut as
+  // "Unnamed Room" with its setup gone, and nobody knew until a bartender
+  // tapped a station at noon). Reported once a Sonos has ever been found,
+  // so a bar without one never shows an alert for it.
+  const music = sonos.getState();
+  if (music && music.player) {
+    const site = (config.site || {}).name || 'the bar';
+    let status = 'online'; let message = null;
+    if (!music.ok) { status = 'offline'; message = `The Sonos at ${site} isn’t answering (${music.error || 'no reply'}).`; }
+    else if (music.player.unnamed) { status = 'warning'; message = `The Sonos at ${site} lost its setup: it shows as "Unnamed Room" and can’t play. Set it up again in the Sonos app (Settings → Switch system → Set up a new system), add Pandora, play one station.`; }
+    items.push({
+      targetType: 'music', targetId: 'sonos', name: `Sonos (${music.player.name || 'music'})`, status, message,
+      detail: { ip: music.player.ip, model: music.player.model, room: music.player.name, error: music.error || null, updatedAt: music.updatedAt },
     });
   }
 

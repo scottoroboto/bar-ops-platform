@@ -1392,11 +1392,13 @@ async function reportAvHealth({ locationId, items }) {
 
   let count = 0;
   for (const item of items) {
-    const { targetType, targetId, name, status, detail } = item || {};
-    if ((targetType !== 'tv' && targetType !== 'source') || targetId == null || !status) continue;
+    const { targetType, targetId, name, status, detail, message } = item || {};
+    if ((targetType !== 'tv' && targetType !== 'source' && targetType !== 'music') || targetId == null || !status) continue;
     if (!['online', 'offline', 'warning', 'unknown'].includes(status)) continue;
 
-    const kind = targetType === 'tv' ? 'vc_tv' : 'vc_source';
+    // 'music' (patch-free, Oct 2026): the bar's Sonos, reported by the box
+    // so a unit that lost its setup after a power cut raises an alert.
+    const kind = targetType === 'tv' ? 'vc_tv' : targetType === 'source' ? 'vc_source' : 'vc_music';
     const externalRef = String(targetId);
 
     const systemId = await withServiceClient(async (svc) => {
@@ -1421,7 +1423,7 @@ async function reportAvHealth({ locationId, items }) {
       return inserted[0].id;
     });
 
-    await recordStatus({ systemId, status, detail });
+    await recordStatus({ systemId, status, detail, message: message ? String(message).slice(0, 400) : undefined });
     count++;
   }
   // What the bar's iPad should be showing right now (patch_034).
