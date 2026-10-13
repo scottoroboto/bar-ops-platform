@@ -46,6 +46,12 @@ function appBaseUrl() {
 // where to go), and it has to say the one-time code comes to THIS email
 // address — SMS isn't configured, so the code is routed to email (see
 // server/auth.js loginWithPassword).
+// The same welcome as a text, for people who never open email. Twilio
+// delivers it only once the account is on the 10DLC campaign.
+function welcomeSmsText({ username, tempPassword }) {
+  return `Bar Ops (Ticket Sports Bar): your account is ready. Sign in at ${appBaseUrl()} with username ${username} and temporary password ${tempPassword}. You'll get a one-time code, then set your PIN. Reply STOP to opt out.`;
+}
+
 function welcomeEmailText({ username, tempPassword, pin, enabledApps }) {
   return `Welcome! Your account is set up.\n\n` +
     `Sign in here: ${appBaseUrl()}\n\n` +
@@ -308,6 +314,9 @@ async function activateEmployee({ personId, appAccess, activatedBy }) {
       const text = welcomeEmailText({ username, tempPassword, pin, enabledApps });
       await notify.sendEmail(client, 'people', personId, person.email, 'Your account is ready', text);
     }
+    if (tempPassword && person.phone && notify.smsConfigured()) {
+      await notify.sendSms(client, 'people', personId, person.phone, welcomeSmsText({ username, tempPassword }));
+    }
 
     const { rows: finalRows } = await client.query('SELECT * FROM people WHERE id = $1', [personId]);
     return { ok: true, person: finalRows[0], username, tempPassword, pin };
@@ -371,6 +380,9 @@ async function resendCredentials({ personId, resentBy }) {
       const text = welcomeEmailText({ username: person.username, tempPassword, pin, enabledApps });
       const result = await notify.sendEmail(client, 'people', personId, person.email, 'Your account is ready', text);
       emailed = !!(result.ok && !result.simulated);
+    }
+    if (person.phone && notify.smsConfigured()) {
+      await notify.sendSms(client, 'people', personId, person.phone, welcomeSmsText({ username: person.username, tempPassword }));
     }
     console.log(`[employees] credentials resent for ${person.username} (person ${personId}) by ${resentBy} — emailed=${emailed}`);
 
