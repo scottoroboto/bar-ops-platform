@@ -810,7 +810,7 @@ async function renderNotifications() {
       <div id="smsNote" style="display:none;">
         <label class="toggle-row" style="gap:10px; align-items:flex-start; cursor:pointer;">
           <input type="checkbox" id="smsConsent" style="margin-top:3px; width:auto;">
-          <span class="muted" style="font-size:13px;">I agree to receive automated text alerts from Bar Ops (Ticket Sports Bar) at the mobile number on my account, about equipment, scheduling and staffing at the bars where I work. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help. <a href="/privacy.html" target="_blank" rel="noopener">Privacy policy and texting terms</a>.</span>
+          <span class="muted" style="font-size:13px;">I agree to receive automated text alerts from Bar Ops (Ticket Sports Bar) at the mobile number on my account, about equipment, scheduling and staffing at the bars where I work. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help. <a href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a> and <a href="/terms.html" target="_blank" rel="noopener">SMS Terms and Conditions</a>.</span>
         </label>
         <p class="muted" id="smsPhoneNote" style="font-size:12px;"></p>
       </div>
