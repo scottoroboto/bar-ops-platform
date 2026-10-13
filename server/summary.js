@@ -137,20 +137,21 @@ async function setSettings(personId, body, { byOwner, self, updatedBy } = {}) {
 // Sales for one business date: the day's last SpotOn snapshot, plus the
 // snapshot at the day/night cutoff so the two halves can be split.
 async function salesFor(svc, locId, ymd, tz, cutoffHour) {
-  const { rows: last } = await svc.query('SELECT food_net, total_net, at FROM kb_sales_snapshots WHERE location_id = $1 AND business_date = $2 ORDER BY at DESC LIMIT 1', [locId, ymd]);
-  if (!last[0] || last[0].total_net == null) return null;
+  const { rows: last } = await svc.query('SELECT food_net, total_net, at FROM kb_sales_snapshots WHERE location_id = $1 AND business_date = $2 AND total_net IS NOT NULL ORDER BY at DESC LIMIT 1', [locId, ymd]);
+  if (!last[0]) return null;
   const cutoff = zonedToUtc(ymd, `${String(cutoffHour).padStart(2, '0')}:00`, tz);
-  const { rows: atCut } = await svc.query('SELECT food_net, total_net FROM kb_sales_snapshots WHERE location_id = $1 AND business_date = $2 AND at <= $3 ORDER BY at DESC LIMIT 1', [locId, ymd, cutoff]);
+  const { rows: atCut } = await svc.query('SELECT food_net, total_net FROM kb_sales_snapshots WHERE location_id = $1 AND business_date = $2 AND total_net IS NOT NULL AND at <= $3 ORDER BY at DESC LIMIT 1', [locId, ymd, cutoff]);
   const f = last[0]; const c = atCut[0] || null;
   const total = num(f.total_net); const food = f.food_net == null ? null : num(f.food_net);
   const bar = food == null ? null : Math.max(0, total - food);
   const dTotal = c ? num(c.total_net) : 0; const dFood = c && c.food_net != null ? num(c.food_net) : (food == null ? null : 0);
   const dBar = dFood == null ? null : Math.max(0, dTotal - dFood);
+  const split = !!c;
   return {
     total, food, bar,
-    day: { total: dTotal, food: dFood, bar: dBar },
-    night: { total: Math.max(0, total - dTotal), food: food == null || dFood == null ? null : Math.max(0, food - dFood), bar: bar == null || dBar == null ? null : Math.max(0, bar - dBar) },
-    hadCutoff: !!c,
+    day: split ? { total: dTotal, food: dFood, bar: dBar } : { total: null, food: null, bar: null },
+    night: split ? { total: Math.max(0, total - dTotal), food: food == null || dFood == null ? null : Math.max(0, food - dFood), bar: bar == null || dBar == null ? null : Math.max(0, bar - dBar) } : { total: null, food: null, bar: null },
+    hadCutoff: split,
   };
 }
 function sideOf(sales, side) {
@@ -300,16 +301,18 @@ async function buildModel(svc, { person, location, sides, settings, now }) {
   const gateway = sys.find((r) => r.kind === 'unifi_gateway');
   const { rows: wanAlerts } = wans.length ? await svc.query(
     `SELECT sa.opened_at, sa.closed_at, ms.name FROM system_alerts sa JOIN monitored_systems ms ON ms.id = sa.system_id
-     WHERE sa.system_id = ANY($1::uuid[]) AND (sa.closed_at IS NULL OR sa.closed_at >= now() - interval '24 hours') ORDER BY sa.opened_at`, [wans.map((w) => w.id)]) : { rows: [] };
+     WHERE sa.system_id = ANY($1::uuid[]) AND sa.status = 'offline' AND (sa.closed_at IS NULL OR sa.closed_at >= now() - interval '24 hours') ORDER BY sa.opened_at`, [wans.map((w) => w.id)]) : { rows: [] };
   const internetDown = wanAlerts.map((a) => ({ from: fmtTime(a.opened_at, tz), to: a.closed_at ? fmtTime(a.closed_at, tz) : null, minutes: Math.round(((a.closed_at ? new Date(a.closed_at) : now) - new Date(a.opened_at)) / 60000), what: a.name }));
   const wanRow = wans.find((r) => r.detail && (r.detail.latency_ms != null || r.detail.download_mbps != null)) || null;
-  const internet = wans.length ? {
-    up: gateway ? gateway.status === 'online' && fresh(gateway) : wans.some((w) => w.status === 'online' && fresh(w)),
+  const polled = wans.filter((w) => w.status);
+  const internet = polled.length ? {
+    up: gateway && gateway.status ? gateway.status !== 'offline' : polled.some((w) => w.status !== 'offline'),
+    stale: !polled.some(fresh),
     latencyMs: wanRow && wanRow.detail.latency_ms != null ? Number(wanRow.detail.latency_ms) : null,
     down: wanRow && wanRow.detail.download_mbps ? Number(wanRow.detail.download_mbps) : null, upMbps: wanRow && wanRow.detail.upload_mbps ? Number(wanRow.detail.upload_mbps) : null,
     outages: internetDown,
   } : null;
-  const receivers = sys.filter((r) => r.kind === 'vc_source');
+  const receivers = sys.filter((r) => r.kind === 'vc_source' && r.status);
   const music = sys.find((r) => r.kind === 'vc_music') || null;
   const { rows: musicAlert } = music ? await svc.query('SELECT opened_at FROM system_alerts WHERE system_id = $1 AND closed_at IS NULL ORDER BY opened_at DESC LIMIT 1', [music.id]) : { rows: [] };
   model.systems = {
@@ -451,8 +454,10 @@ function renderHtml(model, { base, token, test }) {
     if (S.sales) {
       if (Y.sales) {
         rows.push(row(`${side === 'kitchen' ? 'Food' : 'Bar'} sales`, money(Y.sales.total), `${up(Y.sales.total, Y.sales.lastWeek)} vs last ${weekdayShort(model.yday)} ${money(Y.sales.lastWeek)} · 4-wk ${weekdayShort(model.yday)} avg ${money(Y.sales.avg4)}`));
-        rows.push(row(`Day, open to ${hourLabel(model.cutoff)}`, money(Y.sales.day), `4-wk ${money(Y.sales.avgDay)}`, true));
-        rows.push(row(`Night, ${hourLabel(model.cutoff)} to close`, money(Y.sales.night), `4-wk ${money(Y.sales.avgNight)}`, true));
+        if (Y.sales.day != null) {
+          rows.push(row(`Day, open to ${hourLabel(model.cutoff)}`, money(Y.sales.day), Y.sales.avgDay != null ? `4-wk ${money(Y.sales.avgDay)}` : '', true));
+          rows.push(row(`Night, ${hourLabel(model.cutoff)} to close`, money(Y.sales.night), Y.sales.avgNight != null ? `4-wk ${money(Y.sales.avgNight)}` : '', true));
+        }
       } else rows.push(row(`${side === 'kitchen' ? 'Food' : 'Bar'} sales`, '—', 'no SpotOn snapshot for yesterday'));
     }
     if (S.cost) rows.push(row(side === 'kitchen' ? 'Food cost' : 'Liquor cost', '—', 'no inventory count yet'));
@@ -470,7 +475,7 @@ function renderHtml(model, { base, token, test }) {
     const todayRows = [];
     if (S.projected) {
       todayRows.push(T.projected ? row(`Projected ${side === 'kitchen' ? 'food' : 'bar'} sales`, money(T.projected.total), `4-wk ${weekdayShort(model.today)} avg${model.games.length ? `, ${model.games.length} game${model.games.length === 1 ? '' : 's'} tonight` : ''}`) : row('Projected sales', '—', 'no history for this weekday yet'));
-      if (T.projected) { todayRows.push(row(`Day, open to ${hourLabel(model.cutoff)}`, money(T.projected.day), '', true)); todayRows.push(row(`Night, ${hourLabel(model.cutoff)} to close`, money(T.projected.night), '', true)); }
+      if (T.projected && T.projected.day != null) { todayRows.push(row(`Day, open to ${hourLabel(model.cutoff)}`, money(T.projected.day), '', true)); todayRows.push(row(`Night, ${hourLabel(model.cutoff)} to close`, money(T.projected.night), '', true)); }
     }
     let shiftsHtml = '';
     if (S.shifts) shiftsHtml = T.shifts.length ? `<table style="border-collapse:collapse;font-size:15px;margin-top:8px;">${T.shifts.map((s) => `<tr><td style="padding:2px 12px 2px 0;font-weight:bold;white-space:nowrap;">${fmtHm(s.start)} – ${fmtHm(s.end)}</td><td style="padding:2px 0;">${esc(s.name)}${s.position ? `, ${esc(s.position.toLowerCase())}` : ''}</td></tr>`).join('')}</table>` : `<div style="color:#5c6577;margin-top:6px;">No ${sideLabel(side)} shifts on the schedule for today.</div>`;
@@ -493,7 +498,7 @@ function renderHtml(model, { base, token, test }) {
   if (S.systems && model.systems) {
     const Sy = model.systems; const rows = [];
     const ok = (t) => `<span style="color:#1f8a4c;">${t}</span>`; const bad = (t) => `<span style="color:#c0392b;">${t}</span>`;
-    if (model.sides.includes('bar') && Sy.internet) rows.push(row('Internet', Sy.internet.up ? ok('Up') : bad('Down'), `${Sy.internet.outages.length ? `down ${Sy.internet.outages.reduce((a, o) => a + o.minutes, 0)} min overnight` : 'no outages overnight'}${Sy.internet.latencyMs != null ? ` · ${Sy.internet.latencyMs} ms` : ''}${Sy.internet.down ? ` · ${Math.round(Sy.internet.down)} / ${Math.round(Sy.internet.upMbps || 0)} Mbps` : ''}`));
+    if (model.sides.includes('bar')) rows.push(Sy.internet ? row('Internet', Sy.internet.up ? ok('Up') : bad('Down'), `${Sy.internet.outages.length ? `down ${Sy.internet.outages.reduce((a, o) => a + o.minutes, 0)} min overnight` : 'no outages overnight'}${Sy.internet.latencyMs != null ? ` · ${Sy.internet.latencyMs} ms` : ''}${Sy.internet.down ? ` · ${Math.round(Sy.internet.down)} / ${Math.round(Sy.internet.upMbps || 0)} Mbps` : ''}${Sy.internet.stale ? ' · last check over 15 min ago' : ''}`) : row('Internet', '—', 'not monitored at this bar yet'));
     if (model.sides.includes('bar') && Sy.receivers) rows.push(row('Receivers', Sy.receivers.up === Sy.receivers.total ? ok(`${Sy.receivers.up} of ${Sy.receivers.total}`) : bad(`${Sy.receivers.up} of ${Sy.receivers.total}`), Sy.receivers.down.length ? `${Sy.receivers.down.map(esc).join(', ')} not answering` : 'all answering'));
     if (model.sides.includes('bar') && Sy.music) rows.push(row('Sonos/Pandora', Sy.music.up ? ok('Up') : bad('Down'), Sy.music.up ? (Sy.music.message ? esc(Sy.music.message) : '') : `down since ${Sy.music.downSince || 'overnight'}${Sy.music.message ? ` · ${esc(Sy.music.message)}` : ''}`));
     for (const side of model.sides) { const C = model.by[side].coolers; if (C && side === 'kitchen') rows.push(row('Kitchen coolers', C.inRange === C.total ? ok('In range') : bad(`${C.inRange} of ${C.total} in range`), `${C.total} reporting`)); }
@@ -526,12 +531,12 @@ function renderText(model, { base, token }) {
   if (needs.length) { L.push('NEEDS YOU'); L.push(...needs); }
   for (const s of model.sides) {
     const Y = model.by[s].yesterday; const T = model.by[s].today; const S = model.sections; const parts = [];
-    if (S.sales && Y.sales) parts.push(`${money(Y.sales.total)}${Y.sales.lastWeek ? ` (${Math.round((Y.sales.total - Y.sales.lastWeek) / Y.sales.lastWeek * 100) >= 0 ? '+' : ''}${Math.round((Y.sales.total - Y.sales.lastWeek) / Y.sales.lastWeek * 100)}%)` : ''} day ${money(Y.sales.day)} / night ${money(Y.sales.night)}`);
+    if (S.sales && Y.sales) parts.push(`${money(Y.sales.total)}${Y.sales.lastWeek ? ` (${Math.round((Y.sales.total - Y.sales.lastWeek) / Y.sales.lastWeek * 100) >= 0 ? '+' : ''}${Math.round((Y.sales.total - Y.sales.lastWeek) / Y.sales.lastWeek * 100)}%)` : ''}${Y.sales.day != null ? ` day ${money(Y.sales.day)} / night ${money(Y.sales.night)}` : ''}`);
     if (S.labor && Y.labor && Y.labor.pct != null) parts.push(`labor ${pct(Y.labor.pct)}`);
     if (S.clock && Y.clock.flags.length) parts.push(Y.clock.flags.map((f) => f.text).join('; '));
     if (parts.length) L.push(`Yest${model.sides.length > 1 ? ' ' + s : ''}: ${parts.join('. ')}.`);
     const tp = [];
-    if (S.projected && T.projected) tp.push(`proj ${money(T.projected.total)} (day ${money(T.projected.day)} / night ${money(T.projected.night)})`);
+    if (S.projected && T.projected) tp.push(`proj ${money(T.projected.total)}${T.projected.day != null ? ` (day ${money(T.projected.day)} / night ${money(T.projected.night)})` : ''}`);
     if (S.shifts && T.shifts.length) tp.push(T.shifts.map((x) => `${fmtHm(x.start)} ${shortName(x.name)}`).join(' · '));
     if (tp.length) L.push(`Today${model.sides.length > 1 ? ' ' + s : ''}: ${tp.join('. ')}.`);
   }
