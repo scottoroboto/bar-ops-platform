@@ -260,7 +260,7 @@ async function managerReview({ personId, position, locationIds, locationId, payR
 // initial per-app access grid, mints their login credentials, and sends
 // them their first-login info.
 // ---------------------------------------------------------------------
-async function activateEmployee({ personId, appAccess, activatedBy }) {
+async function activateEmployee({ personId, appAccess, payrollOnFile = true, activatedBy }) {
   return withServiceClient(async (client) => {
     const { rows: existingRows } = await client.query('SELECT * FROM people WHERE id = $1', [personId]);
     const person = existingRows[0];
@@ -291,8 +291,8 @@ async function activateEmployee({ personId, appAccess, activatedBy }) {
     }
 
     await client.query(
-      `UPDATE people SET status = 'active', activated_by = $1, activated_at = now(), updated_at = now() WHERE id = $2`,
-      [activatedBy, personId]
+      `UPDATE people SET status = 'active', activated_by = $1, activated_at = now(), updated_at = now(), payroll_on_file = $3 WHERE id = $2`,
+      [activatedBy, personId, !!payrollOnFile]
     );
 
     for (const key of APP_KEYS) {

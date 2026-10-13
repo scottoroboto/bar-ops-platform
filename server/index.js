@@ -3114,7 +3114,7 @@ return res.status(403).json({ error: 'Managers/owners only.' });
 
 app.post('/api/employees/:id/activate', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can activate an employee.' });
-const result = await employees.activateEmployee({ personId: req.params.id, appAccess: req.body.appAccess, activatedBy: req.person.id });
+const result = await employees.activateEmployee({ personId: req.params.id, appAccess: req.body.appAccess, payrollOnFile: req.body.payrollOnFile !== false, activatedBy: req.person.id });
 res.json(result);
 });
 

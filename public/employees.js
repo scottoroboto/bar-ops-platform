@@ -705,6 +705,7 @@ function openActivateModal(id, name) {
   document.getElementById('accessServiceCalls').checked = false;
   document.getElementById('accessScheduling').checked = false;
   document.getElementById('accessMonitoring').checked = false;
+  document.getElementById('activatePayrollOnFile').checked = true;
   document.getElementById('activateResult').innerHTML = '';
   document.getElementById('activateModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
@@ -726,7 +727,8 @@ async function submitActivate() {
     monitoring: document.getElementById('accessMonitoring').checked,
   };
   try {
-    const result = await withStepUp(() => api(`/api/employees/${id}/activate`, { method: 'POST', body: { appAccess } }));
+    const payrollOnFile = document.getElementById('activatePayrollOnFile').checked;
+    const result = await withStepUp(() => api(`/api/employees/${id}/activate`, { method: 'POST', body: { appAccess, payrollOnFile } }));
     if (!result.ok) { document.getElementById('activateResult').innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
     let box = `<div class="msg success">Activated — they're live.</div>`;
     if (result.tempPassword) {

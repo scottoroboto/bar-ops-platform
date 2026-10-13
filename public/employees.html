@@ -162,6 +162,8 @@
     <label class="switch"><input type="checkbox" id="accessTvStaff"><span class="slider"></span></label></div>
   <div class="toggle-row"><span class="label">Games</span>
     <label class="switch"><input type="checkbox" id="accessAmusement"><span class="slider"></span></label></div>
+  <div class="toggle-row" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--card-border);"><span class="label">Current employee, payroll info already on file<br><span class="muted" style="font-size:12px;">Untick for a true new hire; they then get "finish payroll setup" until their form comes in.</span></span>
+    <label class="switch"><input type="checkbox" id="activatePayrollOnFile" checked><span class="slider"></span></label></div>
   <!-- No "Employees" toggle here: everyone lands in Onboard Review as
        role = 'staff' (see createPendingEmployee) — nobody is a manager
        yet at activation time. The Employees toggle only ever appears on
