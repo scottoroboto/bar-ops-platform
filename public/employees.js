@@ -826,7 +826,7 @@ function openEmployeeDetail(id) {
   const homeEditable = isOwner && (p.role === 'manager' || p.role === 'maintenance') && p.status === 'active';
   document.getElementById('detailHomeFields').style.display = homeEditable ? '' : 'none';
   if (homeEditable) renderDetailHome(p);
-  const summaryEditable = isOwner && p.role === 'manager' && p.status === 'active';
+  const summaryEditable = isOwner && (p.role === 'manager' || p.role === 'maintenance') && p.status === 'active';
   document.getElementById('detailSummaryFields').style.display = summaryEditable ? '' : 'none';
   if (summaryEditable) renderDetailSummary(p);
 

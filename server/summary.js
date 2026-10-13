@@ -555,14 +555,14 @@ async function sidesFor(svc, person) {
   const sides = [];
   if (l.bar_sales || l.bar_labor || l.bar_staff || l.bar_coolers) sides.push('bar');
   if (l.kitchen_sales || l.kitchen_labor || l.kitchen_staff || l.kitchen_coolers) sides.push('kitchen');
-  return sides.length ? sides : ['bar'];
+  return sides.length ? sides : (person.role === 'maintenance' ? ['bar', 'kitchen'] : ['bar']);
 }
 
 async function locationsFor(svc, person) {
   const { rows } = await svc.query(
     `SELECT l.id, l.name, vs.timezone FROM locations l LEFT JOIN vc_sites vs ON vs.location_id = l.id
      WHERE l.active = true AND ($2 OR l.id = $3 OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.person_id = $1 AND el.location_id = l.id)) ORDER BY l.name`,
-    [person.id, person.role === 'owner', person.location_id]);
+    [person.id, person.role === 'owner' || person.role === 'maintenance', person.location_id]);
   return rows;
 }
 
