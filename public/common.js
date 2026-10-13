@@ -5,7 +5,7 @@
 // SSN/ID-upload info, kept encrypted in Jotform and never touched by this
 // app. Basic info (name/email/phone) lives here in the app instead; this
 // link is where people go to fill out or update the sensitive half.
-const JOTFORM_HIRE_PACK_URL = 'https://form.jotform.com/262307421577053';
+const JOTFORM_HIRE_PACK_URL = 'https://form.jotform.com/262857302598064'; // Ticket Sports Bar – Payroll Setup (Oct 2026); the old 262307421577053 keeps its submissions
 
 // The bar's own timezone — fixed, not the viewer's device timezone. Used
 // only for the Time Clock's manual edit prompts (see timeclock.js), so a
