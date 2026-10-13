@@ -19,6 +19,7 @@ const amusement = require('./amusement');
 const kitchenboard = require('./kitchenboard');
 const sensors = require('./sensors');
 const home = require('./home');
+const summary = require('./summary');
 const notify = require('./notify');
 const jotform = require('./jotform');
 const multer = require('multer');
@@ -298,6 +299,34 @@ if (p.role === 'owner' || p.role === 'maintenance') { const { rows } = await poo
 res.json(await home.view(p, ids));
 } catch (err) { console.error('[home] view failed', err); res.status(500).json({ error: err.message }); }
 });
+// Morning summary (patch_069). The owner switches it on per manager and
+// picks the sections; the manager picks email/text/both and the hour.
+app.get('/api/summary/settings', auth.requireSession('light'), async (req, res) => {
+res.json(await summary.settingsFor(req.person.id));
+});
+app.post('/api/summary/settings', auth.requireSession('light'), async (req, res) => {
+res.json(await summary.setSettings(req.person.id, { channel: req.body.channel, sendHour: req.body.sendHour }, { self: true, updatedBy: req.person.id }));
+});
+app.post('/api/summary/test', auth.requireSession('light'), async (req, res) => {
+try { res.json(await summary.sendFor(req.person.id, { test: true })); } catch (err) { console.error('[summary] test failed', err); res.status(500).json({ ok: false, error: err.message }); }
+});
+app.get('/api/summary/settings/:personId', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+res.json(await summary.settingsFor(req.params.personId));
+});
+app.post('/api/summary/settings/:personId', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+res.json(await summary.setSettings(req.params.personId, req.body, { byOwner: true, updatedBy: req.person.id }));
+});
+app.post('/api/summary/test/:personId', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try { res.json(await summary.sendFor(req.params.personId, { test: true })); } catch (err) { console.error('[summary] test failed', err); res.status(500).json({ ok: false, error: err.message }); }
+});
+// The page behind the link in the text: the manager's PIN, nothing else.
+app.get('/s/:token', (req, res) => summary.viewPage(req, res).catch((err) => { console.error('[summary] view', err); res.status(500).send('Something went wrong.'); }));
+app.post('/s/:token/pin', express.urlencoded({ extended: false }), (req, res) => summary.pinPost(req, res).catch((err) => { console.error('[summary] pin', err); res.status(500).send('Something went wrong.'); }));
+app.get('/s/:token/c/:name.png', (req, res) => summary.chartRoute(req, res).catch((err) => { console.error('[summary] chart', err); res.status(500).end(); }));
+
 app.get('/api/employees/:id/home-lines', auth.requireSession('light'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
 res.json(await home.getLines(req.params.id));
@@ -1149,6 +1178,19 @@ const clean = { items, tvs };
 if (JSON.stringify(clean).length > 64 * 1024) return res.status(400).json({ error: 'That map is too big.' });
 await withServiceClient((client) => client.query('UPDATE vc_sites SET map_layout = $1, updated_at = now() WHERE id = $2', [JSON.stringify(clean), req.vcSite.site_id]));
 res.json({ ok: true, layout: clean });
+});
+
+// Today's and tomorrow's My Teams games, pushed by the bar's box so the
+// morning summary can list them (patch_069).
+app.put('/api/venue/agent/games', requireAgentAuth(), async (req, res) => {
+const games = Array.isArray((req.body || {}).games) ? req.body.games.slice(0, 40) : [];
+const clean = games.map((g) => ({
+  id: String(g.id || '').slice(0, 40), league: String(g.league || '').slice(0, 12), name: String(g.name || '').slice(0, 80),
+  away: String(g.away || '').slice(0, 40), home: String(g.home || '').slice(0, 40), start: g.start && !Number.isNaN(new Date(g.start).getTime()) ? new Date(g.start).toISOString() : null,
+  network: g.network ? String(g.network).slice(0, 30) : null, channel: g.channel ? String(g.channel).slice(0, 12) : null,
+})).filter((g) => g.start);
+await withServiceClient((client) => client.query('UPDATE vc_sites SET big_games = $1, updated_at = now() WHERE id = $2', [JSON.stringify(clean), req.vcSite.site_id]));
+res.json({ ok: true, count: clean.length });
 });
 
 app.post('/api/venue/agent/sources/adopt', requireAgentAuth(), async (req, res) => {
@@ -3545,8 +3587,8 @@ app.post('/api/monitoring/systems/:id/archive', auth.requireSession('full'), asy
 
 app.post('/api/monitoring/systems/:id/update', auth.requireSession('full'), async (req, res) => {
   if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
-  const { locationId, category, kind, name, make, model, serialNumber, config } = req.body;
-  const result = await monitoring.updateSystem({ id: req.params.id, locationId, category, kind, name, make, model, serialNumber, config });
+  const { locationId, category, kind, name, make, model, serialNumber, config, zone } = req.body;
+  const result = await monitoring.updateSystem({ id: req.params.id, locationId, category, kind, name, make, model, serialNumber, config, zone });
   res.json(result);
 });
 
@@ -5395,4 +5437,11 @@ setTimeout(() => { monitoring.logUnifiProbe().catch((err) => console.error('[mon
 setInterval(() => {
 monitoring.runDailySummaryIfDue().then((r) => { if (r.ran) console.log(`[monitoring] daily summary sent to ${r.sent} people`); })
 .catch((err) => console.error('[monitoring] daily summary error', err));
+}, 60 * 1000);
+
+// The managers' morning summary (patch_069): each person's own hour, at
+// their bar's clock, once a day.
+setInterval(() => {
+summary.runDue().then((n) => { if (n) console.log(`[summary] morning summary sent to ${n} people`); })
+.catch((err) => console.error('[summary] run error', err));
 }, 60 * 1000);

@@ -217,7 +217,7 @@ async function updateOwnProfile({ personId, name, email, phone, address }) {
 async function listPending() {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, name, email, phone, location_id, position, pay_rate, created_at,
+      `SELECT id, name, email, phone, location_id, position, pay_rate, created_at, department,
               (photo_path IS NOT NULL) AS has_photo, ${LOCATION_IDS_SQL} AS location_ids
        FROM people WHERE status = 'pending_review' ORDER BY created_at ASC`
     );
@@ -228,13 +228,14 @@ async function listPending() {
 // A manager (not the owner) sets the fields only they should — role stays
 // pending_review; this does NOT activate the employee.
 // locationIds (array) is the current shape; a lone locationId still works.
-async function managerReview({ personId, position, locationIds, locationId, payRate, reviewedBy }) {
+async function managerReview({ personId, position, locationIds, locationId, payRate, department, reviewedBy }) {
   const ids = normalizeLocationIds({ locationIds, locationId });
+  if (department != null && !['bar', 'kitchen', 'both'].includes(department)) return { ok: false, error: 'Department is Bar, Kitchen or Both.' };
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `UPDATE people SET position = $1, pay_rate = $2, updated_at = now()
+      `UPDATE people SET position = $1, pay_rate = $2, department = COALESCE($4, department), updated_at = now()
        WHERE id = $3 AND status = 'pending_review' RETURNING *`,
-      [position || null, payRate || null, personId]
+      [position || null, payRate || null, personId, department || null]
     );
     if (!rows[0]) return { ok: false, error: 'Not found, or already activated.' };
     const location_ids = await setPersonLocations(client, personId, ids, reviewedBy);

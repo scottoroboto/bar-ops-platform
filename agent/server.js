@@ -1348,6 +1348,21 @@ app.listen(config.PORT, () => {
   pandora.start();
   kitchen.start();
   sensors.start();
+  // Every 15 minutes, hand the cloud the My Teams games for today and
+  // tomorrow so the managers' morning summary can list them.
+  const pushBigGames = () => {
+    try {
+      const v = sports.view();
+      const keep = new Set([v.today, v.today && (() => { const d = new Date(`${v.today}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); })()]);
+      const games = (v.games || []).filter((g) => g.myTeam && keep.has(g.localDate)).map((g) => ({
+        id: g.id, league: g.league, name: g.name || `${g.away.name} at ${g.home.name}`, away: g.away.name, home: g.home.name, start: g.start,
+        network: g.channel ? g.channel.name : null, channel: g.channel ? `${g.channel.major}${g.channel.minor != null ? '-' + g.channel.minor : ''}` : null,
+      }));
+      sync.pushGames(games).catch((err) => console.warn('[sports] games push:', err.message));
+    } catch (err) { console.warn('[sports] games push:', err.message); }
+  };
+  setTimeout(pushBigGames, 90 * 1000);
+  setInterval(pushBigGames, 15 * 60 * 1000);
   sports.start({
     receivers: sportsReceivers,
     tune: (slots, major, minor, via, actor) => tuneSlots(slots, major, minor, via, actor),

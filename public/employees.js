@@ -606,6 +606,52 @@ async function setHomeLine(personId, key, enabled) {
 }
 
 
+// Morning summary per manager (patch_069). Owner only.
+let SUMMARY_SETTINGS = {};
+async function renderDetailSummary(person) {
+  const el = document.getElementById('detailSummary');
+  el.innerHTML = '<p class="muted">Loading…</p>';
+  let s;
+  try { s = await api(`/api/summary/settings/${person.id}`); } catch (e) { el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; return; }
+  SUMMARY_SETTINGS[person.id] = s;
+  const sw = (key, label, checked, handler) => `<label class="toggle-row" style="gap:8px;"><span class="label">${label}</span>
+      <span class="switch"><input type="checkbox" ${checked ? 'checked' : ''} onchange="${handler}"><span class="slider"></span></span></label>`;
+  el.innerHTML = sw('enabled', 'Send a morning summary', s.enabled, `setSummaryField('${person.id}', 'enabled', this.checked)`)
+    + `<div style="margin:6px 0 2px;" class="muted"><b>Needs you</b> is always on: open service calls, applicants waiting, stock, alerts (drawer shortages, internet down).</div>`
+    + `<div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin:10px 0 2px;">Sections</div>`
+    + s.sectionList.map(({ key, label }) => sw(key, label, s.sections[key], `setSummarySection('${person.id}', '${key}', this.checked)`)).join('')
+    + `<label style="margin-top:10px;">Day/night cutoff</label>
+       <select onchange="setSummaryField('${person.id}', 'dayNightCutoff', Number(this.value))">${[16, 17, 18, 19, 20, 21].map((h) => `<option value="${h}" ${s.dayNightCutoff === h ? 'selected' : ''}>${h > 12 ? h - 12 : h}:00 PM</option>`).join('')}</select>
+       <label>Late clock-in after</label>
+       <select onchange="setSummaryField('${person.id}', 'lateAfterMin', Number(this.value))">${[5, 10, 15].map((m) => `<option value="${m}" ${s.lateAfterMin === m ? 'selected' : ''}>${m} minutes</option>`).join('')}</select>
+       <p class="muted" style="font-size:12px;">They get it by ${s.channel === 'both' ? 'email and text' : s.channel === 'sms' ? 'text' : 'email'} at ${s.sendHour} AM; they change that under Systems Monitoring.</p>
+       <button class="ghost" onclick="sendSummaryTestFor('${person.id}')">Send them a test now</button>
+       <div id="summaryTestResult-${person.id}"></div>`;
+}
+async function setSummaryField(personId, key, value) {
+  try {
+    const r = await withStepUp(() => api(`/api/summary/settings/${personId}`, { method: 'POST', body: { [key]: value } }));
+    if (r && r.ok === false) { showMsg(r.error, 'error'); return; }
+    showMsg('Morning summary updated.', 'success');
+  } catch (e) { showMsg(e.message, 'error'); const p = ALL_EMPLOYEES.find((x) => x.id === personId); if (p) renderDetailSummary(p); }
+}
+async function setSummarySection(personId, key, value) {
+  try {
+    const r = await withStepUp(() => api(`/api/summary/settings/${personId}`, { method: 'POST', body: { sections: { [key]: value } } }));
+    if (r && r.ok === false) { showMsg(r.error, 'error'); return; }
+    showMsg('Morning summary updated.', 'success');
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+async function sendSummaryTestFor(personId) {
+  const out = document.getElementById(`summaryTestResult-${personId}`);
+  out.innerHTML = '<p class="muted">Building…</p>';
+  try {
+    const r = await withStepUp(() => api(`/api/summary/test/${personId}`, { method: 'POST' }));
+    if (!r.ok) { out.innerHTML = `<p class="msg error">${escapeHtml(r.error)}</p>`; return; }
+    out.innerHTML = r.results.map((x) => `<p class="msg success">${escapeHtml(x.location)}: email ${escapeHtml(x.emailStatus || 'off')}, text ${escapeHtml(x.smsStatus || 'off')}. <a href="${x.url}" target="_blank" rel="noopener">Open the page</a> (asks for their PIN).</p>`).join('');
+  } catch (e) { out.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
+}
+
 // ---- Review modal ----
 function openReviewModal(id) {
   const p = PENDING_LIST.find(x => x.id === id);
@@ -615,6 +661,8 @@ function openReviewModal(id) {
   fillPositionSelect(document.getElementById('reviewPosition'), p.position || '');
   fillLocationChecklist(document.getElementById('reviewLocations'), personLocationIds(p));
   document.getElementById('reviewPayRate').value = p.pay_rate || '';
+  const dept = p.department || (/cook|dish|kitchen|prep/i.test(p.position || '') ? 'kitchen' : /bartender|server|bar\b|host|door/i.test(p.position || '') ? 'bar' : '');
+  document.querySelectorAll('input[name="reviewDepartment"]').forEach((r) => { r.checked = r.value === dept; });
   document.getElementById('reviewModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
 }
@@ -627,10 +675,12 @@ async function submitReview() {
   const position = document.getElementById('reviewPosition').value.trim();
   const locationIds = readLocationChecklist(document.getElementById('reviewLocations'));
   const payRate = document.getElementById('reviewPayRate').value;
+  const deptEl = document.querySelector('input[name="reviewDepartment"]:checked');
   if (!locationIds.length) { showMsg('Pick at least one location.', 'error'); return; }
+  if (!deptEl) { showMsg('Pick Bar, Kitchen or Both.', 'error'); return; }
   try {
     await withStepUp(() => api(`/api/employees/${id}/manager-review`, {
-      method: 'POST', body: { position, locationIds, payRate: payRate ? Number(payRate) : null },
+      method: 'POST', body: { position, locationIds, payRate: payRate ? Number(payRate) : null, department: deptEl.value },
     }));
     closeReviewModal();
     showMsg('Review saved.', 'success');
@@ -776,6 +826,9 @@ function openEmployeeDetail(id) {
   const homeEditable = isOwner && (p.role === 'manager' || p.role === 'maintenance') && p.status === 'active';
   document.getElementById('detailHomeFields').style.display = homeEditable ? '' : 'none';
   if (homeEditable) renderDetailHome(p);
+  const summaryEditable = isOwner && p.role === 'manager' && p.status === 'active';
+  document.getElementById('detailSummaryFields').style.display = summaryEditable ? '' : 'none';
+  if (summaryEditable) renderDetailSummary(p);
 
   // Role is deliberately a separate section/action from the fields above —
   // see saveEmployeeRole(). Owner can't demote themselves (would leave the

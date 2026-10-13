@@ -318,7 +318,8 @@ async function addSystem({ locationId, category, kind, name, externalRef, config
 // owner only (enforced in the route handler), any time, not just at
 // add-time. external_ref is deliberately excluded — that's the poll-
 // matching key (the UniFi device id), not something to hand-edit here.
-async function updateSystem({ id, locationId, category, kind, name, make, model, serialNumber, config }) {
+async function updateSystem({ id, locationId, category, kind, name, make, model, serialNumber, config, zone }) {
+  if (zone !== undefined && zone !== null && !['bar', 'kitchen', 'both'].includes(zone)) return { ok: false, error: 'Zone is Bar, Kitchen or Both.' };
   if (!locationId || !category || !kind || !name) {
     return { ok: false, error: 'Location, category, kind, and name are all required.' };
   }
@@ -328,9 +329,10 @@ async function updateSystem({ id, locationId, category, kind, name, make, model,
     const { rows } = await svc.query(
       `UPDATE monitored_systems
        SET location_id = $1, category = $2, kind = $3, name = $4, make = $5, model = $6, serial_number = $7,
-           config = COALESCE(config, '{}'::jsonb) || COALESCE($9::jsonb, '{}'::jsonb)
+           config = COALESCE(config, '{}'::jsonb) || COALESCE($9::jsonb, '{}'::jsonb),
+           zone = CASE WHEN $10::text IS NULL THEN zone ELSE $10::text END
        WHERE id = $8 RETURNING *`,
-      [locationId, category, kind, name, make || null, model || null, serialNumber || null, id, config && typeof config === 'object' ? JSON.stringify(config) : null]
+      [locationId, category, kind, name, make || null, model || null, serialNumber || null, id, config && typeof config === 'object' ? JSON.stringify(config) : null, zone === undefined ? null : zone]
     );
     if (!rows[0]) return { ok: false, error: 'Not found.' };
     return { ok: true, system: rows[0] };
@@ -362,6 +364,7 @@ async function listAlerts(client, { locationId, openOnly } = {}) {
   const params = [];
   if (locationId) { params.push(locationId); clauses.push(`ms.location_id = $${params.length}`); }
   if (openOnly) clauses.push('sa.closed_at IS NULL');
+  clauses.push("ms.kind <> 'vc_tv'"); // TV monitoring is off for now (Oct 2026)
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const { rows } = await client.query(
     `SELECT sa.*, ms.name AS system_name, ms.category, ms.location_id, l.name AS location_name,
@@ -886,12 +889,12 @@ async function sendDailySummaries(svc) {
     `SELECT sa.*, ms.name AS system_name, ms.category, ms.location_id, l.name AS location_name,
             (ms.silenced_until IS NOT NULL AND ms.silenced_until > now()) AS silenced
      FROM system_alerts sa JOIN monitored_systems ms ON ms.id = sa.system_id JOIN locations l ON l.id = ms.location_id
-     WHERE sa.closed_at IS NULL AND sa.expected_on = true AND ms.active = true ORDER BY l.name, ms.category, sa.opened_at`
+     WHERE sa.closed_at IS NULL AND sa.expected_on = true AND ms.active = true AND ms.kind <> 'vc_tv' ORDER BY l.name, ms.category, sa.opened_at`
   );
   const { rows: recovered } = await svc.query(
     `SELECT sa.*, ms.name AS system_name, ms.category, ms.location_id, l.name AS location_name
      FROM system_alerts sa JOIN monitored_systems ms ON ms.id = sa.system_id JOIN locations l ON l.id = ms.location_id
-     WHERE sa.closed_at >= now() - interval '24 hours' AND sa.expected_on = true
+     WHERE sa.closed_at >= now() - interval '24 hours' AND sa.expected_on = true AND ms.kind <> 'vc_tv'
        AND sa.closed_at - sa.opened_at >= ($1 || ' milliseconds')::interval
      ORDER BY l.name, sa.closed_at DESC`,
     [DOWN_BEFORE_NOTIFY_MS]
@@ -1423,7 +1426,9 @@ async function reportAvHealth({ locationId, items }) {
       return inserted[0].id;
     });
 
-    await recordStatus({ systemId, status, detail, message: message ? String(message).slice(0, 400) : undefined });
+    // TVs are recorded but never alert on anyone (Oct 2026: "turn off TV
+    // monitoring and notifications for now"); the bar iPad still shows them.
+    await recordStatus({ systemId, status, detail, message: message ? String(message).slice(0, 400) : undefined, quiet: kind === 'vc_tv' });
     count++;
   }
   // What the bar's iPad should be showing right now (patch_034).

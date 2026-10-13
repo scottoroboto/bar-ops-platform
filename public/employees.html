@@ -124,6 +124,12 @@
   <input id="reviewName" disabled>
   <label for="reviewPosition">Position</label>
   <select id="reviewPosition"></select>
+  <label>Department <span class="muted">(whose morning summary and schedule they land in)</span></label>
+  <div class="zone-radios" style="display:flex;gap:14px;flex-wrap:wrap;margin:4px 0 10px;">
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px;"><input type="radio" name="reviewDepartment" value="bar" style="width:auto;margin:0;"> Bar</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px;"><input type="radio" name="reviewDepartment" value="kitchen" style="width:auto;margin:0;"> Kitchen</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px;"><input type="radio" name="reviewDepartment" value="both" style="width:auto;margin:0;"> Both</label>
+    </div>
   <label>Locations <span class="muted">(pick every bar they'll work at)</span></label>
   <div id="reviewLocations" class="loc-check-grid"></div>
   <label for="reviewPayRate">Pay rate ($/hr)</label>
@@ -250,6 +256,12 @@
     <div class="detail-label" style="margin-bottom:10px;">Widgets (owner)</div>
     <p class="muted" style="margin-top:-6px;">Which widgets this person sees on their home screen. Everything starts off; turn on what they need. Managers get their own bar; maintenance gets every bar.</p>
     <div id="detailHome"></div>
+  </div>
+
+  <div id="detailSummaryFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">
+    <div class="detail-label" style="margin-bottom:10px;">Morning summary (owner)</div>
+    <p class="muted" style="margin-top:-6px;">One email or text each morning with what needs them, yesterday, today, games, coolers and systems. Bar or kitchen follows the widgets above. Off until you switch it on; they pick email or text and the hour.</p>
+    <div id="detailSummary"></div>
   </div>
 
   <div id="detailRoleFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">

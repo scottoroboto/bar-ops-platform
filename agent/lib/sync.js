@@ -535,8 +535,17 @@ function stop() {
   commandTimer = null;
 }
 
+// Today's and tomorrow's My Teams games, for the cloud's morning summary.
+async function pushGames(games) {
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/games`, {
+    method: 'PUT', headers: authHeaders(), body: JSON.stringify({ games }),
+  });
+  if (!res.ok) throw new Error(`games push failed: ${res.status} ${await res.text()}`);
+  return res.json().catch(() => ({}));
+}
+
 module.exports = {
-  pushMap,
+  pushMap, pushGames,
   musicWrite, managerList, managerPass,
   pushPlugsSeen, pushPlugStatus, plugScheduleWrite,
   pushWans, reportSourceIdentity, adoptReceiver,

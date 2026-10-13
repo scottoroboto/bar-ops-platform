@@ -273,6 +273,12 @@ function renderNewForm() {
     </div>
     <label for="ncDescription">What's going on?</label>
     <textarea id="ncDescription" rows="3" placeholder="Be specific — this is what the people below will see"></textarea>
+    <label>Which side of the house <span class="muted">(so the right manager hears about it)</span></label>
+    <div class="zone-radios" style="display:flex;gap:14px;flex-wrap:wrap;margin:4px 0 10px;">
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px;"><input type="radio" name="ncZone" value="bar" style="width:auto;margin:0;"> Bar</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px;"><input type="radio" name="ncZone" value="kitchen" style="width:auto;margin:0;"> Kitchen</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px;"><input type="radio" name="ncZone" value="both" style="width:auto;margin:0;"> Both</label>
+    </div>
     <label>Send this to</label>
     <div id="ncDestinations" class="sc-checkbox-grid"></div>
     <button class="primary" onclick="submitNewCall()">Submit</button>
@@ -292,10 +298,13 @@ async function submitNewCall() {
   const equipmentOther = equipmentSel === '__other' ? document.getElementById('ncOther').value.trim() : null;
   const description = document.getElementById('ncDescription').value.trim();
   const destinationIds = Array.from(document.querySelectorAll('#ncDestinations input:checked')).map(i => i.value);
+  const zoneEl = document.querySelector('input[name="ncZone"]:checked');
+  const zone = zoneEl ? zoneEl.value : null;
   if (!description) { showMsg('Describe the issue first.', 'error'); return; }
+  if (!zone) { showMsg('Pick Bar, Kitchen or Both.', 'error'); return; }
   if (!destinationIds.length) { showMsg('Pick at least one destination to send this to.', 'error'); return; }
   try {
-    const result = await api('/api/servicecalls', { method: 'POST', body: { locationId, equipmentTypeId, equipmentOther, description, destinationIds } });
+    const result = await api('/api/servicecalls', { method: 'POST', body: { locationId, equipmentTypeId, equipmentOther, description, destinationIds, zone } });
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     showMsg('Reported — thanks.', 'success');
     setTab('open');

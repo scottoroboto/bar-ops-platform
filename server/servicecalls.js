@@ -161,7 +161,8 @@ function withMinutesOpen(row) {
   return { ...row, minutes_open: minutesOpen };
 }
 
-async function createCall(client, person, { locationId, equipmentTypeId, equipmentOther, description, destinationIds }) {
+async function createCall(client, person, { locationId, equipmentTypeId, equipmentOther, description, destinationIds, zone }) {
+  if (zone != null && !['bar', 'kitchen', 'both'].includes(zone)) return { ok: false, error: 'Zone is Bar, Kitchen or Both.' };
   const hasAccess = await requireServiceCallsAccess(client, person.id);
   if (!hasAccess && person.role !== 'owner') {
     return { ok: false, error: 'Service Calls isn’t turned on for your account yet — ask your manager.' };
@@ -172,9 +173,9 @@ async function createCall(client, person, { locationId, equipmentTypeId, equipme
   }
 
   const { rows } = await client.query(
-    `INSERT INTO service_calls (location_id, equipment_type_id, equipment_other, description, created_by)
-     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-    [locationId, equipmentTypeId || null, equipmentOther || null, description, person.id]
+    `INSERT INTO service_calls (location_id, equipment_type_id, equipment_other, description, created_by, zone)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [locationId, equipmentTypeId || null, equipmentOther || null, description, person.id, zone || null]
   );
   const callId = rows[0].id;
   const values = ids.map((_, i) => `($1, $${i + 2})`).join(',');

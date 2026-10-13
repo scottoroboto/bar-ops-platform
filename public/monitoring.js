@@ -672,6 +672,8 @@ function editSystemRow(id) {
     <input id="es-model-${id}" value="${escapeHtml(s.model || '')}">
     <label>Serial</label>
     <input id="es-serial-${id}" value="${escapeHtml(s.serial_number || '')}">
+    <label>Side of the house <span class="muted">(whose morning summary it lands in)</span></label>
+    <select id="es-zone-${id}">${[['', 'Not set (both)'], ['bar', 'Bar'], ['kitchen', 'Kitchen'], ['both', 'Both']].map(([v, l]) => `<option value="${v}" ${(s.zone || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
     ${s.kind === 'unifi_wan' ? `
     <label>Which line on the UDM</label>
     <select id="es-wan-${id}">${[['wan', 'The active line (what UniFi reports today)'], ['wan1', 'WAN 1 only (fiber)'], ['wan2', 'WAN 2 only (cable)']].map(([v, l]) => `<option value="${v}" ${((s.config || {}).wan || 'wan') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
@@ -695,6 +697,7 @@ async function submitEditSystem(id) {
   const make = document.getElementById(`es-make-${id}`).value.trim();
   const model = document.getElementById(`es-model-${id}`).value.trim();
   const serialNumber = document.getElementById(`es-serial-${id}`).value.trim();
+  const zone = document.getElementById(`es-zone-${id}`).value || null;
   if (!kind || !name) { showMsg('Kind and name are both required.', 'error'); return; }
   let config;
   if (document.getElementById(`es-par-${id}`)) {
@@ -702,7 +705,7 @@ async function submitEditSystem(id) {
   }
   try {
     const result = await withStepUp(() => api(`/api/monitoring/systems/${id}/update`, {
-      method: 'POST', body: { locationId, category, kind, name, make: make || null, model: model || null, serialNumber: serialNumber || null, config },
+      method: 'POST', body: { locationId, category, kind, name, make: make || null, model: model || null, serialNumber: serialNumber || null, config, zone },
     }));
     if (!result.ok) { showMsg(result.error, 'error'); return; }
     showMsg('Saved.', 'success');
@@ -816,6 +819,20 @@ async function renderNotifications() {
       </div>
       <button class="primary" onclick="submitNotifySettings()">Save</button>
     </div>
+    <div class="card" id="summaryCard" style="display:none;">
+      <h2>Morning summary</h2>
+      <p class="muted" id="summaryIntro"></p>
+      <label>Send it by</label>
+      <div id="summaryChannel" class="seg-row"></div>
+      <label>At</label>
+      <div id="summaryHour" class="seg-row"></div>
+      <p class="muted" id="summaryNote" style="font-size:12px;"></p>
+      <div class="stack-actions">
+        <button class="ghost" onclick="sendSummaryTest()">Send me a test now</button>
+        <button class="primary" style="margin-top:0;" onclick="saveSummarySettings()">Save</button>
+      </div>
+      <div id="summaryResult"></div>
+    </div>
     ${IS_MANAGER ? `
     <div class="card">
       <h2>Someone else's alert settings</h2>
@@ -852,6 +869,45 @@ async function renderNotifications() {
   }
   document.getElementById('notifyChannel').addEventListener('change', updateSmsNote);
   loadNotifySettings();
+  loadSummarySettings();
+}
+
+// Morning summary (patch_069): on only when the owner switched it on for
+// this person. Here they pick email / text / both and the hour.
+let SUMMARY = null;
+function segRow(id, options, value, onPick) {
+  const el = document.getElementById(id);
+  el.innerHTML = options.map(([v, l]) => `<button type="button" class="seg ${String(v) === String(value) ? 'on' : ''}" data-v="${v}">${l}</button>`).join('');
+  el.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { onPick(b.dataset.v); el.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); }));
+}
+async function loadSummarySettings() {
+  const card = document.getElementById('summaryCard');
+  if (!card) return;
+  try {
+    SUMMARY = await api('/api/summary/settings');
+  } catch (e) { return; }
+  if (!SUMMARY.enabled) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  document.getElementById('summaryIntro').textContent = 'Turned on by the owner. What is in it is set by the owner; you pick how and when it reaches you.';
+  segRow('summaryChannel', [['email', 'Email'], ['sms', 'Text'], ['both', 'Both']], SUMMARY.channel, (v) => { SUMMARY.channel = v; });
+  segRow('summaryHour', [[5, '5 AM'], [6, '6 AM'], [7, '7 AM'], [8, '8 AM'], [9, '9 AM']], SUMMARY.sendHour, (v) => { SUMMARY.sendHour = Number(v); });
+  document.getElementById('summaryNote').textContent = 'Bar time. Texts need the consent box above ticked and saved first. The text opens with a link to the full page, which asks for your PIN.';
+}
+async function saveSummarySettings() {
+  try {
+    const r = await api('/api/summary/settings', { method: 'POST', body: { channel: SUMMARY.channel, sendHour: SUMMARY.sendHour } });
+    if (!r.ok) { showMsg(r.error, 'error'); return; }
+    showMsg('Saved.', 'success');
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+async function sendSummaryTest() {
+  const out = document.getElementById('summaryResult');
+  out.innerHTML = '<p class="muted">Building…</p>';
+  try {
+    const r = await api('/api/summary/test', { method: 'POST' });
+    if (!r.ok) { out.innerHTML = `<p class="msg error">${escapeHtml(r.error)}</p>`; return; }
+    out.innerHTML = r.results.map((x) => `<p class="msg success">${escapeHtml(x.location)}: email ${escapeHtml(x.emailStatus || 'off')}, text ${escapeHtml(x.smsStatus || 'off')}. <a href="${x.url}" target="_blank" rel="noopener">Open the page</a> (asks for your PIN).</p>`).join('');
+  } catch (e) { out.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
 }
 
 async function loadRoutingList() {
