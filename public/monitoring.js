@@ -886,9 +886,12 @@ async function loadSummarySettings() {
   try {
     SUMMARY = await api('/api/summary/settings');
   } catch (e) { return; }
-  if (!SUMMARY.enabled) { card.style.display = 'none'; return; }
+  const isOwner = ME && ME.role === 'owner';
+  if (!SUMMARY.enabled && !isOwner) { card.style.display = 'none'; return; }
   card.style.display = '';
-  document.getElementById('summaryIntro').textContent = 'Turned on by the owner. What is in it is set by the owner; you pick how and when it reaches you.';
+  document.getElementById('summaryIntro').textContent = isOwner
+    ? (SUMMARY.enabled ? 'Your own summary covers both bars, bar and kitchen. Managers are switched on from their page under Employees.' : 'Your own summary is off. Send me a test shows what a bar-and-kitchen summary looks like with today\'s real data; managers are switched on from their page under Employees.')
+    : 'Turned on by the owner. What is in it is set by the owner; you pick how and when it reaches you.';
   segRow('summaryChannel', [['email', 'Email'], ['sms', 'Text'], ['both', 'Both']], SUMMARY.channel, (v) => { SUMMARY.channel = v; });
   segRow('summaryHour', [[5, '5 AM'], [6, '6 AM'], [7, '7 AM'], [8, '8 AM'], [9, '9 AM']], SUMMARY.sendHour, (v) => { SUMMARY.sendHour = Number(v); });
   document.getElementById('summaryNote').textContent = 'Bar time. Texts need the consent box above ticked and saved first. The text opens with a link to the full page, which asks for your PIN.';
