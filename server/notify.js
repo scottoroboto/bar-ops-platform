@@ -105,7 +105,17 @@ async function sendEmail(client, relatedTable, relatedId, to, subject, text) {
   }
 }
 
-async function sendSms(client, relatedTable, relatedId, to, body) {
+// Phones are typed however people type them; Twilio wants +1 and ten digits.
+function toE164(raw) {
+  const d = String(raw || '').replace(/\D/g, '');
+  if (d.length === 10) return `+1${d}`;
+  if (d.length === 11 && d[0] === '1') return `+${d}`;
+  return String(raw || '').trim().startsWith('+') ? String(raw).trim() : null;
+}
+
+async function sendSms(client, relatedTable, relatedId, rawTo, body) {
+  const to = toE164(rawTo);
+  if (!to) { await logNotification(client, relatedTable, relatedId, 'sms', String(rawTo || ''), 'failed', 'Not a valid US mobile number.'); return { ok: false, error: 'Not a valid US mobile number.' }; }
   if (!(await notificationsEnabled(client))) {
     console.log(`[notify][sms][DISABLED] to=${to} body="${body}" (master notifications toggle is off — nothing sent)`);
     await logNotification(client, relatedTable, relatedId, 'sms', to, 'disabled', body);
@@ -129,4 +139,4 @@ async function sendSms(client, relatedTable, relatedId, to, body) {
   }
 }
 
-module.exports = { sendEmail, sendSms, emailConfigured, smsConfigured, notificationsEnabled };
+module.exports = { sendEmail, sendSms, emailConfigured, smsConfigured, notificationsEnabled, toE164 };
