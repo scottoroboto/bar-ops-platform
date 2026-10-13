@@ -13,6 +13,7 @@
 // Every active location is in scope.
 const { withServiceClient } = require('./db');
 const notify = require('./notify');
+const crypto = require('crypto');
 const servicecalls = require('./servicecalls');
 
 const BUSINESS_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
@@ -781,6 +782,14 @@ async function recipientsFor(svc, system) {
   return rows;
 }
 
+// The link row for one recipient of one alert; the token is the URL.
+function alertLinkBase() { return (process.env.APP_BASE_URL || 'https://app.ticketsportsbar.com').replace(/\/$/, ''); }
+async function createAlertLink(svc, alertId, personId) {
+  const token = crypto.randomBytes(15).toString('base64url');
+  await svc.query('INSERT INTO alert_links (token, alert_id, person_id) VALUES ($1, $2, $3)', [token, alertId, personId]);
+  return `${alertLinkBase()}/a/${token}`;
+}
+
 // Alert emails sent so far this bar-day (the 6am summary is logged under
 // its own related_table and doesn't count).
 async function alertEmailsSentToday(svc) {
@@ -820,10 +829,10 @@ async function notifyAlert(svc, system, alert, kind) {
       ? `⚠ ${names[0]} is ${first.status} — ${system.location_name}`
       : `⚠ ${alerts.length} ${catLabel}s ${first.status} — ${system.location_name}`;
     text = (alerts.length === 1 ? `${first.message}\n\n` : `${alerts.length} ${catLabel}s at ${system.location_name} went ${first.status} together:\n${names.map((n) => `  • ${n}`).join('\n')}\n\n`)
-      + `Down since: ${first.opened_at}\n\nYou'll get one note when it recovers. Anything still down is in the 6am summary. To quiet it, open the app and press Silence on it.`;
+      + `Down since: ${first.opened_at}\n\nYou'll get one note when it recovers. Anything still down is in the 6am summary.`;
   } else if (kind === 'reminder') {
     subject = `⚠ Still: ${system.name} — ${system.location_name}`;
-    text = `${first.message}\n\nOpen since ${first.opened_at} and not acknowledged. Tap Acknowledge in Bar Ops to stop these reminders; it still clears itself when the reading comes back.`;
+    text = `${first.message}\n\nOpen since ${first.opened_at} and not acknowledged. Acknowledge it to stop these reminders; it still clears itself when the reading comes back.`;
   } else if (kind === 'service_call') {
     subject = `⚠ TV needs service: ${system.name} — ${system.location_name}`;
     text = `The bar reported ${system.name} at ${system.location_name} from the TV Staff page. It has been unreachable since ${first.opened_at} and Turn On didn't bring it back.\n\nA service call has been opened (Service Calls app). Open the app to view.`;
@@ -835,6 +844,12 @@ async function notifyAlert(svc, system, alert, kind) {
   let sentToday = await alertEmailsSentToday(svc);
   for (const person of recipients) {
     const channel = person.notify_channel || 'email'; // default until they set a preference
+    // One-tap Mute / Acknowledge, made for this person (server/alertlink.js).
+    let link = null;
+    if (kind === 'opened' || kind === 'reminder') {
+      try { link = await createAlertLink(svc, first.id, person.id); } catch (err) { console.error('[monitoring] alert link', err); }
+    }
+    const emailText = link ? `${text}\n\nMute or acknowledge (one tap): ${link}` : text;
     if ((channel === 'email' || channel === 'both') && person.email) {
       if (sentToday >= DAILY_ALERT_EMAIL_BUDGET) {
         console.warn(`[monitoring] daily alert email budget (${DAILY_ALERT_EMAIL_BUDGET}) reached — not emailing ${person.email}: ${subject}`);
@@ -843,12 +858,12 @@ async function notifyAlert(svc, system, alert, kind) {
           [first.id, person.email, subject]
         );
       } else {
-        await notify.sendEmail(svc, 'system_alerts', first.id, person.email, subject, text);
+        await notify.sendEmail(svc, 'system_alerts', first.id, person.email, subject, emailText);
         sentToday++;
       }
     }
     if ((channel === 'sms' || channel === 'both') && person.phone) {
-      await notify.sendSms(svc, 'system_alerts', first.id, person.phone, `${subject}\n${first.message || ''}`.slice(0, 300));
+      await notify.sendSms(svc, 'system_alerts', first.id, person.phone, `${subject}\n${link ? `Mute/ack: ${link}\n` : ''}${first.message || ''}`.slice(0, 300));
     }
   }
 }

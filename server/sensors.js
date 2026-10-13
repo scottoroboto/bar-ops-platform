@@ -138,8 +138,14 @@ function stepProbe(p, tempC, readAt) {
 function probeStatus(p) {
   const name = p.display_name;
   switch (p.state) {
-    case 'high': return { status: 'warning', message: `${name} is ${fmtF(p.last_c)} (above ${fmtF(p.high_c)} for ${minutesBetween(p.cond_since, p.last_seen_at)} min).` };
-    case 'low': return { status: 'warning', message: `${name} is ${fmtF(p.last_c)} (below ${fmtF(p.low_c)} for ${minutesBetween(p.cond_since, p.last_seen_at)} min). Lines may freeze.` };
+    // Back inside the band but not yet by CLEAR_MARGIN_C for CLEAR_AFTER_MS:
+    // say so, instead of "43.0°F (above 46.0°F ...)".
+    case 'high': return p.cond === 'high'
+      ? { status: 'warning', message: `${name} is ${fmtF(p.last_c)} (above ${fmtF(p.high_c)} for ${minutesBetween(p.cond_since, p.last_seen_at)} min).` }
+      : { status: 'warning', message: `${name} is ${fmtF(p.last_c)}, back under ${fmtF(p.high_c)}; clears after ${CLEAR_AFTER_MS / 60000} steady min below ${fmtF(Number(p.high_c) - CLEAR_MARGIN_C)}.` };
+    case 'low': return p.cond === 'low'
+      ? { status: 'warning', message: `${name} is ${fmtF(p.last_c)} (below ${fmtF(p.low_c)} for ${minutesBetween(p.cond_since, p.last_seen_at)} min). Lines may freeze.` }
+      : { status: 'warning', message: `${name} is ${fmtF(p.last_c)}, back above ${fmtF(p.low_c)}; clears after ${CLEAR_AFTER_MS / 60000} steady min above ${fmtF(Number(p.low_c) + CLEAR_MARGIN_C)}.` };
     case 'error': return { status: 'warning', message: `${name}'s probe isn't reading (${p.error_run} failed reads). Check the cable at the box.` };
     case 'silent': return { status: 'unknown', message: null };
     case 'normal': return { status: 'online', message: null };

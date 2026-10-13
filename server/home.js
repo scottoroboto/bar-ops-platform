@@ -138,7 +138,7 @@ async function view(person, locationIds) {
     }
     const alerts = !lines.alerts ? [] : (await monitoring.listAlerts(svc, { openOnly: true }))
       .filter((a) => locationIds.some((id) => String(id) === String(a.location_id)))
-      .map((a) => ({ id: a.id, category: a.category, systemName: a.system_name, message: a.message, openedAt: a.opened_at, acknowledgedAt: a.acknowledged_at, silenced: a.silenced, locationName: a.location_name, status: a.status }));
+      .map((a) => ({ id: a.id, systemId: a.system_id, category: a.category, systemName: a.system_name, message: a.message, openedAt: a.opened_at, acknowledgedAt: a.acknowledged_at, silenced: a.silenced, locationName: a.location_name, status: a.status }));
     const { rows: pend } = await svc.query(`SELECT count(*)::int AS n FROM people WHERE status = 'pending_review' AND (location_id = ANY($1::uuid[]) OR $2)`, [locationIds, person.role === 'owner']);
     const { rows: games } = await svc.query(`SELECT count(*)::int AS n FROM amusement_collections c JOIN amusement_locations al ON al.id = c.location_id WHERE c.status = 'final' AND c.pos_status = 'queued' AND (al.location_id = ANY($1::uuid[]) OR $2)`, [locationIds, person.role === 'owner']);
     const { rows: calls } = await svc.query(`SELECT count(*)::int AS n FROM service_calls WHERE status = 'open' AND location_id = ANY($1::uuid[])`, [locationIds]);

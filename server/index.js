@@ -20,6 +20,7 @@ const kitchenboard = require('./kitchenboard');
 const sensors = require('./sensors');
 const home = require('./home');
 const summary = require('./summary');
+const alertlink = require('./alertlink');
 const access = require('./access');
 const notify = require('./notify');
 const jotform = require('./jotform');
@@ -326,6 +327,9 @@ try { res.json(await summary.sendFor(req.params.personId, { test: true })); } ca
 // The page behind the link in the text: the manager's PIN, nothing else.
 app.get('/s/:token', (req, res) => summary.viewPage(req, res).catch((err) => { console.error('[summary] view', err); res.status(500).send('Something went wrong.'); }));
 app.post('/s/:token/pin', express.urlencoded({ extended: false }), (req, res) => summary.pinPost(req, res).catch((err) => { console.error('[summary] pin', err); res.status(500).send('Something went wrong.'); }));
+// One-tap Mute / Acknowledge from an alert text or email (patch_071).
+app.get('/a/:token', (req, res) => alertlink.page(req, res).catch((err) => { console.error('[alertlink] page', err); res.status(500).send('Something went wrong.'); }));
+app.post('/a/:token', express.urlencoded({ extended: false }), (req, res) => alertlink.act(req, res).catch((err) => { console.error('[alertlink] act', err); res.status(500).send('Something went wrong.'); }));
 app.get('/s/:token/c/:name.png', (req, res) => summary.chartRoute(req, res).catch((err) => { console.error('[summary] chart', err); res.status(500).end(); }));
 
 // Everything the owner switches for one person, in one place (Oct 2026).

@@ -133,7 +133,8 @@ function renderHome() {
       ${alerts.length ? `<span>${ALERTS_OPEN ? '▴' : '▾'}</span>` : ''}
     </button>
     ${ALERTS_OPEN && alerts.length ? `<div class="hm-alertlist">${alerts.slice(0, 20).map((a) => `<div class="hm-alertrow"><div><b>${escapeHtml(a.systemName)}</b> · ${escapeHtml(shortLoc(a.locationName))}<br><span class="muted">${escapeHtml(a.message || '')}${a.acknowledgedAt ? ' · acknowledged' : ''}${a.silenced ? ' · silenced' : ''}</span></div>
-      <div style="display:flex; gap:6px; flex-shrink:0;">${a.acknowledgedAt ? '' : `<button class="small secondary" style="margin:0;" onclick="ackHomeAlert('${a.id}')">Ack</button>`}<a class="button small" style="margin:0; text-decoration:none;" href="${a.category === 'refrigeration' ? '/sensors.html' : '/monitoring.html'}">Open</a></div></div>`).join('')}${alerts.length > 20 ? `<div class="hm-alertrow"><a href="/monitoring.html" style="color:#8fb6ff;">and ${alerts.length - 20} more in Systems Monitoring</a></div>` : ''}</div>` : ''}`;
+      <div style="display:flex; gap:6px; flex-shrink:0;">${a.acknowledgedAt ? '' : `<button class="small secondary" style="margin:0;" onclick="ackHomeAlert('${a.id}')">Ack</button>`}${a.silenced ? `<button class="small secondary" style="margin:0;" onclick="muteHomeAlert('${a.systemId}','off')">Unmute</button>` : `<button class="small secondary" style="margin:0;" onclick="toggleHomeMute('${a.id}')">Mute…</button>`}<a class="button small" style="margin:0; text-decoration:none;" href="${a.category === 'refrigeration' ? '/sensors.html' : '/monitoring.html'}">Open</a></div></div>
+      <div class="hm-alertrow" id="hmMute-${a.id}" style="display:none; justify-content:flex-start; flex-wrap:wrap; gap:6px; border-top:0; padding-top:0;"><span class="muted">Mute ${escapeHtml(a.systemName)} for</span>${HOME_MUTES.map(([d, l]) => `<button class="small secondary" style="margin:0;" onclick="muteHomeAlert('${a.systemId}','${d}')">${l}</button>`).join('')}</div>`).join('')}${alerts.length > 20 ? `<div class="hm-alertrow"><a href="/monitoring.html" style="color:#8fb6ff;">and ${alerts.length - 20} more in Systems Monitoring</a></div>` : ''}</div>` : ''}`;
   const blocks = (h.locations || []).map(hmBlock).join('');
   const needs = h.needs ? [
     h.needs.applicants ? `<a class="hm-need" href="/employees.html"><span>Applicants</span><span class="b">${h.needs.applicants}</span></a>` : '',
@@ -147,6 +148,14 @@ function renderHome() {
     <div class="hm-kick" style="margin-top:12px;">Apps</div>`;
 }
 function toggleAlerts() { ALERTS_OPEN = !ALERTS_OPEN; renderHome(); }
+// Mute = the Monitoring page's Silence: no texts or emails for that one
+// piece of equipment until the time is up; it stays on the dashboard.
+const HOME_MUTES = [['1h', '1 hour'], ['today', 'Rest of today'], ['1d', '1 day'], ['forever', 'Until turned back on']];
+function toggleHomeMute(id) { const el = document.getElementById(`hmMute-${id}`); if (el) el.style.display = el.style.display === 'none' ? 'flex' : 'none'; }
+async function muteHomeAlert(systemId, duration) {
+  try { await withStepUp(() => api(`/api/monitoring/systems/${systemId}/silence`, { method: 'POST', body: { duration } })); await loadHome(); }
+  catch (e) { if (typeof showMsg === 'function') showMsg(e.message || 'Could not mute.', 'error'); }
+}
 async function ackHomeAlert(id) {
   try { await api(`/api/monitoring/alerts/${id}/ack`, { method: 'POST', body: {} }); await loadHome(); } catch (e) { /* the row stays */ }
 }
