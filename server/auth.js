@@ -328,7 +328,7 @@ if (!token) return res.status(401).json({ error: 'Not signed in.' });
 const tokenHash = hashToken(token);
 const result = await withServiceClient(async (client) => {
 const { rows } = await client.query(
-`SELECT s.*, p.id AS p_id, p.name, p.role, p.location_id, p.status, p.email, p.phone, p.address,
+`SELECT s.*, p.id AS p_id, p.name, p.role, p.location_id, p.status, p.email, p.phone, p.address, p.payroll_on_file,
 ARRAY(SELECT el.location_id FROM employee_locations el WHERE el.person_id = p.id ORDER BY el.added_at) AS location_ids
 FROM auth_sessions s JOIN people p ON p.id = s.person_id
 WHERE s.token_hash = $1`,
@@ -348,7 +348,7 @@ req.person = {
 id: result.p_id, name: result.name, role: result.role, location_id: result.location_id,
 // Every bar they work at (patch_033); location_id above is just one of them.
 location_ids: (result.location_ids && result.location_ids.length) ? result.location_ids : (result.location_id ? [result.location_id] : []),
-email: result.email, phone: result.phone, address: result.address,
+email: result.email, phone: result.phone, address: result.address, payroll_on_file: result.payroll_on_file === true,
 };
 req.withAuthedClient = (fn) => withAuthedClient(req.person, fn);
 next();
