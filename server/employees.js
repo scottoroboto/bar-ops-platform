@@ -49,7 +49,7 @@ function appBaseUrl() {
 // The same welcome as a text, for people who never open email. Twilio
 // delivers it only once the account is on the 10DLC campaign.
 function welcomeSmsText({ username, tempPassword }) {
-  return `Bar Ops (Ticket Sports Bar): your account is ready. Sign in at ${appBaseUrl()} with username ${username} and temporary password ${tempPassword}. You'll get a one-time code, then set your PIN. Reply STOP to opt out.`;
+  return `Bar Ops (Ticket Sports Bar): your account is ready. Sign in at ${appBaseUrl()} with username ${username} and temporary password ${tempPassword}. You'll get a one-time code, then set your PIN. Then finish payroll setup under My Account. Reply STOP to opt out.`;
 }
 
 function welcomeEmailText({ username, tempPassword, pin, enabledApps }) {
@@ -61,7 +61,8 @@ function welcomeEmailText({ username, tempPassword, pin, enabledApps }) {
     `The first time you sign in, use your username and temporary password. ` +
     (auth.firstLoginCodeEnabled() ? `We'll email a 6-digit code to this address to confirm it's you — enter that and you're in. ` : '') +
     `After that, your PIN is all you need day to day.\n\n` +
-    `You now have access to: ${enabledApps.join(', ') || '(nothing yet — ask your manager)'}`;
+    `You now have access to: ${enabledApps.join(', ') || '(nothing yet — ask your manager)'}\n\n` +
+    `One more thing: finish your payroll setup (W-4 and direct deposit) under My Account in the app. It takes about 5 minutes and we need it before your first paycheck.`;
 }
 
 // ---------------------------------------------------------------------

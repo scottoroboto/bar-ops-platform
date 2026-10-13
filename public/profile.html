@@ -41,7 +41,7 @@
     <button class="secondary" onclick="location.href='/change-password.html'">Change my password</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="payrollCard">
     <h2>Tax &amp; direct deposit</h2>
     <p class="muted">Your SSN, W-4, and banking info don't live in this app — they're kept separately on an encrypted Jotform. Use this if you need to update any of that.</p>
     <button class="secondary" onclick="window.open(JOTFORM_HIRE_PACK_URL, '_blank')">Update tax / banking info (opens Jotform)</button>
@@ -137,6 +137,13 @@
       document.getElementById('email').value = me.person.email || '';
       document.getElementById('phone').value = me.person.phone || '';
       document.getElementById('address').value = me.person.address || '';
+      if (me.payrollOnFile === false) {
+        document.getElementById('payrollCard').innerHTML = `
+          <h2>Finish payroll setup</h2>
+          <p class="msg error" style="margin-bottom:10px;">We need your W-4 and direct deposit info before your first paycheck. It takes about 5 minutes on your phone. Have your bank details and your driver's license handy.</p>
+          <button class="primary" style="margin-top:0;" onclick="window.open(JOTFORM_HIRE_PACK_URL, '_blank')">Start payroll setup</button>
+          <p class="muted" style="font-size:12px; margin-top:8px;">Your SSN and banking info go straight to an encrypted Jotform, not this app. Once Scotto sees your form this notice goes away.</p>`;
+      }
     } catch (e) {
       // fall back to whatever was cached locally
     }

@@ -223,6 +223,10 @@ async function employeesReviewCount(person) {
   let inventoryTier = 'no_access';
   try {
     const me = await api('/api/auth/me');
+    if (me.payrollOnFile === false) {
+      const b = document.getElementById('payrollBanner');
+      if (b) { b.style.display = ''; b.innerHTML = `<div class="card" style="border-color:var(--danger);"><h2 style="margin-bottom:4px;">Finish payroll setup</h2><p class="muted" style="margin:0 0 10px;">We need your W-4 and direct deposit info before your first paycheck. About 5 minutes.</p><button class="primary" style="margin-top:0;" onclick="location.href='/profile.html'">Do it now</button></div>`; }
+    }
     access = me.appAccess || [];
     cashHandlingTier = me.cashHandlingTier || 'no_access';
     inventoryTier = me.inventoryTier || 'no_access';

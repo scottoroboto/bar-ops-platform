@@ -284,7 +284,7 @@ return rows;
 // client even though this route otherwise reads through req.withAuthedClient.
 const cashHandlingTier = await withServiceClient((client) => cashhandling.getEffectiveCashTier(client, req.person.id));
 const inventoryTier = await withServiceClient((client) => inventorycontrol.getEffectiveInventoryTier(client, req.person.id));
-res.json({ person: req.person, appAccess: access, cashHandlingTier, inventoryTier });
+res.json({ person: req.person, appAccess: access, cashHandlingTier, inventoryTier, payrollOnFile: !!req.person.payroll_on_file });
 });
 
 // The home screen (Oct 2026): one block per bar for the owner, managers
@@ -334,6 +334,10 @@ if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner onl
 const v = await access.view(req.params.id);
 if (!v) return res.status(404).json({ error: 'Not found.' });
 res.json(v);
+});
+app.post('/api/employees/:id/payroll-on-file', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+res.json(await access.setPayrollOnFile(req.params.id, !!req.body.onFile));
 });
 app.post('/api/employees/:id/department', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });

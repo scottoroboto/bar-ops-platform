@@ -87,6 +87,8 @@ function panelAccess() {
     <div class="ac-group">Tiers</div>
     ${row('Cash handling', `In effect now: <b>${escapeHtml(labelOf(V.tiers.cash.options, V.tiers.cash.effective))}</b>${!V.apps.find((a) => a.key === 'cash_handling').enabled && !isOwner ? ' (Cash Handling app is off, so no access)' : ''}. Position defaults are set on Cash Handling, Manage access.`, tierSel('cash', V.tiers.cash))}
     ${row('Inventory', `In effect now: <b>${escapeHtml(labelOf(V.tiers.inventory.options, V.tiers.inventory.effective))}</b>${!V.apps.find((a) => a.key === 'inventory_control').enabled && !isOwner ? ' (Inventory app is off, so no access)' : ''}. Position defaults are set on Inventory, Manage access.`, tierSel('inventory', V.tiers.inventory))}
+    <div class="ac-group">Payroll</div>
+    ${row('Tax and direct deposit info on file', 'Off means they see "finish payroll setup" on My Account and a banner on their home screen until they submit the form and you flip this on. Current staff were set to on.', sw(p.payrollOnFile, 'setPayroll(this.checked)'))}
     <div class="ac-group">Reach</div>
     ${row(`Reach: ${escapeHtml(p.reach)}`, 'What their account can see across every app, enforced in the database. The apps above sit on top of it.', `<select onchange="setRole(this)"><option value="staff" ${p.role === 'staff' ? 'selected' : ''}>Staff</option><option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Manager</option><option value="maintenance" ${p.role === 'maintenance' ? 'selected' : ''}>Maintenance</option><option value="owner" ${p.role === 'owner' ? 'selected' : ''}>Owner</option></select>`)}
     ${ro([
@@ -104,6 +106,10 @@ async function setApp(appKey, enabled) {
     if (!r.ok) { showMsg(r.error, 'error'); load(); return; }
     showMsg(`${enabled ? 'On' : 'Off'}: ${labelOf(V.apps.map((a) => [a.key, a.label]), appKey)}.`, 'success'); V = await api(`/api/employees/${PERSON_ID}/access`); renderPanel();
   } catch (e) { showMsg(e.message, 'error'); load(); }
+}
+async function setPayroll(onFile) {
+  try { const r = await withStepUp(() => api(`/api/employees/${PERSON_ID}/payroll-on-file`, { method: 'POST', body: { onFile } })); if (!r.ok) { showMsg(r.error, 'error'); load(); return; } showMsg(onFile ? 'Marked on file.' : 'They will be asked to finish payroll setup.', 'success'); V.person.payrollOnFile = onFile; }
+  catch (e) { showMsg(e.message, 'error'); load(); }
 }
 async function setTier(kind, value) {
   const base = kind === 'cash' ? '/api/cashhandling/access/overrides' : '/api/inventory/access/overrides';

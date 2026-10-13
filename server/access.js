@@ -32,7 +32,7 @@ async function view(personId) {
   return withServiceClient(async (svc) => {
     const { rows: pr } = await svc.query(
       `SELECT p.id, p.name, p.role, p.status, p.position, p.pay_rate, p.location_id, p.email, p.phone, p.department,
-              p.pin_hash IS NOT NULL AS has_pin, p.pin_locked_at, p.password_verified_at, p.password_locked_at, p.activated_at, p.created_at,
+              p.pin_hash IS NOT NULL AS has_pin, p.pin_locked_at, p.payroll_on_file, p.password_verified_at, p.password_locked_at, p.activated_at, p.created_at,
               ARRAY(SELECT el.location_id FROM employee_locations el WHERE el.person_id = p.id) AS location_ids
        FROM people p WHERE p.id = $1`, [personId]);
     const p = pr[0];
@@ -74,7 +74,7 @@ async function view(personId) {
     ]);
 
     return {
-      person: { id: p.id, name: p.name, role: p.role, reach: REACH[p.role] || p.role, status: p.status, position: p.position, payRate: p.pay_rate, department: p.department, locationIds: (p.location_ids && p.location_ids.length ? p.location_ids : [p.location_id]).filter(Boolean), since: p.activated_at || p.created_at },
+      person: { id: p.id, name: p.name, role: p.role, reach: REACH[p.role] || p.role, status: p.status, position: p.position, payRate: p.pay_rate, department: p.department, payrollOnFile: !!p.payroll_on_file, locationIds: (p.location_ids && p.location_ids.length ? p.location_ids : [p.location_id]).filter(Boolean), since: p.activated_at || p.created_at },
       locations: locs,
       apps: APPS.map(([key, label]) => ({ key, label, ...appMap[key], managerOnly: key === 'employees' })),
       tiers: {
@@ -116,4 +116,11 @@ async function setDepartment(personId, department) {
   });
 }
 
-module.exports = { view, setDepartment, APPS, WIDGETS };
+async function setPayrollOnFile(personId, onFile) {
+  return withServiceClient(async (svc) => {
+    const { rowCount } = await svc.query('UPDATE people SET payroll_on_file = $2, updated_at = now() WHERE id = $1', [personId, !!onFile]);
+    return rowCount ? { ok: true } : { ok: false, error: 'Not found.' };
+  });
+}
+
+module.exports = { view, setDepartment, setPayrollOnFile, APPS, WIDGETS };
