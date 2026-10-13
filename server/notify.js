@@ -20,8 +20,11 @@ let twilio; try { twilio = require('twilio'); } catch (e) {}
 function emailConfigured() {
   return !!((process.env.RESEND_API_KEY || process.env.SMTP_PASS) && process.env.SMTP_FROM);
 }
+// Texts go out through the A2P 10DLC messaging service when its SID is
+// set (the campaign is registered on the service, so carriers accept the
+// traffic); a bare from-number works for a trial or a toll-free sender.
 function smsConfigured() {
-  return !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER);
+  return !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && (process.env.TWILIO_MESSAGING_SERVICE_SID || process.env.TWILIO_FROM_NUMBER));
 }
 
 let twilioClient = null;
@@ -115,7 +118,8 @@ async function sendSms(client, relatedTable, relatedId, to, body) {
     return { ok: true, simulated: true };
   }
   try {
-    await twilioClient.messages.create({ from: process.env.TWILIO_FROM_NUMBER, to, body });
+    const sender = process.env.TWILIO_MESSAGING_SERVICE_SID ? { messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID } : { from: process.env.TWILIO_FROM_NUMBER };
+    await twilioClient.messages.create({ ...sender, to, body });
     await logNotification(client, relatedTable, relatedId, 'sms', to, 'sent', body);
     return { ok: true };
   } catch (err) {
