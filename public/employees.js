@@ -705,7 +705,9 @@ function openActivateModal(id, name) {
   document.getElementById('accessServiceCalls').checked = false;
   document.getElementById('accessScheduling').checked = false;
   document.getElementById('accessMonitoring').checked = false;
-  document.getElementById('activatePayrollOnFile').checked = true;
+  // Stays where it was last left (transition week: everyone is a current employee).
+  let lastPayroll = true; try { lastPayroll = localStorage.getItem('bp_activatePayrollOnFile') !== 'off'; } catch (e) {}
+  document.getElementById('activatePayrollOnFile').checked = lastPayroll;
   document.getElementById('activateResult').innerHTML = '';
   document.getElementById('activateModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
@@ -728,6 +730,7 @@ async function submitActivate() {
   };
   try {
     const payrollOnFile = document.getElementById('activatePayrollOnFile').checked;
+    try { localStorage.setItem('bp_activatePayrollOnFile', payrollOnFile ? 'on' : 'off'); } catch (e) {}
     const result = await withStepUp(() => api(`/api/employees/${id}/activate`, { method: 'POST', body: { appAccess, payrollOnFile } }));
     if (!result.ok) { document.getElementById('activateResult').innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
     let box = `<div class="msg success">Activated — they're live.</div>`;
