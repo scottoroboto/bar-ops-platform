@@ -37,7 +37,7 @@ function randomPin() {
 // the root URL — public/index.html). APP_BASE_URL overrides when the
 // address ever changes; the fallback is the current Render URL.
 function appBaseUrl() {
-  return (process.env.APP_BASE_URL || 'https://bar-ops-platform-52n1.onrender.com').replace(/\/$/, '');
+  return (process.env.APP_BASE_URL || 'https://app.ticketsportsbar.com').replace(/\/$/, '');
 }
 
 // The "your account is ready" email, shared by first activation and by
