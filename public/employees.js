@@ -819,22 +819,26 @@ function openEmployeeDetail(id) {
   }
   document.getElementById('detailCredentialsResult').innerHTML = '';
 
-  const appsEditable = isOwner && p.role !== 'owner' && p.status === 'active';
-  document.getElementById('detailAppsFields').style.display = appsEditable ? '' : 'none';
-  if (appsEditable) renderDetailApps(p);
+  // Apps, widgets, summary and role moved to the access page (Oct 2026);
+  // the old sections stay in the markup but hidden, the button goes there.
+  const accessEditable = isOwner && p.status !== 'pending_review';
+  document.getElementById('detailAccessFields').style.display = accessEditable ? '' : 'none';
+  if (accessEditable) {
+    document.getElementById('detailAccessLink').href = `/employee-access.html?id=${p.id}`;
+    const on = empToggleDefs(p).filter((t) => p.appAccess && p.appAccess[t.key]).map((t) => t.label);
+    document.getElementById('detailAccessMini').innerHTML = `<span class="muted">Apps on: </span>${on.length ? on.map((l) => `<span class="badge on">${escapeHtml(l)}</span>`).join(' ') : '<span class="muted">none</span>'}`;
+  }
+  const appsEditable = false;
+  document.getElementById('detailAppsFields').style.display = 'none';
 
-  const homeEditable = isOwner && (p.role === 'manager' || p.role === 'maintenance') && p.status === 'active';
-  document.getElementById('detailHomeFields').style.display = homeEditable ? '' : 'none';
-  if (homeEditable) renderDetailHome(p);
-  const summaryEditable = isOwner && (p.role === 'manager' || p.role === 'maintenance') && p.status === 'active';
-  document.getElementById('detailSummaryFields').style.display = summaryEditable ? '' : 'none';
-  if (summaryEditable) renderDetailSummary(p);
+  document.getElementById('detailHomeFields').style.display = 'none';
+  document.getElementById('detailSummaryFields').style.display = 'none';
 
   // Role is deliberately a separate section/action from the fields above —
   // see saveEmployeeRole(). Owner can't demote themselves (would leave the
   // page with no way to complete owner-only actions) or edit a still-pending
   // applicant's role (they aren't a real account yet).
-  const roleEditable = isOwner && p.id !== ME.id && p.status === 'active';
+  const roleEditable = false; // role lives on the access page now
   document.getElementById('detailRoleFields').style.display = roleEditable ? '' : 'none';
   if (roleEditable) document.getElementById('detailRole').value = p.role;
   document.getElementById('detailRoleResult').innerHTML = '';

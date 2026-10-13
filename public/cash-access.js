@@ -86,7 +86,7 @@ function peopleHtml(people) {
         <div style="text-align:right;">
           ${tierBadge(p.effective_tier)} ${overrideNote}
           ${p.role === 'owner' ? '' : `<div class="stack-actions" style="margin-top:6px;">
-            <button class="small ghost" onclick="startEditPerson('${p.id}')">Change access</button>
+            <a class="small ghost btn-link" href="/employee-access.html?id=${p.id}&tab=access">Change on their page</a>
             ${p.override_tier ? `<button class="small ghost" onclick="revertPerson('${p.id}')">Revert to default</button>` : ''}
           </div>`}
         </div>

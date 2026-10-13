@@ -779,7 +779,12 @@ async function archiveSystem(id) {
 async function renderNotifications() {
   const el = document.getElementById('panelNotifications');
   el.innerHTML = `
-    ${IS_MANAGER ? `
+    ${ME.role === 'owner' ? `
+    <div class="card">
+      <h2>Someone else's alerts</h2>
+      <p class="muted">Routing and per-category settings for each person now live on their page: <a href="/employees.html">Employees</a>, open the person, Open access page, Notifications tab. Managers set their own bar's people here.</p>
+    </div>` : ''}
+    ${IS_MANAGER && ME.role !== 'owner' ? `
     <div class="card">
       <h2>Route alerts to someone</h2>
       <p class="muted">Assign a person to be notified about a category of alerts — even if they don't have Monitoring dashboard access themselves. Leave category blank for "every category".</p>
@@ -833,7 +838,7 @@ async function renderNotifications() {
       </div>
       <div id="summaryResult"></div>
     </div>
-    ${IS_MANAGER ? `
+    ${IS_MANAGER && ME.role !== 'owner' ? `
     <div class="card">
       <h2>Someone else's alert settings</h2>
       <p class="muted">Set what each employee gets. Only people who can see Monitoring, or are routed alerts above, receive anything at all.</p>
@@ -850,7 +855,7 @@ async function renderNotifications() {
         <button class="primary" onclick="submitPersonPrefs()">Save for this person</button>
       </div>
     </div>` : ''}`;
-  if (IS_MANAGER) {
+  if (IS_MANAGER && document.getElementById('arPerson')) {
     try {
       ROUTING_PEOPLE = (await api('/api/employees')).filter(p => p.status === 'active');
       const sel = document.getElementById('arPerson');
@@ -993,7 +998,7 @@ async function loadNotifySettings() {
     const phoneNote = document.getElementById('smsPhoneNote');
     if (phoneNote) phoneNote.textContent = settings.sms_consent_at ? `Agreed ${new Date(settings.sms_consent_at).toLocaleDateString()} for ${settings.sms_consent_phone || 'the number on file'}. Texts go to the mobile number under My Account.` : 'Texts go to the mobile number under My Account. Add it there first if it is missing.';
     updateSmsNote();
-    if (IS_MANAGER) {
+    if (IS_MANAGER && document.getElementById('prefsPerson')) {
       const people = ROUTING_PEOPLE.length ? ROUTING_PEOPLE : await api('/api/employees');
       ROUTING_PEOPLE = people;
       document.getElementById('prefsPerson').innerHTML = '<option value="">Choose…</option>' +
