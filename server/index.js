@@ -3066,7 +3066,7 @@ res.json({ ok: true, person });
 
 app.post('/api/employees/:id/manager-review', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
-const result = await employees.managerReview({ personId: req.params.id, ...req.body, reviewedBy: req.person.id });
+const result = await employees.managerReview({ personId: req.params.id, ...req.body, reviewedBy: req.person.id, reviewerRole: req.person.role });
 res.json(result);
 });
 

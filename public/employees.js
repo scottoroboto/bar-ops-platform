@@ -113,8 +113,10 @@ function readLocationChecklist(container) {
 function fillPositionSelect(sel, currentValue) {
   const known = POSITIONS.some(p => p.name === currentValue);
   const extra = (currentValue && !known) ? `<option value="${escapeHtml(currentValue)}">${escapeHtml(currentValue)} (archived)</option>` : '';
+  // Only the owner hands out management positions (assistant manager and up).
+  const list = ME && ME.role === 'owner' ? POSITIONS : POSITIONS.filter(p => !p.is_management);
   sel.innerHTML = '<option value="">— none —</option>' + extra +
-    POSITIONS.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}${p.is_management ? ' (management)' : ''}</option>`).join('');
+    list.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}${p.is_management ? ' (management)' : ''}</option>`).join('');
   sel.value = currentValue || '';
 }
 

@@ -228,10 +228,14 @@ async function listPending() {
 // A manager (not the owner) sets the fields only they should — role stays
 // pending_review; this does NOT activate the employee.
 // locationIds (array) is the current shape; a lone locationId still works.
-async function managerReview({ personId, position, locationIds, locationId, payRate, department, reviewedBy }) {
+async function managerReview({ personId, position, locationIds, locationId, payRate, department, reviewedBy, reviewerRole }) {
   const ids = normalizeLocationIds({ locationIds, locationId });
   if (department != null && !['bar', 'kitchen', 'both'].includes(department)) return { ok: false, error: 'Department is Bar, Kitchen or Both.' };
   return withServiceClient(async (client) => {
+    if (position && reviewerRole !== 'owner') {
+      const { rows: mg } = await client.query('SELECT is_management FROM positions WHERE lower(name) = lower($1)', [String(position).trim()]);
+      if (mg[0] && mg[0].is_management) return { ok: false, error: 'Only the owner can put someone in a management position.' };
+    }
     const { rows } = await client.query(
       `UPDATE people SET position = $1, pay_rate = $2, department = COALESCE($4, department), updated_at = now()
        WHERE id = $3 AND status = 'pending_review' RETURNING *`,
