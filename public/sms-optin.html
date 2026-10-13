@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>How employees opt in to texts — Bar Ops</title>
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .shot { border: 1px solid var(--border, #333); border-radius: 12px; padding: 14px 16px; margin: 10px 0 24px; background: var(--card-bg, #15151a); }
+  .shot .cap { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; opacity: .7; margin-bottom: 10px; }
+  .static-check { display: flex; gap: 10px; align-items: flex-start; }
+  .static-check input { width: auto; margin-top: 3px; }
+  .after .msg { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="center" style="margin: 30px 0;">
+    <img src="/logo.png" alt="Ticket Sports Bar" style="max-width:220px; width:70%; height:auto;">
+    <h1 style="margin:14px 0 0;">How employees opt in to text alerts</h1>
+    <div class="muted">Bar Ops, the staff app for Ticket Sports Bar</div>
+  </div>
+
+  <div class="card">
+    <p>Bar Ops is a private employee app. It is behind a login, and accounts are created only by the owner for current employees. This page shows the exact opt-in form an employee sees inside the app (Systems Monitoring → My alert settings) and what they see after saving. Texts are off by default; nobody can opt in on another person's behalf.</p>
+    <p>Privacy policy and texting terms: <a href="/privacy.html">bar-ops-platform-52n1.onrender.com/privacy.html</a></p>
+  </div>
+
+  <div class="card">
+    <h2>1. The form, as shown in the app</h2>
+    <div class="shot">
+      <div class="cap">Systems Monitoring → My alert settings</div>
+      <label for="demoChannel">Send my notices by</label>
+      <select id="demoChannel" disabled>
+        <option>Text (SMS)</option>
+      </select>
+      <label class="static-check" style="margin-top:12px; cursor:default;">
+        <input type="checkbox" checked disabled>
+        <span class="muted" style="font-size:13px;">I agree to receive automated text alerts from Bar Ops (Ticket Sports Bar) at the mobile number on my account, about equipment, scheduling and staffing at the bars where I work. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help. <a href="/privacy.html">Privacy policy and texting terms</a>.</span>
+      </label>
+      <p class="muted" style="font-size:12px;">Texts go to the mobile number under My Account. Add it there first if it is missing.</p>
+      <button class="primary" disabled>Save</button>
+    </div>
+    <p class="muted">The employee must choose "Text (SMS)" (or "Both") and tick the box themselves. Save is refused if the box is not ticked or the account has no mobile number.</p>
+  </div>
+
+  <div class="card">
+    <h2>2. What the employee sees after saving</h2>
+    <div class="shot after">
+      <div class="msg success">Saved.</div>
+      <label>Send my notices by</label>
+      <select disabled><option>Text (SMS)</option></select>
+      <label class="static-check" style="margin-top:12px; cursor:default;">
+        <input type="checkbox" checked disabled>
+        <span class="muted" style="font-size:13px;">I agree to receive automated text alerts from Bar Ops (Ticket Sports Bar) …</span>
+      </label>
+      <p class="muted" style="font-size:12px;">Agreed 10/13/2026 for +1 (850) 555-0100. Texts go to the mobile number under My Account.</p>
+    </div>
+    <p class="muted">The date, time and mobile number of consent are stored with the employee's account. Switching back to Email, replying STOP, or asking the owner ends texts.</p>
+  </div>
+
+  <div class="card">
+    <h2>3. The messages</h2>
+    <p>Only operational alerts to employees who opted in. Examples:</p>
+    <ul>
+      <li>Bar Ops: Walk-in cooler at Ticket 2 is 44°F, above the 40°F limit for 15 min. Open the app to acknowledge. Reply STOP to opt out.</li>
+      <li>Bar Ops: UDM Pro at Ticket 1 has been offline for 3 min. Reply STOP to opt out.</li>
+      <li>Bar Ops: the schedule for the week of Oct 13 is published. Open the app to view your shifts. Reply STOP to opt out.</li>
+    </ul>
+    <p><b>STOP</b> ends texts. <b>HELP</b> returns: "Bar Ops (Ticket Sports Bar) employee alerts. For help email scott@ticketsportsbar.com. Reply STOP to unsubscribe." No marketing is ever sent.</p>
+  </div>
+</div>
+</body>
+</html>
