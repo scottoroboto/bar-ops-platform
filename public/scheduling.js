@@ -508,9 +508,26 @@ function openShiftModal(shift) {
   document.getElementById('shPerson').innerHTML = roster.length
     ? `<optgroup label="Can work ${SELECTED_SCHEDULE_IDS.length === 1 ? 'this schedule' : 'these schedules'}">${roster.map(opt).join('')}</optgroup>${others.length ? `<optgroup label="Everyone else here">${others.map(opt).join('')}</optgroup>` : ''}`
     : EMPLOYEES.map(opt).join('');
-  document.getElementById('shSchedule').innerHTML = MANAGEABLE_SCHEDULES.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
   document.getElementById('shPerson').value = shift.personId || (roster[0] && roster[0].id) || (EMPLOYEES[0] && EMPLOYEES[0].id) || '';
-  document.getElementById('shSchedule').value = shift.scheduleId || (MANAGEABLE_SCHEDULES[0] && MANAGEABLE_SCHEDULES[0].id) || '';
+  // Schedule: only the ones picked above (and that this manager writes
+  // to). Adding from an employee's row locks it: the shift's own schedule
+  // when editing, otherwise the first picked schedule the person is
+  // checked into. One choice means no dropdown at all, just a line.
+  const selected = SELECTED_SCHEDULE_IDS.map(String);
+  const writable = MANAGEABLE_SCHEDULES.filter(s => selected.includes(String(s.id)));
+  const choices = writable.length ? writable : MANAGEABLE_SCHEDULES;
+  document.getElementById('shSchedule').innerHTML = choices.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+  const emp0 = EMPLOYEES.find(e => e.id === document.getElementById('shPerson').value);
+  const fits = emp0 ? choices.find(s => (emp0.schedule_ids || []).some(id => String(id) === String(s.id))) : null;
+  document.getElementById('shSchedule').value = shift.scheduleId || (fits && fits.id) || (choices[0] && choices[0].id) || '';
+  const fromRow = !!shift.personId;
+  const lockSchedule = fromRow && (choices.length === 1 || !!shift.scheduleId || !!fits);
+  document.getElementById('shPersonWrap').style.display = fromRow ? 'none' : '';
+  document.getElementById('shScheduleWrap').style.display = lockSchedule ? 'none' : '';
+  const fixed = document.getElementById('shFixed');
+  const schedName = (choices.find(s => String(s.id) === String(document.getElementById('shSchedule').value)) || {}).name || '';
+  fixed.style.display = fromRow ? '' : 'none';
+  fixed.innerHTML = fromRow ? `<b>${escapeHtml(emp0 ? emp0.name : '')}</b>${lockSchedule && schedName ? ` <span class="muted">· ${escapeHtml(schedName)}</span>` : ''}` : '';
   fillPositionSelectForPerson(document.getElementById('shPerson').value, shift.positionId);
   document.getElementById('shDate').value = shift.date || WEEK_START;
   const isNew = !(shift.shiftId || shift.draftId);
@@ -540,7 +557,7 @@ function fillTimeSelect(id, value) {
 function renderShiftDays() {
   const date = document.getElementById('shDate').value || WEEK_START;
   const days = weekDatesFrom(startOfWeekISO(date));
-  document.getElementById('shDays').innerHTML = days.map(d => `<label class="sc-day ${d === date ? 'own' : ''}"><input type="checkbox" value="${d}" ${d === date ? 'checked disabled' : ''}><span>${dayLabel(d)}</span></label>`).join('');
+  document.getElementById('shDays').innerHTML = days.map(d => `<label class="sc-day ${d === date ? 'own' : ''}" title="${dayLabel(d)}"><input type="checkbox" value="${d}" ${d === date ? 'checked disabled' : ''}><span>${isoToDate(d).toLocaleDateString([], { weekday: 'short' })}</span></label>`).join('');
 }
 function fillPositionSelectForPerson(personId, selectedId) {
   const emp = EMPLOYEES.find(e => e.id === personId);
