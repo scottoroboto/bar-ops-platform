@@ -4931,6 +4931,20 @@ app.post('/api/scheduling/drafts/duplicate', auth.requireSession('full'), async 
   res.json(await scheduling.draftDuplicateShift(req.body, req.body.targetDates || [], req.person.id));
 });
 
+// A manager's own shift-time presets (chips in the Add shift modal).
+app.get('/api/scheduling/presets', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.listShiftPresets(req.person.id));
+});
+app.post('/api/scheduling/presets', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.saveShiftPreset(req.person.id, req.body || {}));
+});
+app.post('/api/scheduling/presets/:id/delete', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  res.json(await scheduling.deleteShiftPreset(req.person.id, req.params.id));
+});
+
 // "Copy this week forward" — per employee (Scotto's explicit call, not a
 // whole-Schedule bulk copy — see scheduling.js's copyWeekForwardForEmployee).
 app.post('/api/scheduling/copy-week-forward', auth.requireSession('full'), async (req, res) => {

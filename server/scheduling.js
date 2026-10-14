@@ -642,6 +642,28 @@ async function copyWeekForwardForEmployee({ personId, weekStartISO, createdBy })
   });
 }
 
+// A manager's own shift-time presets (patch_072). Ordered by start time.
+async function listShiftPresets(personId) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query('SELECT id, start_time, end_time FROM shift_presets WHERE person_id = $1 ORDER BY start_time, end_time', [personId]);
+    return rows.map((r) => ({ id: r.id, startTime: String(r.start_time).slice(0, 5), endTime: String(r.end_time).slice(0, 5) }));
+  });
+}
+async function saveShiftPreset(personId, { startTime, endTime }) {
+  if (!/^\d{2}:\d{2}$/.test(String(startTime || '')) || !/^\d{2}:\d{2}$/.test(String(endTime || ''))) return { ok: false, error: 'Pick a start and end time first.' };
+  if (startTime === endTime) return { ok: false, error: 'Start and end are the same.' };
+  return withServiceClient(async (client) => {
+    await client.query('INSERT INTO shift_presets (person_id, start_time, end_time) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [personId, startTime, endTime]);
+    return { ok: true, presets: await listShiftPresets(personId) };
+  });
+}
+async function deleteShiftPreset(personId, id) {
+  return withServiceClient(async (client) => {
+    await client.query('DELETE FROM shift_presets WHERE id = $1 AND person_id = $2', [id, personId]);
+    return { ok: true, presets: await listShiftPresets(personId) };
+  });
+}
+
 // The only place conflict-checking happens — validates this manager's
 // ENTIRE pending draft batch (each draft against live data AND against
 // every other draft in the same batch), and only applies anything if
@@ -940,6 +962,7 @@ async function getEmployeeUpcomingShifts(personId) {
 }
 
 module.exports = {
+  listShiftPresets, saveShiftPreset, deleteShiftPreset,
   requireSchedulingAccess,
   listSchedules, listSchedulesPublic, saveSchedule, archiveSchedule, restoreSchedule,
   getEmployeesForScheduling, setEmployeeScheduleQualifications, setEmployeePositionQualifications, setManagerScheduleAssignments,

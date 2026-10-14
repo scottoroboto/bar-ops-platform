@@ -29,6 +29,7 @@ let SHOW_ALL_STAFF = (() => { try { return localStorage.getItem('bp_schedShowAll
 // Half-hour time picker in bar-day order, 5:00 AM through 4:30 AM.
 const TIME_CHOICES = (() => { const out = []; for (let i = 0; i < 48; i++) { const m = (5 * 60 + i * 30) % (24 * 60); out.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`); } return out; })();
 const DEFAULT_START = '09:00', DEFAULT_END = '19:00';
+let SHIFT_PRESETS = [];         // this manager's own start/end presets (chips in the Add shift modal)
 
 // ---------------- Date helpers (calendar-date-only, local time — these
 // dates carry no time-of-day meaning, so plain local Date math is fine and
@@ -521,13 +522,14 @@ function openShiftModal(shift) {
   const fits = emp0 ? choices.find(s => (emp0.schedule_ids || []).some(id => String(id) === String(s.id))) : null;
   document.getElementById('shSchedule').value = shift.scheduleId || (fits && fits.id) || (choices[0] && choices[0].id) || '';
   const fromRow = !!shift.personId;
-  const lockSchedule = fromRow && (choices.length === 1 || !!shift.scheduleId || !!fits);
+  const lockSchedule = choices.length === 1 || (fromRow && (!!shift.scheduleId || !!fits));
   document.getElementById('shPersonWrap').style.display = fromRow ? 'none' : '';
   document.getElementById('shScheduleWrap').style.display = lockSchedule ? 'none' : '';
   const fixed = document.getElementById('shFixed');
   const schedName = (choices.find(s => String(s.id) === String(document.getElementById('shSchedule').value)) || {}).name || '';
-  fixed.style.display = fromRow ? '' : 'none';
-  fixed.innerHTML = fromRow ? `<b>${escapeHtml(emp0 ? emp0.name : '')}</b>${lockSchedule && schedName ? ` <span class="muted">· ${escapeHtml(schedName)}</span>` : ''}` : '';
+  const fixedParts = [fromRow ? `<b>${escapeHtml(emp0 ? emp0.name : '')}</b>` : '', lockSchedule && schedName ? `<span class="muted">${fromRow ? '· ' : ''}${escapeHtml(schedName)}</span>` : ''].filter(Boolean);
+  fixed.style.display = fixedParts.length ? '' : 'none';
+  fixed.innerHTML = fixedParts.join(' ');
   fillPositionSelectForPerson(document.getElementById('shPerson').value, shift.positionId);
   document.getElementById('shDate').value = shift.date || WEEK_START;
   const isNew = !(shift.shiftId || shift.draftId);
@@ -535,12 +537,44 @@ function openShiftModal(shift) {
   fillTimeSelect('shEnd', (shift.endTime || '').slice(0, 5) || (isNew ? DEFAULT_END : ''));
   renderShiftDays();
   document.getElementById('shDate').onchange = renderShiftDays;
+  document.getElementById('shStart').onchange = renderShiftPresets;
+  document.getElementById('shEnd').onchange = renderShiftPresets;
+  renderShiftPresets();
   document.getElementById('shDuplicateWrap').style.display = isNew ? '' : 'none';
   document.getElementById('shCancelRow').style.display = (shift.shiftId || shift.draftId) ? '' : 'none';
   document.getElementById('shResult').innerHTML = '';
   document.getElementById('shPerson').onchange = () => fillPositionSelectForPerson(document.getElementById('shPerson').value);
   document.getElementById('shiftModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
+}
+// Shift-time presets: this manager's own. A chip fills Start and End;
+// "Save as preset" keeps the current pair; × on a chip removes it.
+function presetLabel(p) { return `${formatTime12(p.startTime)}–${formatTime12(p.endTime)}`; }
+function renderShiftPresets() {
+  const el = document.getElementById('shPresets');
+  if (!el) return;
+  const cur = { startTime: document.getElementById('shStart').value, endTime: document.getElementById('shEnd').value };
+  const have = SHIFT_PRESETS.some(p => p.startTime === cur.startTime && p.endTime === cur.endTime);
+  el.innerHTML = `${SHIFT_PRESETS.map(p => `<span class="sc-preset ${p.startTime === cur.startTime && p.endTime === cur.endTime ? 'on' : ''}"><button type="button" onclick="applyShiftPreset('${p.id}')">${presetLabel(p)}</button><button type="button" class="x" title="Remove this preset" onclick="removeShiftPreset('${p.id}')">×</button></span>`).join('')}
+    ${!have && cur.startTime && cur.endTime ? `<a href="#" class="sc-preset-save" onclick="event.preventDefault(); saveShiftPreset()">Save ${presetLabel(cur)} as preset</a>` : ''}`;
+}
+function applyShiftPreset(id) {
+  const p = SHIFT_PRESETS.find(x => x.id === id); if (!p) return;
+  fillTimeSelect('shStart', p.startTime); fillTimeSelect('shEnd', p.endTime);
+  renderShiftPresets();
+}
+async function saveShiftPreset() {
+  try {
+    const r = await api('/api/scheduling/presets', { method: 'POST', body: { startTime: document.getElementById('shStart').value, endTime: document.getElementById('shEnd').value } });
+    if (!r.ok) { showMsg(r.error, 'error'); return; }
+    SHIFT_PRESETS = r.presets; renderShiftPresets();
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+async function removeShiftPreset(id) {
+  const p = SHIFT_PRESETS.find(x => x.id === id);
+  if (p && !confirm(`Remove the ${presetLabel(p)} preset?`)) return;
+  try { const r = await api(`/api/scheduling/presets/${id}/delete`, { method: 'POST', body: {} }); SHIFT_PRESETS = r.presets || []; renderShiftPresets(); }
+  catch (e) { showMsg(e.message, 'error'); }
 }
 // Half-hour choices only (Scotto, Oct 2026). A stored time that isn't on
 // the half hour (older shifts) is kept as an extra option so editing
@@ -968,6 +1002,7 @@ async function submitQual() {
       MANAGEABLE_SCHEDULES = boot.manageableSchedules;
       EMPLOYEES = boot.employees;
       PENDING_TIMEOFF_COUNT = boot.pendingTimeOffCount || 0;
+      try { SHIFT_PRESETS = await api('/api/scheduling/presets'); } catch (e) { SHIFT_PRESETS = []; }
       // Non-critical — if this fails for any reason, default to true (today's
       // real behavior) rather than block the page on it.
       try {
