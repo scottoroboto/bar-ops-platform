@@ -391,6 +391,8 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
   border: 1px solid var(--card-border); background: transparent; color: var(--muted); cursor: pointer;
 }
 .loc-filter.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.loc-filters.sub { width: 100%; padding-left: 6px; margin-top: 2px; }
+.loc-filter.small { font-size: 12px; padding: 3px 10px; }
 .roster-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .roster-sort, .roster-status { display: flex; align-items: center; gap: 8px; }
 .roster-sort label, .roster-status label { margin: 0; white-space: nowrap; }

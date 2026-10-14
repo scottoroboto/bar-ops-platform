@@ -435,7 +435,7 @@ async function listAllWithAccess(locationFilter) {
       where += ` AND (location_id = ANY($${params.length}::uuid[]) OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.person_id = people.id AND el.location_id = ANY($${params.length}::uuid[])))`;
     }
     const { rows: people } = await client.query(
-      `SELECT id, name, role, location_id, ${LOCATION_IDS_SQL} AS location_ids, username, email, phone, address, status, position, pay_rate,
+      `SELECT id, name, role, location_id, ${LOCATION_IDS_SQL} AS location_ids, username, email, phone, address, status, position, pay_rate, department,
               password_verified_at, (photo_path IS NOT NULL) AS has_photo,
               pin_locked_at, password_locked_at,
               activated_at, COALESCE(activated_at, created_at) AS hire_date

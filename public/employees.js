@@ -276,6 +276,7 @@ async function sendOnboardingInvite() {
 // ---------------------------------------------------------------------
 let ALL_EMPLOYEES = [];
 let LOC_FILTER = 'all';
+let DEPT_FILTER = 'all'; // 'all' | 'bar' | 'kitchen' — the sub-row under a bar chip (Oct 2026)
 
 async function loadAllEmployees() {
   if (ME.role !== 'owner' && ME.role !== 'manager') return;
@@ -291,21 +292,42 @@ function renderLocFilters() {
   const chips = [{ key: 'all', label: 'All' }]
     .concat(LOCATIONS.map(l => ({ key: l.id, label: shortLoc(l.name) })))
     .concat([{ key: 'maint', label: 'Maint' }]);
+  const isBar = LOCATIONS.some(l => String(l.id) === String(LOC_FILTER));
+  const sub = [{ key: 'all', label: 'Everyone' }, { key: 'bar', label: 'Bar' }, { key: 'kitchen', label: 'Kitchen' }];
   document.getElementById('locFilters').innerHTML = chips.map(c =>
     `<button type="button" class="loc-filter ${LOC_FILTER === c.key ? 'active' : ''}" onclick="setLocFilter('${c.key}')">${escapeHtml(c.label)}</button>`
-  ).join('');
+  ).join('') + (isBar ? `<div class="loc-filters sub">${sub.map(c =>
+    `<button type="button" class="loc-filter small ${DEPT_FILTER === c.key ? 'active' : ''}" onclick="setDeptFilter('${c.key}')">${c.label}</button>`).join('')}</div>` : '');
 }
 
 function setLocFilter(key) {
+  if (key !== LOC_FILTER) DEPT_FILTER = 'all';
   LOC_FILTER = key;
   renderLocFilters();
   renderAllEmployees();
+}
+function setDeptFilter(key) {
+  DEPT_FILTER = key;
+  renderLocFilters();
+  renderAllEmployees();
+}
+
+// Bar or kitchen: the person's department (set at review or on their
+// Access page); "both" counts for either. No department yet → guess
+// from the position name so the sub-filter still works on day one.
+function personDept(p) {
+  if (p.department) return p.department;
+  if (/cook|dish|kitchen|prep/i.test(p.position || '')) return 'kitchen';
+  if (/bartender|server|bar\b|barback|host|door/i.test(p.position || '')) return 'bar';
+  return '';
 }
 
 function applyLocFilter(list) {
   if (LOC_FILTER === 'all') return list;
   if (LOC_FILTER === 'maint') return list.filter(p => p.role === 'maintenance');
-  return list.filter(p => personLocationIds(p).includes(LOC_FILTER));
+  let out = list.filter(p => personLocationIds(p).includes(LOC_FILTER));
+  if (DEPT_FILTER !== 'all') out = out.filter(p => { const d = personDept(p); return d === DEPT_FILTER || d === 'both'; });
+  return out;
 }
 
 // Status filter — a plain select like Sort by, not a chip row like
@@ -696,13 +718,15 @@ async function submitReview() {
 function openActivateModal(id, name) {
   document.getElementById('activatePersonId').value = id;
   document.getElementById('activateName').textContent = name;
-  document.getElementById('accessTimeClock').checked = true;
+  // Only Scheduling on by default (Scotto, Oct 2026); the rest get turned
+  // on from the person's Access page when they're needed.
+  document.getElementById('accessTimeClock').checked = false;
   document.getElementById('accessCashHandling').checked = false;
   document.getElementById('accessInventory').checked = false;
   document.getElementById('accessAmusement').checked = false;
   document.getElementById('accessTvStaff').checked = false;
   document.getElementById('accessServiceCalls').checked = false;
-  document.getElementById('accessScheduling').checked = false;
+  document.getElementById('accessScheduling').checked = true;
   document.getElementById('accessMonitoring').checked = false;
   // Stays where it was last left (transition week: everyone is a current employee).
   let lastPayroll = true; try { lastPayroll = localStorage.getItem('bp_activatePayrollOnFile') !== 'off'; } catch (e) {}
