@@ -316,7 +316,6 @@ async function renderScheduler() {
           <button class="small ghost" onclick="goToCurrentSchedWeek()">Today</button>
           <button class="small ghost" onclick="shiftSchedWeek(7)">Next ›</button>
           <button class="small ghost" onclick="openPrintModal()">Print</button>
-          <button class="small secondary" onclick="openShiftModal({})">+ Add shift</button>
         </div>
       </div>
       <div id="draftBanner" class="draft-banner no-drafts" style="margin-top:10px;"></div>

@@ -281,7 +281,7 @@ async function loadAllEmployees() {
   if (ME.role !== 'owner' && ME.role !== 'manager') return;
   document.getElementById('allEmployeesHint').textContent = ME.role === 'owner'
     ? 'Click a row to see their data card. The apps shown on a row are the ones that person has; turn apps on or off from their card.'
-    : "The roster for your bar" + (myLocationIds(ME).length > 1 ? 's' : '') + ". Click a row to see their data card, or request a pay raise.";
+    : "The roster for your bar" + (myLocationIds(ME).length > 1 ? 's' : '') + ". Click a row to see their data card.";
   ALL_EMPLOYEES = await api('/api/employees');
   renderLocFilters();
   renderAllEmployees();
@@ -423,8 +423,7 @@ function empRowHtml(p) {
       <div class="emp-l2"><div class="emp-toggles">${empStatusToggleHtml(p)}${tvShiftButtonHtml(p, true)}</div><div class="emp-apps">${rest}</div></div>
     </div>`;
   }
-  const rightHtml = ME.role === 'manager'
-    ? `<button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="event.stopPropagation(); openRequestRaiseModal('${p.id}')">Request raise</button>` : '';
+  const rightHtml = ''; // "Request raise" came off the manager roster (Scotto, Oct 2026); the modal and route stay for later.
   return `
     <div class="emp-row" onclick="openEmployeeDetail('${p.id}')">
       <div class="emp-l1">${nameBlock}${rightHtml}</div>
