@@ -21,6 +21,14 @@ let ADMIN_SCHEDULES = [];      // Setup tab: every schedule incl. archived
 let PENDING_TIMEOFF_COUNT = 0; // sidebar badge + pending-review nudge (bootstrap-provided)
 let SCHED_PICKER_OPEN = false; // schedule-picker popover open/closed (Scheduler tab)
 let NOTIFICATIONS_ENABLED = true; // master email/text switch — Employees > Notifications (server/notify.js)
+// Scheduler rows: by default only people checked into the selected
+// schedules (Access page > Scheduling > "schedules they can work"), plus
+// anyone who already has a shift there that week. The switch shows
+// everyone at those bars instead (Oct 2026, per Scotto).
+let SHOW_ALL_STAFF = (() => { try { return localStorage.getItem('bp_schedShowAll') === '1'; } catch (e) { return false; } })();
+// Half-hour time picker in bar-day order, 5:00 AM through 4:30 AM.
+const TIME_CHOICES = (() => { const out = []; for (let i = 0; i < 48; i++) { const m = (5 * 60 + i * 30) % (24 * 60); out.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`); } return out; })();
+const DEFAULT_START = '09:00', DEFAULT_END = '19:00';
 
 // ---------------- Date helpers (calendar-date-only, local time — these
 // dates carry no time-of-day meaning, so plain local Date math is fine and
@@ -313,21 +321,9 @@ async function renderScheduler() {
       <div id="draftBanner" class="draft-banner no-drafts" style="margin-top:10px;"></div>
       <div id="schedGrid" style="margin-top:14px; overflow-x:auto;"><p class="muted">Loading…</p></div>
     </div>
-    <div class="card">
-      <h2>Copy this week forward</h2>
-      <p class="muted">Copies one employee's shifts from the week shown above onto the following week, as new drafts.</p>
-      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
-        <div style="flex:1; min-width:180px;"><label for="copyEmployee">Employee</label><select id="copyEmployee"></select></div>
-        <div><button class="secondary" style="margin-top:0;" onclick="submitCopyWeekForward()">Copy forward</button></div>
-      </div>
-      <div id="copyResult"></div>
-    </div>`;
+    `;
 
   renderSchedPicker();
-
-  const copySel = document.getElementById('copyEmployee');
-  copySel.innerHTML = EMPLOYEES.map(e => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('');
-
   loadSchedGrid();
 }
 
@@ -431,20 +427,54 @@ async function loadSchedGrid() {
     DRAFT_COUNT = summary.count;
     renderDraftBanner();
 
-    // Every employee with the Scheduling app turned on shows up as a row,
-    // whether or not they have a shift this week — per Scotto, dropped the
-    // old "checked into this schedule" filter (Sep 2026); the server's
-    // roster (getEmployeesForScheduling) leaves out anyone whose Scheduling
-    // toggle is off in Employees. The schedule picker above only scopes
-    // which schedules' shifts are pulled in, not who appears.
-    const roster = EMPLOYEES.slice().sort((a, b) => a.name.localeCompare(b.name));
+    const { roster, others, locationCount } = schedRoster();
     const dates = weekDatesFrom(WEEK_START);
-    if (!roster.length) { el.innerHTML = '<p class="muted">No employees yet.</p>'; return; }
-    el.innerHTML = `<table><thead><tr><th>Employee</th>${dates.map(d => `<th>${dayLabel(d)}</th>`).join('')}</tr></thead><tbody>
-      ${roster.map(emp => `<tr><td>${escapeHtml(emp.name)}</td>${dates.map(date => schedCellHtml(emp, date)).join('')}</tr>`).join('')}
+    const rowHtml = (emp) => `<tr><td>${escapeHtml(emp.name)}${emp.position ? `<div class="muted" style="font-size:11px;">${escapeHtml(emp.position)}</div>` : ''}</td>${dates.map(date => schedCellHtml(emp, date)).join('')}<td style="vertical-align:top; white-space:nowrap;"><button class="small ghost" style="margin:0;" title="Copy this week's shifts for ${escapeHtml(emp.name)} onto next week, as drafts" onclick="copyEmployeeWeek('${emp.id}', this)">Copy → next wk</button></td></tr>`;
+    const switchHtml = SHOW_ALL_STAFF
+      ? `Showing everyone at ${locationCount === 1 ? 'this bar' : 'these bars'} (${roster.length + others.length}). <a href="#" onclick="event.preventDefault(); setShowAllStaff(false)">Show only who can work these schedules</a>`
+      : `Showing the ${roster.length} who can work ${SELECTED_SCHEDULE_IDS.length === 1 ? 'this schedule' : 'these schedules'}. <a href="#" onclick="event.preventDefault(); setShowAllStaff(true)">Show everyone at ${locationCount === 1 ? 'this bar' : 'these bars'}</a>`;
+    if (!roster.length && !(SHOW_ALL_STAFF && others.length)) {
+      el.innerHTML = `<p class="muted">Nobody is checked into ${SELECTED_SCHEDULE_IDS.length === 1 ? 'this schedule' : 'these schedules'} yet. Add people under Employees › their Access page › Scheduling, or <a href="#" onclick="event.preventDefault(); setShowAllStaff(true)">show everyone at ${locationCount === 1 ? 'this bar' : 'these bars'}</a>.</p>`;
+      return;
+    }
+    el.innerHTML = `<p class="muted" style="margin:0 0 8px; font-size:12px;">${switchHtml}</p>
+    <table><thead><tr><th>Employee</th>${dates.map(d => `<th>${dayLabel(d)}</th>`).join('')}<th></th></tr></thead><tbody>
+      ${roster.map(rowHtml).join('')}
+      ${SHOW_ALL_STAFF && others.length ? `<tr><td colspan="9" class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; padding-top:10px;">Not checked into ${SELECTED_SCHEDULE_IDS.length === 1 ? 'this schedule' : 'these schedules'}</td></tr>${others.map(rowHtml).join('')}` : ''}
     </tbody></table>`;
   } catch (e) {
     el.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// Who gets a row. roster: checked into a selected schedule, or already
+// has a shift on one this week. others: everyone else at those bars.
+function schedRoster() {
+  const sel = SELECTED_SCHEDULE_IDS.map(String);
+  const locs = Array.from(new Set(ALL_SCHEDULES.filter(s => sel.includes(String(s.id))).map(s => String(s.location_id))));
+  const withShift = new Set(WEEK_SHIFTS.map(s => String(s.person_id)));
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  const roster = EMPLOYEES.filter(e => (e.schedule_ids || []).some(id => sel.includes(String(id))) || withShift.has(String(e.id))).sort(byName);
+  const rosterIds = new Set(roster.map(e => String(e.id)));
+  const others = EMPLOYEES.filter(e => !rosterIds.has(String(e.id)) && (e.location_ids || [e.location_id]).some(id => locs.includes(String(id)))).sort(byName);
+  return { roster, others, locationCount: locs.length };
+}
+function setShowAllStaff(on) {
+  SHOW_ALL_STAFF = !!on;
+  try { localStorage.setItem('bp_schedShowAll', on ? '1' : '0'); } catch (e) { /* fine */ }
+  loadSchedGrid();
+}
+async function copyEmployeeWeek(personId, btn) {
+  const emp = EMPLOYEES.find(e => e.id === personId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Copying…'; }
+  try {
+    const result = await withStepUp(() => api('/api/scheduling/copy-week-forward', { method: 'POST', body: { personId, weekStart: WEEK_START } }));
+    const skipped = (result.skipped || []).length;
+    showMsg(`${emp ? emp.name : 'Employee'}: ${result.drafted} shift${result.drafted === 1 ? '' : 's'} copied to next week as drafts${skipped ? `, ${skipped} skipped (${result.skipped.join('; ')})` : ''}.`, result.drafted ? 'success' : 'info');
+    loadSchedGrid();
+  } catch (e) {
+    showMsg(e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Copy → next wk'; }
   }
 }
 
@@ -473,21 +503,44 @@ function openShiftModal(shift) {
   document.getElementById('shiftModalTitle').textContent = shift.shiftId || shift.draftId ? 'Edit shift' : 'Add shift';
   document.getElementById('shDraftId').value = shift.draftId || '';
   document.getElementById('shShiftId').value = shift.shiftId || '';
-  document.getElementById('shPerson').innerHTML = EMPLOYEES.map(e => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('');
+  const { roster, others } = schedRoster();
+  const opt = (e) => `<option value="${e.id}">${escapeHtml(e.name)}</option>`;
+  document.getElementById('shPerson').innerHTML = roster.length
+    ? `<optgroup label="Can work ${SELECTED_SCHEDULE_IDS.length === 1 ? 'this schedule' : 'these schedules'}">${roster.map(opt).join('')}</optgroup>${others.length ? `<optgroup label="Everyone else here">${others.map(opt).join('')}</optgroup>` : ''}`
+    : EMPLOYEES.map(opt).join('');
   document.getElementById('shSchedule').innerHTML = MANAGEABLE_SCHEDULES.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
-  document.getElementById('shPerson').value = shift.personId || (EMPLOYEES[0] && EMPLOYEES[0].id) || '';
+  document.getElementById('shPerson').value = shift.personId || (roster[0] && roster[0].id) || (EMPLOYEES[0] && EMPLOYEES[0].id) || '';
   document.getElementById('shSchedule').value = shift.scheduleId || (MANAGEABLE_SCHEDULES[0] && MANAGEABLE_SCHEDULES[0].id) || '';
-  fillPositionSelectForPerson(shift.personId, shift.positionId);
+  fillPositionSelectForPerson(document.getElementById('shPerson').value, shift.positionId);
   document.getElementById('shDate').value = shift.date || WEEK_START;
-  document.getElementById('shStart').value = (shift.startTime || '').slice(0, 5);
-  document.getElementById('shEnd').value = (shift.endTime || '').slice(0, 5);
-  document.getElementById('shDuplicateDates').value = '';
-  document.getElementById('shDuplicateWrap').style.display = (shift.shiftId || shift.draftId) ? 'none' : '';
+  const isNew = !(shift.shiftId || shift.draftId);
+  fillTimeSelect('shStart', (shift.startTime || '').slice(0, 5) || (isNew ? DEFAULT_START : ''));
+  fillTimeSelect('shEnd', (shift.endTime || '').slice(0, 5) || (isNew ? DEFAULT_END : ''));
+  renderShiftDays();
+  document.getElementById('shDate').onchange = renderShiftDays;
+  document.getElementById('shDuplicateWrap').style.display = isNew ? '' : 'none';
   document.getElementById('shCancelRow').style.display = (shift.shiftId || shift.draftId) ? '' : 'none';
   document.getElementById('shResult').innerHTML = '';
   document.getElementById('shPerson').onchange = () => fillPositionSelectForPerson(document.getElementById('shPerson').value);
   document.getElementById('shiftModal').style.display = '';
   document.getElementById('modalBackdrop').style.display = '';
+}
+// Half-hour choices only (Scotto, Oct 2026). A stored time that isn't on
+// the half hour (older shifts) is kept as an extra option so editing
+// doesn't silently move it.
+function fillTimeSelect(id, value) {
+  const sel = document.getElementById(id);
+  const choices = TIME_CHOICES.slice();
+  if (value && !choices.includes(value)) choices.push(value);
+  sel.innerHTML = choices.map(t => `<option value="${t}">${formatTime12(t)}</option>`).join('');
+  sel.value = value || '';
+}
+// Sat–Fri boxes for the week the shift's date falls in. The shift's own
+// day is ticked and locked; ticking others adds the same shift there.
+function renderShiftDays() {
+  const date = document.getElementById('shDate').value || WEEK_START;
+  const days = weekDatesFrom(startOfWeekISO(date));
+  document.getElementById('shDays').innerHTML = days.map(d => `<label class="sc-day ${d === date ? 'own' : ''}"><input type="checkbox" value="${d}" ${d === date ? 'checked disabled' : ''}><span>${dayLabel(d)}</span></label>`).join('');
 }
 function fillPositionSelectForPerson(personId, selectedId) {
   const emp = EMPLOYEES.find(e => e.id === personId);
@@ -520,15 +573,18 @@ async function submitShift() {
   try {
     const result = await withStepUp(() => api('/api/scheduling/drafts', { method: 'POST', body: payload }));
     if (!result.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(result.error)}</p>`; return; }
-    const dupLines = document.getElementById('shDuplicateDates').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const dupLines = Array.from(document.querySelectorAll('#shDays input:checked:not(:disabled)')).map(el => el.value).filter(d => d !== payload.date);
+    let note = '';
     if (dupLines.length) {
-      await withStepUp(() => api('/api/scheduling/drafts/duplicate', {
+      const dup = await withStepUp(() => api('/api/scheduling/drafts/duplicate', {
         method: 'POST',
         body: { scheduleId: payload.scheduleId, personId: payload.personId, positionId: payload.positionId, startTime: payload.startTime, endTime: payload.endTime, targetDates: dupLines },
       }));
+      note = ` Plus ${dup.drafted} more day${dup.drafted === 1 ? '' : 's'}.`;
+      if (dup.skipped && dup.skipped.length) note += ` Skipped: ${dup.skipped.join('; ')}.`;
     }
     closeShiftModal();
-    showMsg('Saved as a draft — publish when ready.', 'success');
+    showMsg(`Saved as a draft — publish when ready.${note}`, (note.includes('Skipped') ? 'info' : 'success'));
     loadSchedGrid();
   } catch (e) {
     resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
@@ -555,18 +611,6 @@ async function discardDrafts() {
     loadSchedGrid();
   } catch (e) {
     showMsg(e.message, 'error');
-  }
-}
-
-async function submitCopyWeekForward() {
-  const personId = document.getElementById('copyEmployee').value;
-  const resultEl = document.getElementById('copyResult');
-  try {
-    const result = await withStepUp(() => api('/api/scheduling/copy-week-forward', { method: 'POST', body: { personId, weekStart: WEEK_START } }));
-    resultEl.innerHTML = `<p class="msg success">Added ${result.drafted} shift${result.drafted === 1 ? '' : 's'} as drafts for the following week.</p>`;
-    loadSchedGrid();
-  } catch (e) {
-    resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
 }
 

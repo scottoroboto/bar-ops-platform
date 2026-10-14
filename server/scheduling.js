@@ -212,7 +212,9 @@ async function restoreSchedule(id) {
 async function getEmployeesForScheduling() {
   return withServiceClient(async (client) => {
     const { rows: people } = await client.query(
-      `SELECT p.id, p.name, p.role, p.location_id, p.status FROM people p
+      `SELECT p.id, p.name, p.role, p.location_id, p.status, p.department, p.position,
+              ARRAY(SELECT el.location_id FROM employee_locations el WHERE el.person_id = p.id) AS extra_location_ids
+       FROM people p
        WHERE p.status = 'active'
          AND EXISTS (SELECT 1 FROM employee_apps ea WHERE ea.person_id = p.id AND ea.app_key = 'scheduling' AND ea.enabled = true)
        ORDER BY p.name`
@@ -224,6 +226,7 @@ async function getEmployeesForScheduling() {
     ]);
     return people.map((p) => ({
       ...p,
+      location_ids: Array.from(new Set([p.location_id, ...(p.extra_location_ids || [])].filter(Boolean))),
       schedule_ids: es.filter((r) => r.person_id === p.id).map((r) => r.schedule_id),
       position_ids: ep.filter((r) => r.person_id === p.id).map((r) => r.position_id),
       manager_schedule_ids: ms.filter((r) => r.person_id === p.id).map((r) => r.schedule_id),
@@ -488,6 +491,23 @@ async function getWeekShiftsWithDrafts(scheduleIds, weekStartISO, personId) {
   });
 }
 
+// Overlap with a live shift (any schedule, any bar) or with one of this
+// manager's own pending drafts for the same person. Checked when the
+// draft is saved (Oct 2026) so the manager hears "already scheduled"
+// right away instead of at Publish; whoever published first keeps the
+// slot. Publish still re-checks everything.
+async function hardConflictMessage(client, shift, personId, { excludeShiftIds = [], excludeDraftId = null } = {}) {
+  const { rows: myDrafts } = await client.query(
+    `SELECT d.*, s.name AS schedule_name FROM shift_drafts d JOIN schedules s ON s.id = d.schedule_id
+     WHERE d.created_by = $1 AND d.person_id = $2 AND d.action = 'create'`, [personId, shift.personId]);
+  const extraShifts = myDrafts
+    .filter((d) => !excludeDraftId || String(d.id) !== String(excludeDraftId))
+    .map((d) => ({ date: toDateStr(d.shift_date), startTime: d.start_time, endTime: d.end_time, scheduleName: `${d.schedule_name} (your draft)` }));
+  const conflicts = await checkShiftConflicts(shift, { extraShifts, excludeShiftIds });
+  const hard = conflicts.find((c) => c.hardBlock);
+  return hard ? hard.message : null;
+}
+
 async function saveDraftShift(shift, personId) {
   return withServiceClient(async (client) => {
     if (shift.draftId) {
@@ -496,6 +516,8 @@ async function saveDraftShift(shift, personId) {
       if (!existing || String(existing.created_by) !== String(personId)) {
         return { ok: false, error: 'You can only edit your own drafts.' };
       }
+      const clash = await hardConflictMessage(client, shift, personId, { excludeShiftIds: existing.target_shift_id ? [existing.target_shift_id] : [], excludeDraftId: existing.id });
+      if (clash) return { ok: false, error: clash };
       const { rows } = await client.query(
         `UPDATE shift_drafts SET person_id = $1, schedule_id = $2, position_id = $3, shift_date = $4, start_time = $5, end_time = $6
          WHERE id = $7 RETURNING *`,
@@ -504,6 +526,8 @@ async function saveDraftShift(shift, personId) {
       return { ok: true, draft: rows[0] };
     }
     const action = shift.id ? 'update' : 'create';
+    const clash = await hardConflictMessage(client, shift, personId, { excludeShiftIds: shift.id ? [shift.id] : [] });
+    if (clash) return { ok: false, error: clash };
     const { rows } = await client.query(
       `INSERT INTO shift_drafts (action, target_shift_id, person_id, schedule_id, position_id, shift_date, start_time, end_time, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
@@ -558,16 +582,23 @@ async function discardMyDrafts(personId) {
 // Drafts the same shift template across a list of target dates — one
 // 'create' draft per date. No conflict checking here; resolved together
 // at publish time, same as the old system.
+// Same shift on more days (the Sat–Fri boxes in the Add shift modal).
+// A day that would overlap something already on the books is skipped
+// and named, the rest are drafted.
 async function draftDuplicateShift(baseShift, targetDates, personId) {
   return withServiceClient(async (client) => {
+    let drafted = 0; const skipped = [];
     for (const dateStr of targetDates) {
+      const clash = await hardConflictMessage(client, { personId: baseShift.personId, date: dateStr, startTime: baseShift.startTime, endTime: baseShift.endTime }, personId);
+      if (clash) { skipped.push(`${dateStr}: ${clash}`); continue; }
       await client.query(
         `INSERT INTO shift_drafts (action, target_shift_id, person_id, schedule_id, position_id, shift_date, start_time, end_time, created_by)
          VALUES ('create', NULL, $1,$2,$3,$4,$5,$6,$7)`,
         [baseShift.personId, baseShift.scheduleId, baseShift.positionId, dateStr, baseShift.startTime, baseShift.endTime, personId]
       );
+      drafted += 1;
     }
-    return { drafted: targetDates.length };
+    return { drafted, skipped };
   });
 }
 
@@ -577,22 +608,37 @@ async function draftDuplicateShift(baseShift, targetDates, personId) {
 // per-employee rather than a whole-schedule bulk copy (the old system's
 // draftCopyWeekToNextWeek copied an entire Schedule at once — Scotto asked
 // for the narrower, per-employee version instead).
+// Source = the employee's live shifts that week plus this manager's own
+// unpublished 'create' drafts for them (so a week still in drafts can be
+// copied on rollout day). A target day that would overlap something
+// already on the books, or that already has this exact shift, is skipped.
 async function copyWeekForwardForEmployee({ personId, weekStartISO, createdBy }) {
   const dates = weekDateRange(weekStartISO);
   return withServiceClient(async (client) => {
     const { rows: sourceShifts } = await client.query(
-      `SELECT * FROM shifts WHERE person_id = $1 AND status != 'cancelled' AND shift_date = ANY($2)`,
-      [personId, dates]
+      `SELECT person_id, schedule_id, position_id, shift_date, start_time, end_time FROM shifts WHERE person_id = $1 AND status != 'cancelled' AND shift_date = ANY($2)
+       UNION
+       SELECT person_id, schedule_id, position_id, shift_date, start_time, end_time FROM shift_drafts WHERE person_id = $1 AND created_by = $3 AND action = 'create' AND shift_date = ANY($2)
+       ORDER BY shift_date, start_time`,
+      [personId, dates, createdBy]
     );
+    let drafted = 0; const skipped = [];
     for (const s of sourceShifts) {
       const newDate = addDaysToDateStr(s.shift_date, 7);
+      const { rows: dup } = await client.query(
+        `SELECT 1 FROM shift_drafts WHERE person_id = $1 AND created_by = $2 AND action = 'create' AND shift_date = $3 AND start_time = $4 AND schedule_id = $5`,
+        [s.person_id, createdBy, newDate, s.start_time, s.schedule_id]);
+      if (dup.length) { skipped.push(`${newDate}: already drafted`); continue; }
+      const clash = await hardConflictMessage(client, { personId: s.person_id, date: newDate, startTime: s.start_time, endTime: s.end_time }, createdBy);
+      if (clash) { skipped.push(`${newDate}: ${clash}`); continue; }
       await client.query(
         `INSERT INTO shift_drafts (action, target_shift_id, person_id, schedule_id, position_id, shift_date, start_time, end_time, created_by)
          VALUES ('create', NULL, $1,$2,$3,$4,$5,$6,$7)`,
         [s.person_id, s.schedule_id, s.position_id, newDate, s.start_time, s.end_time, createdBy]
       );
+      drafted += 1;
     }
-    return { drafted: sourceShifts.length };
+    return { drafted, skipped };
   });
 }
 

@@ -508,6 +508,12 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 /* Small pill labels — currently used for the roster row / detail card
    location chips (locChipsHtml() in employees.js). .warn is for a chip that
    should stand out (e.g. a location that isn't this person's primary). */
+/* Add shift: Sat–Fri day boxes */
+.sc-days { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.sc-day { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid var(--card-border); border-radius: 8px; font-size: 13px; cursor: pointer; user-select: none; }
+.sc-day input { margin: 0; width: auto; }
+.sc-day.own { border-color: #4f8dfd; color: #8fb6ff; }
+.sc-day:has(input:checked) { background: rgba(79, 141, 253, 0.14); }
 .chip {
   display: inline-block; padding: 2px 9px; border-radius: 999px;
   font-size: 11px; font-weight: 700; line-height: 1.6;

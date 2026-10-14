@@ -39,12 +39,12 @@
   <label for="shDate">Date</label>
   <input type="date" id="shDate">
   <div style="display:flex; gap:10px;">
-    <div style="flex:1;"><label for="shStart">Start</label><input type="time" id="shStart"></div>
-    <div style="flex:1;"><label for="shEnd">End</label><input type="time" id="shEnd"></div>
+    <div style="flex:1;"><label for="shStart">Start</label><select id="shStart"></select></div>
+    <div style="flex:1;"><label for="shEnd">End</label><select id="shEnd"></select></div>
   </div>
   <div id="shDuplicateWrap" style="display:none;">
-    <label for="shDuplicateDates">Also add on these dates (one per line, YYYY-MM-DD)</label>
-    <textarea id="shDuplicateDates" rows="2" placeholder="2026-09-13&#10;2026-09-20"></textarea>
+    <label>Also add on these days this week</label>
+    <div id="shDays" class="sc-days"></div>
   </div>
   <div id="shResult"></div>
   <div class="stack-actions">
