@@ -533,6 +533,15 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
    the browser's print dialog (mirrors the old Apps Script system's approach:
    render into a hidden block, then window.print()). */
 .print-view { display: none; }
+/* Preview modal (scheduling.js openPreview): the page as it will print or share. */
+.sched-preview { background: #fff; color: #111; border-radius: 8px; padding: 14px 16px; overflow-x: auto; border: 1px solid #c9ced8; }
+.sched-preview h2 { color: #111; }
+.sched-preview .print-week-block { margin-bottom: 18px; }
+.sched-preview .print-week-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+.sched-preview .print-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sched-preview .print-table th, .sched-preview .print-table td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; color: #111; }
+.sched-preview .print-table th { background: #eee; white-space: nowrap; }
+.sched-preview .print-emp-name { font-weight: 700; white-space: nowrap; }
 @media print {
   body > *:not(.print-view) { display: none !important; }
   .print-view { display: block !important; }

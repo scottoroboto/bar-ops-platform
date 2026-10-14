@@ -122,7 +122,7 @@ function renderTabs() {
 }
 
 function closeAllModals() {
-  closeShiftModal(); closePublishModal(); closeTimeOffModal(); closeQualModal(); closePrintModal(); closeSchedPicker();
+  closeShiftModal(); closePublishModal(); closeTimeOffModal(); closeQualModal(); closePrintModal(); closeSchedPicker(); closePreview();
 }
 
 // =========================================================
@@ -141,6 +141,7 @@ async function renderMine() {
         <div class="stack-actions" style="margin:0; gap:6px;">
           <button class="small ghost" onclick="shiftMyWeek(-7)">‹ Prev</button>
           <button class="small ghost" onclick="shiftMyWeek(7)">Next ›</button>
+          <button class="small secondary" onclick="previewMyWeek()" title="See this week as a page, then share, download or print it">Share / Print</button>
         </div>
       </div>
       <div id="myWeek" style="margin-top:10px;"><p class="muted">Loading…</p></div>
@@ -760,36 +761,127 @@ async function submitPrint() {
   resultEl.innerHTML = '<p class="muted">Preparing…</p>';
   try {
     const shifts = await api(`/api/scheduling/print?scheduleIds=${scheduleIds.join(',')}&weekStart=${WEEK_START}&weeks=${numWeeks}`);
-    renderPrintView(shifts.filter(s => employeeIds.includes(String(s.person_id))), numWeeks);
+    const model = scheduleModel(shifts.filter(s => employeeIds.includes(String(s.person_id))), numWeeks);
     closePrintModal();
-    window.print();
+    openPreview(model);
   } catch (e) {
     resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
   }
 }
-function renderPrintView(shifts, numWeeks) {
-  const dayHeader = (d) => `<th>${isoToDate(d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</th>`;
+// ---- Preview: one model, three outputs. The model is a list of tables
+// (one per week); the HTML goes in the preview modal and the print block,
+// and the PNG for Share / Download is drawn from the same model on a
+// canvas, so a phone can send it as a picture (GroupMe, text, email). ----
+// model: { title, file, tables: [{ title, columns: [..], rows: [{ label, cells: [[line, ...], ...] }] }] }
+let PREVIEW = null;
+function scheduleModel(shifts, numWeeks) {
   const empNames = [...new Set(shifts.map(s => s.person_name))].sort((a, b) => a.localeCompare(b));
-  let html = `<h2 style="margin-bottom:2px;">Bar Ops Scheduling</h2>`;
+  const tables = [];
   for (let w = 0; w < numWeeks; w++) {
-    const wStart = addDaysISO(WEEK_START, w * 7);
-    const dates = weekDatesFrom(wStart);
-    const header = `<th>Employee</th>${dates.map(dayHeader).join('')}`;
-    const rows = (empNames.length ? empNames : ['No employees selected']).map(name => {
-      if (!empNames.length) return `<tr><td colspan="8">No shifts to print.</td></tr>`;
-      const cells = dates.map(d => {
-        const cellShifts = shifts.filter(s => s.person_name === name && s.shift_date === d);
-        const lines = cellShifts.map(s => `<span style="display:block;"><b>${escapeHtml(shortLoc(s.location_name))}</b> ${escapeHtml(s.position_name)} ${formatTime12(s.start_time)}–${formatTime12(s.end_time)}</span>`).join('');
-        return `<td>${lines}</td>`;
-      }).join('');
-      return `<tr><td class="print-emp-name">${escapeHtml(name)}</td>${cells}</tr>`;
-    }).join('');
-    html += `<div class="print-week-block${w > 0 ? ' print-new-page' : ''}">
-      <div class="print-week-title">Week of ${dayLabel(dates[0])} – ${dayLabel(dates[6])}</div>
-      <table class="print-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>
-    </div>`;
+    const dates = weekDatesFrom(addDaysISO(WEEK_START, w * 7));
+    tables.push({
+      title: `Week of ${dayLabel(dates[0])} – ${dayLabel(dates[6])}`,
+      columns: ['Employee', ...dates.map(d => isoToDate(d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }))],
+      rows: empNames.map(name => ({ label: name, cells: dates.map(d => shifts.filter(s => s.person_name === name && s.shift_date === d).map(s => `${shortLoc(s.location_name)} ${s.position_name} ${formatTime12(s.start_time)}–${formatTime12(s.end_time)}`)) })),
+      empty: 'No shifts for these people in this week.',
+    });
   }
-  document.getElementById('printView').innerHTML = html;
+  return { title: 'Bar Ops Scheduling', file: `schedule-${WEEK_START}`, tables };
+}
+function myScheduleModel(shifts, dates) {
+  return {
+    title: `${ME.name} — my schedule`, file: `my-schedule-${dates[0]}`,
+    tables: [{
+      title: `Week of ${dayLabel(dates[0])} – ${dayLabel(dates[6])}`,
+      columns: ['Day', 'Shift'],
+      rows: dates.map(d => { const day = shifts.filter(s => s.shift_date === d); return { label: dayLabel(d), cells: [day.length ? day.map(s => `${s.schedule_name} — ${s.position_name}, ${formatTime12(s.start_time)}–${formatTime12(s.end_time)}`) : ['Off']] }; }),
+    }],
+  };
+}
+async function previewMyWeek() {
+  try {
+    const shifts = await api('/api/scheduling/my-shifts?weekStart=' + WEEK_START);
+    openPreview(myScheduleModel(shifts, weekDatesFrom(WEEK_START)));
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+function previewHtml(model) {
+  return `<h2 style="margin:0 0 2px;">${escapeHtml(model.title)}</h2>` + model.tables.map((t, i) => `<div class="print-week-block${i > 0 ? ' print-new-page' : ''}">
+      <div class="print-week-title">${escapeHtml(t.title)}</div>
+      <table class="print-table"><thead><tr>${t.columns.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead><tbody>
+      ${t.rows.length ? t.rows.map(r => `<tr><td class="print-emp-name">${escapeHtml(r.label)}</td>${r.cells.map(c => `<td>${c.map(l => `<span style="display:block;">${escapeHtml(l)}</span>`).join('')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${t.columns.length}">${escapeHtml(t.empty || 'Nothing here.')}</td></tr>`}
+      </tbody></table></div>`).join('');
+}
+function openPreview(model) {
+  PREVIEW = model;
+  document.getElementById('previewTitle').textContent = 'Preview';
+  document.getElementById('previewBody').innerHTML = previewHtml(model);
+  document.getElementById('previewShareBtn').style.display = navigator.share ? '' : 'none';
+  closeAllModals();
+  document.getElementById('previewModal').style.display = '';
+  document.getElementById('modalBackdrop').style.display = '';
+}
+function closePreview() {
+  document.getElementById('previewModal').style.display = 'none';
+  document.getElementById('modalBackdrop').style.display = 'none';
+}
+function previewPrint() {
+  if (!PREVIEW) return;
+  document.getElementById('printView').innerHTML = previewHtml(PREVIEW);
+  window.print();
+}
+// Draws the model on a canvas at 2x for a crisp phone picture.
+function previewCanvas(model) {
+  const S = 2, pad = 24, lineH = 18, cellPad = 6, font = '13px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+  const probe = document.createElement('canvas').getContext('2d'); probe.font = font;
+  const two = model.tables[0].columns.length === 2;
+  const widths = two ? [200, 620] : [160, ...Array(model.tables[0].columns.length - 1).fill(168)];
+  const W = widths.reduce((a, b) => a + b, 0) + pad * 2;
+  // wrap a line to its column width
+  const wrap = (text, w) => { const words = String(text).split(' '); const out = []; let cur = ''; for (const wd of words) { const t = cur ? `${cur} ${wd}` : wd; if (probe.measureText(t).width > w - cellPad * 2 && cur) { out.push(cur); cur = wd; } else cur = t; } if (cur) out.push(cur); return out; };
+  const laid = model.tables.map(t => ({ ...t, rows: (t.rows.length ? t.rows : [{ label: t.empty || 'Nothing here.', cells: t.columns.slice(1).map(() => []) }]).map(r => { const cells = r.cells.map((c, i) => c.flatMap(l => wrap(l, widths[i + 1]))); const label = wrap(r.label, widths[0]); const n = Math.max(label.length, ...cells.map(c => c.length), 1); return { label, cells, h: n * lineH + cellPad * 2 }; }) }));
+  let H = pad + 30;
+  for (const t of laid) H += 26 + 30 + t.rows.reduce((a, r) => a + r.h, 0) + 18;
+  const cv = document.createElement('canvas'); cv.width = W * S; cv.height = H * S;
+  const g = cv.getContext('2d'); g.scale(S, S);
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#111'; g.font = 'bold 18px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'; g.textBaseline = 'top';
+  g.fillText(model.title, pad, pad - 6);
+  let y = pad + 30;
+  for (const t of laid) {
+    g.font = 'bold 14px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'; g.fillStyle = '#111'; g.fillText(t.title, pad, y); y += 26;
+    // header
+    let x = pad; g.fillStyle = '#eee'; g.fillRect(pad, y, W - pad * 2, 30); g.strokeStyle = '#999'; g.lineWidth = 1;
+    g.font = 'bold 13px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'; g.fillStyle = '#111';
+    t.columns.forEach((c, i) => { g.strokeRect(x + 0.5, y + 0.5, widths[i], 30); g.fillText(c, x + cellPad, y + 8); x += widths[i]; });
+    y += 30;
+    for (const r of t.rows) {
+      x = pad;
+      [r.label, ...r.cells].forEach((lines, i) => {
+        g.strokeRect(x + 0.5, y + 0.5, widths[i], r.h);
+        g.font = i === 0 ? 'bold 13px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' : font; g.fillStyle = '#111';
+        lines.forEach((l, j) => g.fillText(l, x + cellPad, y + cellPad + j * lineH + 2));
+        x += widths[i];
+      });
+      y += r.h;
+    }
+    y += 18;
+  }
+  return cv;
+}
+function previewBlob() { return new Promise((resolve) => previewCanvas(PREVIEW).toBlob(resolve, 'image/png')); }
+async function previewDownload() {
+  if (!PREVIEW) return;
+  const blob = await previewBlob(); const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `${PREVIEW.file}.png`; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+async function previewShare() {
+  if (!PREVIEW) return;
+  try {
+    const blob = await previewBlob(); const file = new File([blob], `${PREVIEW.file}.png`, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: PREVIEW.title });
+    else await navigator.share({ title: PREVIEW.title, text: PREVIEW.title });
+  } catch (e) { if (e && e.name !== 'AbortError') showMsg('Sharing didn\'t work here — use Download instead.', 'error'); }
 }
 
 // =========================================================

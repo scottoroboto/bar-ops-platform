@@ -58,13 +58,28 @@
   </div>
 </div>
 
+<!-- Preview (My Schedule and Scheduler): look first, then share, download or print -->
+<div class="card" id="previewModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:960px; width:calc(100% - 24px); max-height:90vh; overflow:auto; height:fit-content; top:4%; z-index:21;">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+    <h2 style="margin:0;" id="previewTitle">Schedule</h2>
+    <div class="stack-actions" style="margin:0; gap:6px;">
+      <button class="small ghost" onclick="closePreview()">Close</button>
+      <button class="small secondary" id="previewShareBtn" onclick="previewShare()">Share</button>
+      <button class="small secondary" onclick="previewDownload()">Download</button>
+      <button class="small primary" style="margin-top:0;" onclick="previewPrint()">Print</button>
+    </div>
+  </div>
+  <p class="muted" style="font-size:12px; margin:6px 0 10px;" id="previewHint">Share and Download send it as a picture; Print opens your printer or Save as PDF.</p>
+  <div class="sched-preview" id="previewBody"></div>
+</div>
+
 <!-- Print / multi-week modal (Scheduler tab) -->
 <div class="card" id="printModal" style="display:none; position:fixed; inset:0; margin:auto; max-width:460px; max-height:86vh; overflow-y:auto; height:fit-content; top:6%; z-index:20;">
   <h2>Print schedule</h2>
   <div id="printBody"></div>
   <div class="stack-actions">
     <button class="ghost" onclick="closePrintModal()">Cancel</button>
-    <button class="primary" style="margin-top:0;" onclick="submitPrint()">Print</button>
+    <button class="primary" style="margin-top:0;" onclick="submitPrint()">Preview</button>
   </div>
 </div>
 
