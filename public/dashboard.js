@@ -132,9 +132,10 @@ function renderHome() {
       <span style="display:flex; align-items:center; gap:10px;"><span class="n">${alerts.length || '✓'}</span><span>${alerts.length ? `alert${alerts.length === 1 ? '' : 's'} · ${summary}` : 'no alerts'}${tvAlerts ? ` <span class="muted" style="font-weight:600;">· ${tvAlerts} TV${tvAlerts === 1 ? '' : 's'} on the iPad</span>` : ''}</span></span>
       ${alerts.length ? `<span>${ALERTS_OPEN ? '▴' : '▾'}</span>` : ''}
     </button>
-    ${ALERTS_OPEN && alerts.length ? `<div class="hm-alertlist">${alerts.slice(0, 20).map((a) => `<div class="hm-alertrow"><div><b>${escapeHtml(a.systemName)}</b> · ${escapeHtml(shortLoc(a.locationName))}<br><span class="muted">${escapeHtml(a.message || '')}${a.acknowledgedAt ? ' · acknowledged' : ''}${a.silenced ? ' · silenced' : ''}</span></div>
-      <div style="display:flex; gap:6px; flex-shrink:0;">${a.acknowledgedAt ? '' : `<button class="small secondary" style="margin:0;" onclick="ackHomeAlert('${a.id}')">Ack</button>`}${a.silenced ? `<button class="small secondary" style="margin:0;" onclick="muteHomeAlert('${a.systemId}','off')">Unmute</button>` : `<button class="small secondary" style="margin:0;" onclick="toggleHomeMute('${a.id}')">Mute…</button>`}<a class="button small" style="margin:0; text-decoration:none;" href="${a.category === 'refrigeration' ? '/sensors.html' : '/monitoring.html'}">Open</a></div></div>
-      <div class="hm-alertrow" id="hmMute-${a.id}" style="display:none; justify-content:flex-start; flex-wrap:wrap; gap:6px; border-top:0; padding-top:0;"><span class="muted">Mute ${escapeHtml(a.systemName)} for</span>${HOME_MUTES.map(([d, l]) => `<button class="small secondary" style="margin:0;" onclick="muteHomeAlert('${a.systemId}','${d}')">${l}</button>`).join('')}</div>`).join('')}${alerts.length > 20 ? `<div class="hm-alertrow"><a href="/monitoring.html" style="color:#8fb6ff;">and ${alerts.length - 20} more in Systems Monitoring</a></div>` : ''}</div>` : ''}`;
+    ${ALERTS_OPEN && alerts.length ? `<div class="hm-alertlist">${alerts.slice(0, 20).map((a) => `<div class="hm-swipe" id="hmAlert-${a.id}" data-id="${a.id}" data-system="${a.systemId}">
+      <div class="hm-swipe-tray">${a.acknowledgedAt ? '' : `<button class="ack" onclick="swipeAct(this,'ack')">Ack</button>`}${HOME_MUTES.map(([d, l]) => `<button onclick="swipeAct(this,'${d}')"><span class="muted">Mute</span>${l}</button>`).join('')}</div>
+      <div class="hm-alertrow hm-swipe-front"><div class="hm-swipe-text"><b>${escapeHtml(a.systemName)}</b> · ${escapeHtml(shortLoc(a.locationName))}<br><span class="muted">${escapeHtml(a.message || '')}${a.acknowledgedAt ? ' · acknowledged' : ''}</span></div>
+      <div style="display:flex; gap:6px; flex-shrink:0; align-items:center;"><a class="button small" style="margin:0; text-decoration:none;" href="${a.category === 'refrigeration' ? '/sensors.html' : '/monitoring.html'}">Open</a><span class="hm-swipe-hint" onclick="swipeToggle(this.closest('.hm-swipe'))" title="Mute options">‹</span></div></div></div>`).join('')}${alerts.length > 20 ? `<div class="hm-alertrow"><a href="/monitoring.html" style="color:#8fb6ff;">and ${alerts.length - 20} more in Systems Monitoring</a></div>` : ''}</div>` : ''}`;
   const blocks = (h.locations || []).map(hmBlock).join('');
   const needs = h.needs ? [
     h.needs.applicants ? `<a class="hm-need" href="/employees.html"><span>Applicants</span><span class="b">${h.needs.applicants}</span></a>` : '',
@@ -142,19 +143,64 @@ function renderHome() {
     h.needs.serviceCalls ? `<a class="hm-need" href="/servicecalls.html"><span>Service calls open</span><span class="b dim">${h.needs.serviceCalls}</span></a>` : '',
   ].filter(Boolean) : [];
   const stamp = h.at ? new Date(h.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  SWIPE_OPEN = null;
   el.innerHTML = `<div id="hmPull" class="hm-pull"></div>${h.lines && h.lines.alerts ? alertsHtml : ''}
     ${blocks ? `<div class="hm-kick">Widgets</div>${blocks}<div class="hm-stamp"><a href="#" onclick="loadHome(true); return false;">${HOME_LOADING ? 'Updating…' : `Updated ${stamp} · refresh`}</a></div>` : ''}
     ${needs.length ? `<div class="hm-kick" style="margin-top:12px;">Needs you</div><div class="hm-needs">${needs.join('')}</div>` : ''}
     <div class="hm-kick" style="margin-top:12px;">Apps</div>`;
+  wireSwipes();
 }
 function toggleAlerts() { ALERTS_OPEN = !ALERTS_OPEN; renderHome(); }
+// Swipe an alert row left to reveal Ack and the Mute choices (Oct 2026).
 // Mute = the Monitoring page's Silence: no texts or emails for that one
-// piece of equipment until the time is up; it stays on the dashboard.
-const HOME_MUTES = [['1h', '1 hour'], ['today', 'Rest of today'], ['1d', '1 day'], ['forever', 'Until turned back on']];
-function toggleHomeMute(id) { const el = document.getElementById(`hmMute-${id}`); if (el) el.style.display = el.style.display === 'none' ? 'flex' : 'none'; }
-async function muteHomeAlert(systemId, duration) {
-  try { await withStepUp(() => api(`/api/monitoring/systems/${systemId}/silence`, { method: 'POST', body: { duration } })); await loadHome(); }
-  catch (e) { if (typeof showMsg === 'function') showMsg(e.message || 'Could not mute.', 'error'); }
+// piece of equipment until the time is up. A muted alert leaves this
+// list (server/home.js hides silenced ones); it stays on the Monitoring
+// and Sensors pages. Ack stops the reminders and the row stays, marked.
+const HOME_MUTES = [['1h', '1 hr'], ['today', 'Today'], ['1d', '1 day'], ['forever', 'Forever']]; // same as Silence on the Monitoring page
+let SWIPE_OPEN = null;
+function swipeSet(row, open) {
+  const front = row.querySelector('.hm-swipe-front'); const tray = row.querySelector('.hm-swipe-tray');
+  const w = tray ? tray.offsetWidth : 0;
+  front.style.transition = 'transform .18s ease-out';
+  front.style.transform = open ? `translateX(${-w}px)` : 'translateX(0)';
+  row.classList.toggle('open', open);
+  if (open) { if (SWIPE_OPEN && SWIPE_OPEN !== row) swipeSet(SWIPE_OPEN, false); SWIPE_OPEN = row; }
+  else if (SWIPE_OPEN === row) SWIPE_OPEN = null;
+}
+function swipeToggle(row) { swipeSet(row, !row.classList.contains('open')); }
+function wireSwipes() {
+  document.querySelectorAll('.hm-swipe').forEach((row) => {
+    const front = row.querySelector('.hm-swipe-front'); const tray = row.querySelector('.hm-swipe-tray');
+    let x0 = 0, y0 = 0, dx = 0, dragging = false, decided = false, startOpen = false;
+    front.addEventListener('dragstart', (e) => e.preventDefault()); // a native text drag would cancel the pointer
+    front.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('a, button')) return;
+      if (e.pointerType === 'mouse') e.preventDefault(); // no text selection; touch keeps its default so the page still scrolls
+      x0 = e.clientX; y0 = e.clientY; dx = 0; dragging = true; decided = false; startOpen = row.classList.contains('open');
+      front.style.transition = 'none';
+    });
+    front.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const mx = e.clientX - x0, my = e.clientY - y0;
+      if (!decided) { if (Math.abs(mx) < 8 && Math.abs(my) < 8) return; decided = true; if (Math.abs(my) > Math.abs(mx)) { dragging = false; return; } front.setPointerCapture(e.pointerId); }
+      const w = tray.offsetWidth; const base = startOpen ? -w : 0;
+      dx = Math.max(-w, Math.min(0, base + mx));
+      front.style.transform = `translateX(${dx}px)`;
+      e.preventDefault();
+    });
+    const end = () => { if (!dragging) return; dragging = false; if (!decided) { front.style.transition = ''; return; } const w = tray.offsetWidth; swipeSet(row, -dx > w * 0.35); };
+    front.addEventListener('pointerup', end); front.addEventListener('pointercancel', end);
+  });
+}
+document.addEventListener('pointerdown', (e) => { if (SWIPE_OPEN && !e.target.closest('.hm-swipe')) swipeSet(SWIPE_OPEN, false); });
+async function swipeAct(btn, what) {
+  const row = btn.closest('.hm-swipe'); const id = row.dataset.id; const systemId = row.dataset.system;
+  try {
+    if (what === 'ack') { await api(`/api/monitoring/alerts/${id}/ack`, { method: 'POST', body: {} }); swipeSet(row, false); await loadHome(); return; }
+    await withStepUp(() => api(`/api/monitoring/systems/${systemId}/silence`, { method: 'POST', body: { duration: what } }));
+    row.classList.add('gone'); // slides away; the list is rebuilt from the server after
+    setTimeout(() => loadHome(), 220);
+  } catch (e) { swipeSet(row, false); if (typeof showMsg === 'function') showMsg(e.message || 'Could not do that.', 'error'); }
 }
 async function ackHomeAlert(id) {
   try { await api(`/api/monitoring/alerts/${id}/ack`, { method: 'POST', body: {} }); await loadHome(); } catch (e) { /* the row stays */ }
