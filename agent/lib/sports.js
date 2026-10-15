@@ -642,6 +642,7 @@ function buildView() {
     status: {
       ok: !lastError, error: lastError, updatedAt: lastOkAt ? new Date(lastOkAt).toISOString() : null,
       guideAt: guide.at ? new Date(guide.at).toISOString() : null, guideError: guide.error || null, guideEntries: (guide.entries || []).length,
+      prescan: prescanStatus(),
     },
   };
 }
@@ -655,6 +656,7 @@ async function tick() {
     lastGuideAt = Date.now();
     scanGuide().catch((err) => console.warn('[sports] guide scan:', err.message));
   }
+  maybePrescan();
 }
 
 function start(options) {
@@ -670,121 +672,246 @@ function start(options) {
 // A time grid for the Channel guide sheet on the TVs and Map pages:
 // channels down, half hours across, like the DirecTV guide. A receiver
 // only answers "what's on channel N at time T", so each channel is
-// walked forward through the window using the programs' own durations
-// (a few calls per channel). Windows are cached ten minutes; the scan
-// fills in as it goes and the client polls while `scanning`.
+// walked forward through a window using the programs' own durations (a
+// few calls per channel).
+//
+// Two ways the grid gets filled:
+//   * the daily PRE-SCAN (prescanDay): before open, while the receivers
+//     are idle, probe the whole lineup (lineupRanges) and walk every
+//     channel in it from prescanHour through 3am. The guide then serves
+//     the day from memory and never touches a receiver during service;
+//   * on demand, for a window the pre-scan didn't cover: the games-strip
+//     scan list only (networks + extra ranges), a few seconds.
+// A typed channel number the grid doesn't have is walked on its own.
 const GRID_HOURS = 3;
 const GRID_MAX_CALLS_PER_CHANNEL = 8;
-let grid = cache.get('sportsGrid') || { windows: {} }; // key "from" -> { from, to, at, done, entries: [{ major, minor, callsign, title, episode, start, end }], errors }
-const gridRunning = new Map();                            // key -> promise
+const DAY_MAX_CALLS_PER_CHANNEL = 40;
+const DEFAULT_LINEUP_RANGES = '2-99, 200-399, 600-799';
+const DEFAULT_PRESCAN_HOUR = 8;          // bar time; the scan covers from here to 3am
+const PRESCAN_END_HOUR = 3;
+const COVER_FRESH_MS = 20 * 60 * 60 * 1000;
 
+let gridEntries = new Map((cache.get('sportsGridEntries') || []).map((e) => [`${chKey(e)}@${e.start}`, e]));
+let gridCover = cache.get('sportsGridCover') || [];   // [{ from, to, scope: 'lineup'|'scan'|'one', keys: [chKey], at }]
+let lineup = cache.get('sportsLineup') || {};         // chKey -> { major, minor, callsign, lastSeen, misses }
+let prescan = cache.get('sportsPrescan') || { date: null, at: null, running: false, programs: 0, channels: 0, error: null };
+const gridRunning = new Map();                        // "from|scope" -> promise
+prescan.running = false;
+
+function lineupRanges() { return String(cache.get('sportsLineupRanges') || DEFAULT_LINEUP_RANGES); }
+function setLineupRanges(v) { const clean = String(v || '').replace(/[^\d,\s-]/g, '').trim(); cache.set('sportsLineupRanges', clean || DEFAULT_LINEUP_RANGES); return lineupRanges(); }
+function prescanHour() { const h = Number(cache.get('sportsPrescanHour')); return Number.isInteger(h) && h >= 0 && h <= 23 ? h : DEFAULT_PRESCAN_HOUR; }
+function setPrescanHour(v) { const h = Number(v); cache.set('sportsPrescanHour', Number.isInteger(h) && h >= 0 && h <= 23 ? h : DEFAULT_PRESCAN_HOUR); return prescanHour(); }
+function rangeChannels(spec) {
+  const out = new Map();
+  for (const part of String(spec || '').split(/[,\s]+/)) {
+    const m = part.match(/^(\d{1,4})(?:-(\d{1,4}))?$/);
+    if (!m) continue;
+    const a = Number(m[1]); const b = m[2] ? Number(m[2]) : a;
+    for (let x = Math.min(a, b); x <= Math.max(a, b) && x - Math.min(a, b) < 1000; x += 1) out.set(`${x}-`, { major: x, minor: null });
+  }
+  return [...out.values()];
+}
 function networkLabelFor(callsign) {
   const key = callsign ? callsignKey(callsign) : null;
   const n = key ? NETWORKS.find((x) => x.keys[0] === key) : null;
   return n ? n.label : (callsign || '');
 }
-function windowKey(from) { return String(Math.floor(from / (30 * 60 * 1000)) * 30 * 60 * 1000); }
+function saveGrid() {
+  cache.set('sportsGridEntries', [...gridEntries.values()]);
+  cache.set('sportsGridCover', gridCover);
+}
+function pruneGrid() {
+  const cutoff = Date.now() - 26 * 3600 * 1000;
+  for (const [k, e] of gridEntries) if (e.end < cutoff) gridEntries.delete(k);
+  gridCover = gridCover.filter((c) => c.to > cutoff);
+}
 function windowFor(from) {
-  const f = Number(windowKey(from));
-  return { key: String(f), from: f, to: f + GRID_HOURS * 3600 * 1000 };
+  const f = Math.floor(from / (30 * 60 * 1000)) * 30 * 60 * 1000;
+  return { from: f, to: f + GRID_HOURS * 3600 * 1000 };
+}
+// Bar-local hour/date helpers for the schedule.
+function barNow() {
+  const tz = deps.timezone();
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  const get = (t) => parts.find((p) => p.type === t).value;
+  return { hour: Number(get('hour')) % 24, date: `${get('year')}-${get('month')}-${get('day')}` };
+}
+// The instant of `hour`:00 bar time on `ymd` (walks 15-minute ticks, DST-safe).
+function barInstant(ymd, hour) {
+  const tz = deps.timezone();
+  let t = new Date(`${ymd}T12:00:00Z`).getTime() - 24 * 3600 * 1000;
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false, minute: '2-digit', year: 'numeric', month: '2-digit', day: '2-digit' });
+  for (let i = 0; i < 48 * 4 + 8; i += 1) {
+    const parts = fmt.formatToParts(new Date(t)); const get = (x) => parts.find((p) => p.type === x).value;
+    if (`${get('year')}-${get('month')}-${get('day')}` === ymd && Number(get('hour')) % 24 === hour && Number(get('minute')) === 0) return t;
+    t += 15 * 60 * 1000;
+  }
+  return new Date(`${ymd}T${String(hour).padStart(2, '0')}:00:00`).getTime();
 }
 
-async function scanWindowNow(win, channels) {
+// Walk `channels` across [from, to) on the receivers, one call at a time
+// per receiver. Writes into gridEntries as it goes.
+async function walkChannels(channels, from, to, maxCalls, onChannel) {
   const rcvs = (deps.receivers() || []).filter((r) => r.ip);
-  const w = grid.windows[win.key] = { from: win.from, to: win.to, at: Date.now(), done: false, entries: [], errors: 0 };
-  if (!rcvs.length) { w.done = true; w.error = 'No DirecTV receiver is answering.'; return w; }
+  if (!rcvs.length) throw new Error('No DirecTV receiver is answering.');
   const jobs = channels.slice();
+  let errors = 0; let found = 0;
   await Promise.all(rcvs.map(async (r) => {
     while (jobs.length) {
       const c = jobs.shift();
-      let t = win.from;
-      for (let i = 0; i < GRID_MAX_CALLS_PER_CHANNEL && t < win.to; i += 1) {
+      let t = from; let any = false;
+      for (let i = 0; i < maxCalls && t < to; i += 1) {
         let p;
         try { p = await directv.getProgInfo(r.ip, r.port || 8080, c.major, c.minor, Math.floor(t / 1000)); }
-        catch (err) { w.errors += 1; break; }       // not in the lineup, or a busy receiver
+        catch (err) { errors += 1; break; }         // not in the lineup, or a busy receiver
         if (!p || p.isOffAir) break;
         const start = Number(p.startTime) * 1000 || t;
         const end = start + (Number(p.duration) || 1800) * 1000;
-        if (!w.entries.some((e) => e.major === c.major && (e.minor ?? null) === (c.minor ?? null) && e.start === start)) {
-          w.entries.push({ major: c.major, minor: c.minor, callsign: p.callsign || null, title: p.title || '', episode: p.episodeTitle || '', start, end });
-        }
-        if (end <= t) break;                        // a receiver answered nonsense; don't loop
+        const e = { major: c.major, minor: c.minor, callsign: p.callsign || null, title: p.title || '', episode: p.episodeTitle || '', start, end };
+        gridEntries.set(`${chKey(e)}@${start}`, e);
+        any = true; found += 1;
+        if (end <= t) break;
         t = end + 1000;
       }
+      if (onChannel) onChannel(c, any);
     }
   }));
-  w.done = true;
-  w.at = Date.now();
-  cache.set('sportsGrid', grid);
-  return w;
-}
-function scanWindow(win, channels) {
-  if (!gridRunning.has(win.key)) {
-    gridRunning.set(win.key, scanWindowNow(win, channels).finally(() => gridRunning.delete(win.key)));
-  }
-  return gridRunning.get(win.key);
+  return { errors, found };
 }
 
+function runOnce(key, fn) {
+  if (!gridRunning.has(key)) gridRunning.set(key, fn().finally(() => gridRunning.delete(key)));
+  return gridRunning.get(key);
+}
+async function scanWindow(win, channels, scope) {
+  const keys = channels.map(chKey);
+  await walkChannels(channels, win.from, win.to, GRID_MAX_CALLS_PER_CHANNEL);
+  gridCover.push({ from: win.from, to: win.to, scope, keys, at: Date.now() });
+  saveGrid();
+}
+
+// The daily pre-scan: probe the lineup, then walk it through the day.
+async function prescanDay({ force = false } = {}) {
+  if (prescan.running) return prescan;
+  const { date } = barNow();
+  if (!force && prescan.date === date && !prescan.error) return prescan;
+  prescan = { ...prescan, date, running: true, startedAt: Date.now(), error: null };
+  cache.set('sportsPrescan', prescan);
+  try {
+    const from = barInstant(date, prescanHour());
+    const to = barInstant(addDays(date, 1), PRESCAN_END_HOUR);
+    // 1. Probe: which channel numbers answer at all. A channel that fails
+    //    seven days running drops out of the lineup until it answers again.
+    const probe = rangeChannels(lineupRanges());
+    const seen = new Set();
+    await walkChannels(probe, Math.max(from, Date.now()), Math.max(from, Date.now()) + 1, 1, (c, any) => { if (any) seen.add(chKey(c)); });
+    const now = Date.now();
+    for (const c of probe) {
+      const k = chKey(c);
+      if (seen.has(k)) { const e = [...gridEntries.values()].find((x) => chKey(x) === k); lineup[k] = { major: c.major, minor: c.minor, callsign: e ? e.callsign : (lineup[k] || {}).callsign || null, lastSeen: now, misses: 0 }; }
+      else if (lineup[k]) { lineup[k].misses = (lineup[k].misses || 0) + 1; if (lineup[k].misses >= 7) delete lineup[k]; }
+    }
+    cache.set('sportsLineup', lineup);
+    // 2. Walk every lineup channel through the day, one 3-hour window at a
+    //    time so a receiver is never asked to do everything at once.
+    const channels = Object.values(lineup).map((c) => ({ major: c.major, minor: c.minor }));
+    pruneGrid();
+    let programs = 0;
+    for (let f = from; f < to; f += GRID_HOURS * 3600 * 1000) {
+      const win = { from: f, to: Math.min(to, f + GRID_HOURS * 3600 * 1000) };
+      const r = await walkChannels(channels, win.from, win.to, DAY_MAX_CALLS_PER_CHANNEL);
+      programs += r.found;
+      gridCover.push({ from: win.from, to: win.to, scope: 'lineup', keys: channels.map(chKey), at: Date.now() });
+      saveGrid();
+    }
+    prescan = { date, at: Date.now(), running: false, programs, channels: channels.length, from, to, error: channels.length ? null : 'No channel answered the probe.' };
+  } catch (err) {
+    prescan = { ...prescan, running: false, error: err.message };
+  }
+  cache.set('sportsPrescan', prescan);
+  bump();
+  return prescan;
+}
+// Called from tick(): run the pre-scan once a day at prescanHour (or on
+// boot, any time between then and open) so the day is in memory.
+function maybePrescan() {
+  if (prescan.running) return;
+  const { hour, date } = barNow();
+  if (prescan.date === date && !prescan.error) return;
+  const h = prescanHour();
+  if (hour >= h && hour < h + 6) prescanDay().catch((err) => console.warn('[sports] pre-scan:', err.message));
+}
+function prescanStatus() {
+  const { date } = barNow();
+  return { ...prescan, hour: prescanHour(), ranges: lineupRanges(), lineup: Object.keys(lineup).length, today: prescan.date === date && !prescan.error, nextAt: barInstant(prescan.date === date ? addDays(date, 1) : date, prescanHour()) };
+}
+
+// Is [win.from, win.to) covered by fresh scans of this scope? The daily
+// pre-scan writes 3-hour pieces, and a sheet window can straddle two, so
+// the pieces are merged before checking.
+function covered(win, scope) {
+  const now = Date.now();
+  const pieces = gridCover.filter((c) => now - c.at < COVER_FRESH_MS && (scope ? c.scope === scope : true) && c.to > win.from && c.from < win.to).sort((a, b) => a.from - b.from);
+  let reach = win.from; let last = null;
+  for (const c of pieces) {
+    if (c.from > reach) break;
+    reach = Math.max(reach, c.to); last = c;
+    if (reach >= win.to) break;
+  }
+  return reach >= win.to && last ? { ...last, at: Math.min(...pieces.map((c) => c.at)) } : null;
+}
 // What the sheet asks for: { from, q, extra: [{major, minor}] }.
-// extra = channel numbers typed in that the scan list doesn't cover;
-// they're walked the same way and appear as their own rows.
 function guideGrid({ from, q, extra = [] } = {}) {
   const now = Date.now();
   const win = windowFor(Math.max(Number(from) || now, now - 2 * 3600 * 1000));
-  const channels = scanChannels();
-  const keyOf = (c) => chKey(c);
-  const have = new Set(channels.map(keyOf));
-  for (const x of extra) if (x && x.major > 0 && !have.has(keyOf(x))) { channels.push({ major: Number(x.major), minor: x.minor == null ? null : Number(x.minor) }); have.add(keyOf(x)); }
-  let w = grid.windows[win.key];
-  const stale = !w || now - w.at > 10 * 60 * 1000;
-  // Channels typed in since the window was scanned get their own pass.
-  const missing = w ? channels.filter((c) => !w.scanned || !w.scanned.has(keyOf(c))) : channels;
-  if ((stale || missing.length) && !gridRunning.has(win.key)) {
-    if (stale) {
-      scanWindow(win, channels).catch(() => {});
-      w = grid.windows[win.key];
-      w.scanned = new Set(channels.map(keyOf));
-    } else {
-      const addKeys = missing.map(keyOf);
-      const prev = w;
-      gridRunning.set(win.key, (async () => {
-        const part = { from: win.from, to: win.to, at: Date.now(), done: false, entries: [], errors: 0 };
-        const saved = grid.windows[win.key];
-        grid.windows[win.key] = part;
-        await scanWindowNow(win, missing).catch(() => {});
-        const got = grid.windows[win.key];
-        grid.windows[win.key] = { ...prev, entries: [...(saved ? saved.entries : []), ...got.entries], at: Date.now(), done: true, scanned: new Set([...(prev.scanned || []), ...addKeys]) };
-        cache.set('sportsGrid', grid);
-      })().finally(() => gridRunning.delete(win.key)));
-      w = grid.windows[win.key] = { ...prev, done: false };
-    }
+  const winKey = `${win.from}`;
+  let rows;
+  const full = covered(win, 'lineup');
+  let channels;
+  if (full) {
+    channels = full.keys.map((k) => { const [a, b] = k.split('-'); return { major: Number(a), minor: b === '' ? null : Number(b) }; });
+  } else {
+    channels = scanChannels();
+    const part = covered(win, 'scan');
+    if (!part && !prescan.running) runOnce(`${winKey}|scan`, () => scanWindow(win, channels, 'scan')).catch(() => {});
   }
-  if (!w) w = { from: win.from, to: win.to, at: null, done: false, entries: [] };
-  // Rows: every channel, with its programs clipped to the window.
-  const needle = String(q || '').trim().toLowerCase();
+  // Typed-in numbers not on the grid: walked on their own, once per window.
+  const have = new Set(channels.map(chKey));
+  for (const x of extra) {
+    if (!x || !(x.major > 0)) continue;
+    const c = { major: Number(x.major), minor: x.minor == null ? null : Number(x.minor) };
+    const k = chKey(c);
+    if (!have.has(k)) { channels.push(c); have.add(k); }
+    const done = gridCover.some((cv) => cv.from <= win.from && cv.to >= win.to && now - cv.at < COVER_FRESH_MS && cv.keys.includes(k));
+    if (!done) runOnce(`${winKey}|${k}`, () => scanWindow(win, [c], 'one')).catch(() => {});
+  }
+  const scanning = [...gridRunning.keys()].some((k) => k.startsWith(`${winKey}|`)) || (prescan.running && !full);
   const byCh = new Map();
-  for (const c of channels) byCh.set(keyOf(c), { major: c.major, minor: c.minor, callsign: null, network: '', programs: [] });
-  for (const e of w.entries || []) {
+  for (const c of channels) byCh.set(chKey(c), { major: c.major, minor: c.minor, callsign: (lineup[chKey(c)] || {}).callsign || null, network: '', programs: [] });
+  for (const e of gridEntries.values()) {
     if (e.end <= win.from || e.start >= win.to) continue;
     const row = byCh.get(chKey(e));
     if (!row) continue;
-    if (!row.callsign && e.callsign) { row.callsign = e.callsign; row.network = networkLabelFor(e.callsign); }
+    if (e.callsign) row.callsign = e.callsign;
     row.programs.push({ title: e.title, episode: e.episode, start: e.start, end: e.end, onNow: e.start <= now && e.end > now });
   }
-  let rows = [...byCh.values()];
-  for (const r of rows) r.programs.sort((a, b) => a.start - b.start);
+  rows = [...byCh.values()];
+  for (const r of rows) { r.network = networkLabelFor(r.callsign); r.programs.sort((a, b) => a.start - b.start); }
+  const needle = String(q || '').trim().toLowerCase();
   if (needle) rows = rows.filter((r) => `${r.major} ${r.callsign || ''} ${r.network} ${r.programs.map((p) => `${p.title} ${p.episode}`).join(' ')}`.toLowerCase().includes(needle));
-  else rows = rows.filter((r) => r.programs.length || !w.done);
+  else rows = rows.filter((r) => r.programs.length || scanning);
   rows.sort((a, b) => a.major - b.major || (a.minor ?? 0) - (b.minor ?? 0));
   const slots = [];
   for (let t = win.from; t < win.to; t += 30 * 60 * 1000) slots.push(t);
-  return { from: win.from, to: win.to, now, slots, rows, scanning: !w.done || gridRunning.has(win.key), at: w.at, error: w.error || null, channels: channels.length };
+  const at = full ? full.at : (covered(win, 'scan') || {}).at || null;
+  return { from: win.from, to: win.to, now, slots, rows, scanning, at, scope: full ? 'lineup' : 'scan', lineup: Object.keys(lineup).length, prescan: prescanStatus(), channels: channels.length };
 }
 
 function version_() { return version; }
 
 module.exports = {
-  guideGrid,
+  guideGrid, prescanDay, prescanStatus, setLineupRanges, setPrescanHour, lineupRanges, prescanHour,
   LEAGUES, NETWORKS, start, tick, sweep, scanGuide, view, version: version_, gameById, optionsFor,
   addPlan, cancelPlan, setNetworkChannel, setGameChannel, setMyTeam, setScanExtra, scanExtra, channelList, guideMatches,
   canonical, normalizeEvent, fetchDay, channelFor, checkChannel,

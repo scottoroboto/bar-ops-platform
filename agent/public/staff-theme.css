@@ -1472,6 +1472,9 @@ body.gm-dragging, body.gm-dragging * { cursor: grabbing !important; }
 .staff .gs-chrow .n { flex: 1; font-size: 14px; font-weight: 700; }
 .staff .gs-chrow input { width: 84px; min-height: 38px; font-size: 16px; border-radius: 8px; background: var(--card-alt); border: 1px solid var(--border-strong); color: var(--text); padding: 0 8px; }
 .staff .gs-chrow .f { width: 100px; font-size: 11px; color: var(--muted); }
+.staff .gs-row2 { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
+.staff .gs-row2 .gs-chrow input { width: auto; flex: 1; }
+.staff .gs-chrow select { min-height: 40px; border-radius: 9px; background: var(--card-alt); border: 1px solid var(--border-strong); color: var(--text); font: inherit; padding: 0 8px; }
 .staff .gs-wide-input { width: 100%; box-sizing: border-box; min-height: 44px; font-size: 16px; border-radius: 9px; background: var(--card-alt); border: 1px solid var(--border-strong); color: var(--text); padding: 0 10px; }
 .staff .gs-chrow input, .staff .gs-edit input, .staff .gs-wide-input { -webkit-user-select: text; user-select: text; }
 .staff .mu-sheet-go:disabled { opacity: .4; }

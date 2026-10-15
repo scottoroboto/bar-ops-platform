@@ -89,7 +89,7 @@
       }).join('');
       body = `<div class="cg-grid">${head}<div class="cg-rows">${rows || `<p class="cg-note">${d.scanning ? 'Checking the receivers’ guide — a few seconds.' : G.q ? `Nothing in these channels matches “${esc(G.q)}”. Type a channel number to add it.` : 'Nothing listed.'}</p>`}</div></div>`;
     }
-    const foot = d ? `${d.scanning ? 'Reading the guide from the receivers… ' : ''}${d.at ? `Checked ${esc(timeOf(d.at))}. ` : ''}${d.error ? esc(d.error) + ' ' : ''}` : '';
+    const foot = d ? `${d.scanning ? 'Reading the guide from the receivers… ' : ''}${d.scope === 'lineup' ? `Full lineup, ${d.lineup} channels, read ${esc(timeOf(d.at))}. ` : d.at ? `Game channels only, checked ${esc(timeOf(d.at))}. ` : ''}${d.error ? esc(d.error) + ' ' : ''}` : '';
     b.innerHTML = `<div class="gm-sheet cg-sheet">
       <div class="gs-head"><span>Channel guide</span><button type="button" class="gs-x" onclick="closeChannelGuide()">&times;</button></div>
       <div class="cg-tools">
@@ -97,7 +97,7 @@
         <div class="cg-nav"><button type="button" class="map-bar-btn" onclick="window.__cgShift(-1)">&#8249; Earlier</button><button type="button" class="map-bar-btn" onclick="window.__cgShift(0)">Now</button><button type="button" class="map-bar-btn" onclick="window.__cgShift(1)">Later &#8250;</button></div>
       </div>
       ${body}
-      <p class="cg-note">${foot}Tap a program, then a receiver. The channels the box scans are listed; any other number can be typed in.</p>
+      <p class="cg-note">${foot}Tap a program, then a receiver. Any channel number can be typed in.</p>
     </div>`;
     if (G.keepFocus) { const inp = document.getElementById('cgSearch'); if (inp && document.activeElement !== inp) { inp.focus(); const v = inp.value; inp.value = ''; inp.value = v; } }
   }

@@ -777,8 +777,12 @@ app.post('/api/sports/scan', requireManager, async (req, res) => {
   try {
     const b = req.body || {};
     const extra = b.extra != null ? sports.setScanExtra(b.extra) : sports.scanExtra();
+    if (b.lineupRanges != null) sports.setLineupRanges(b.lineupRanges);
+    if (b.prescanHour != null) sports.setPrescanHour(b.prescanHour);
     const g = b.now ? await sports.scanGuide() : null;
-    res.json({ ok: true, scanExtra: extra, guide: g ? { entries: g.entries.length, receivers: g.receivers, channels: g.channels, error: g.error } : null });
+    // The full-lineup pre-scan runs for minutes; kick it off and answer now.
+    if (b.prescanNow) sports.prescanDay({ force: true }).catch((err) => console.warn('[sports] pre-scan:', err.message));
+    res.json({ ok: true, scanExtra: extra, guide: g ? { entries: g.entries.length, receivers: g.receivers, channels: g.channels, error: g.error } : null, prescan: sports.prescanStatus() });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

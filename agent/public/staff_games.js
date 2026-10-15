@@ -417,15 +417,21 @@ async function openChannelSheet() {
         <div class="gs-label">Also check these channels on the guide</div>
         <p class="gs-note">For package and regional games ESPN can’t place, like Sunday Ticket or Extra Innings. Ranges are fine: <b>701-719, 640</b>.</p>
         <input id="gsScanExtra" class="gs-wide-input" value="${escapeHtml(scanExtra || '')}" placeholder="701-719">
+        <div class="gs-label">Channel guide pre-scan</div>
+        <p class="gs-note">Every morning the box reads the whole DirecTV lineup through 3am while the receivers are idle, so the Channel guide on the TVs and Map pages never touches a receiver during service.${st.prescan ? ` ${st.prescan.today ? `Done today at ${escapeHtml(new Date(st.prescan.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}: ${st.prescan.programs} programs on ${st.prescan.channels} channels.` : st.prescan.running ? 'Running now…' : st.prescan.error ? `Last try: ${escapeHtml(st.prescan.error)}.` : 'Not run yet today.'}` : ''}</p>
+        <div class="gs-row2">
+          <label class="gs-chrow"><span class="n">Run at</span><select id="gsPrescanHour">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${st.prescan && st.prescan.hour === h ? 'selected' : ''}>${h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h - 12}pm`}</option>`).join('')}</select><span class="f">bar time</span></label>
+          <label class="gs-chrow"><span class="n">Channels</span><input id="gsLineupRanges" class="gs-wide-input" value="${escapeHtml(st.prescan ? st.prescan.ranges : '')}" placeholder="2-99, 200-399, 600-799"><span class="f">${st.prescan ? `${st.prescan.lineup} answer` : ''}</span></label>
+        </div>
         <p class="gs-note">Guide last checked ${st.guideAt ? escapeHtml(new Date(st.guideAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })) : 'not yet'}${st.guideError ? ` · ${escapeHtml(st.guideError)}` : ` · ${st.guideEntries || 0} programs`}. Scores from ESPN${st.updatedAt ? `, updated ${escapeHtml(new Date(st.updatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}` : ''}${st.error ? ` · ${escapeHtml(st.error)}` : ''}.</p>
-        <div class="mu-sheet-btns"><button type="button" class="mu-sheet-cancel" onclick="closeGameSheet()">Close</button><button type="button" class="mu-sheet-go" id="gsSaveCh" onclick="saveChannelSheet(this)">Save and check guide</button></div>
+        <div class="mu-sheet-btns"><button type="button" class="mu-sheet-cancel" onclick="closeGameSheet()">Close</button><button type="button" class="mu-sheet-cancel" onclick="saveChannelSheet(this, true)" title="Read the whole lineup now — a few minutes; best done before open">Pre-scan now</button><button type="button" class="mu-sheet-go" id="gsSaveCh" onclick="saveChannelSheet(this)">Save and check guide</button></div>
       </div>`;
   } catch (e) {
     back.innerHTML = `<div class="gm-sheet"><p class="muted">${escapeHtml(e.message)}</p><div class="mu-sheet-btns"><button type="button" class="mu-sheet-cancel" onclick="closeGameSheet()">Close</button></div></div>`;
   }
 }
 
-async function saveChannelSheet(btn) {
+async function saveChannelSheet(btn, prescanNow) {
   btn.disabled = true;
   btn.textContent = 'Saving…';
   try {
@@ -437,9 +443,9 @@ async function saveChannelSheet(btn) {
       if (now !== was) await api('/api/sports/channel', { method: 'POST', body: JSON.stringify({ network: input.dataset.net, value: now }) });
     }
     btn.textContent = 'Checking guide…';
-    const r = await api('/api/sports/scan', { method: 'POST', body: JSON.stringify({ extra: document.getElementById('gsScanExtra').value, now: true }) });
+    const r = await api('/api/sports/scan', { method: 'POST', body: JSON.stringify({ extra: document.getElementById('gsScanExtra').value, now: true, prescanNow: !!prescanNow, prescanHour: Number(document.getElementById('gsPrescanHour').value), lineupRanges: document.getElementById('gsLineupRanges').value }) });
     const g = r.guide || {};
-    gamesToast(g.error ? `Saved. Guide: ${g.error}` : `Saved. Guide checked: ${g.entries} programs on ${g.channels} channels.`, !!g.error);
+    gamesToast(prescanNow ? 'Saved. Pre-scan started — the Channel guide fills in over the next few minutes.' : g.error ? `Saved. Guide: ${g.error}` : `Saved. Guide checked: ${g.entries} programs on ${g.channels} channels.`, !!g.error && !prescanNow);
     closeGameSheet();
     GAMES_V = 0;
     loadGames();
