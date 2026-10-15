@@ -346,7 +346,7 @@ function renderSourceColumn() {
   }
   if (!SOURCES.length) { box.innerHTML = '<p class="muted">No sources configured yet. Add one from TSB Platform: Venue Control &rarr; Sources.</p>'; return; }
   box.innerHTML = `
-    <div class="tvs-col-header"><span class="tvs-col-title">1 &middot; Pick a source</span></div>
+    <div class="tvs-col-header"><span class="tvs-col-title">1 &middot; Pick a source</span><button type="button" class="map-bar-btn cg-open" onclick="openChannelGuide()" title="What's on every DirecTV channel right now, and put one on a receiver">Channel guide</button></div>
     <div class="tvsrc-scroll"><div class="tvsrc-list">${SOURCES.map(sourceRowHtml).join('')}</div></div>`;
   armTickers(box);
 }

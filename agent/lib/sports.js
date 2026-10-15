@@ -666,9 +666,54 @@ function start(options) {
   tickTimer = setInterval(tick, TICK_MS);
 }
 
+// ------------------------------------------------------------------ channel guide (Oct 2026)
+// What the receivers' guide says is on right now, for the Channel guide
+// sheet on the TVs and Map pages. Built from the last scan (the networks,
+// the owner's extra ranges, Sunday Ticket block); a scan older than ten
+// minutes is kicked off in the background and the client asks again.
+function networkLabelFor(callsign) {
+  const key = callsign ? callsignKey(callsign) : null;
+  const n = key ? NETWORKS.find((x) => x.keys[0] === key) : null;
+  return n ? n.label : (callsign || '');
+}
+function guideNow(q) {
+  const now = Date.now();
+  const needle = String(q || '').trim().toLowerCase();
+  const byCh = new Map();
+  for (const e of guide.entries || []) {
+    if (e.end <= now) continue;
+    const k = chKey(e);
+    const cur = byCh.get(k);
+    // Keep the entry on now; else the soonest upcoming one.
+    if (!cur || (e.start <= now && cur.start > now) || (e.start > now && cur.start > now && e.start < cur.start)) byCh.set(k, e);
+  }
+  let entries = [...byCh.values()].map((e) => ({
+    major: e.major, minor: e.minor, callsign: e.callsign, network: networkLabelFor(e.callsign), title: e.title, episode: e.episode,
+    start: e.start, end: e.end, onNow: e.start <= now,
+  }));
+  if (needle) {
+    entries = entries.filter((e) => `${e.major} ${e.callsign || ''} ${e.network} ${e.title} ${e.episode}`.toLowerCase().includes(needle));
+  }
+  entries.sort((a, b) => a.major - b.major || (a.minor ?? 0) - (b.minor ?? 0));
+  const stale = now - (guide.at || 0) > 10 * 60 * 1000;
+  if (stale && !guideRunning) { lastGuideAt = now; scanGuide().catch(() => {}); }
+  return { at: guide.at || null, scanning: !!guideRunning || (stale && !guide.entries.length), channels: (guide.entries || []).length ? byCh.size : 0, entries, error: guide.error || null };
+}
+// One channel number the scan doesn't cover: ask a receiver directly.
+async function lookupChannel(major, minor) {
+  const r = (deps.receivers() || []).find((x) => x.ip);
+  if (!r) throw new Error('No DirecTV receiver is answering.');
+  const now = Date.now();
+  const p = await directv.getProgInfo(r.ip, r.port || 8080, major, minor, Math.floor(now / 1000));
+  if (!p || p.isOffAir) return { major, minor, offAir: true };
+  const start = Number(p.startTime) * 1000 || now;
+  return { major, minor, callsign: p.callsign || null, network: networkLabelFor(p.callsign), title: p.title || '', episode: p.episodeTitle || '', start, end: start + (Number(p.duration) || 3600) * 1000, onNow: true };
+}
+
 function version_() { return version; }
 
 module.exports = {
+  guideNow, lookupChannel,
   LEAGUES, NETWORKS, start, tick, sweep, scanGuide, view, version: version_, gameById, optionsFor,
   addPlan, cancelPlan, setNetworkChannel, setGameChannel, setMyTeam, setScanExtra, scanExtra, channelList, guideMatches,
   canonical, normalizeEvent, fetchDay, channelFor, checkChannel,

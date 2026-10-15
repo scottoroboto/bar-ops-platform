@@ -333,6 +333,7 @@ function renderMapBar() {
     bar.innerHTML = `
       <span class="map-bar-note">Hold a game, then drop it on a TV. Tap a TV to pick what it shows.${CAN_EDIT ? '' : ` <i>${escapeHtml(whoLine())} · Edit map needs the owner or a manager (open TV Staff from the Bar Ops app).</i>`}</span>
       <span class="map-bar-gap"></span>
+      <button type="button" class="map-bar-btn" onclick="openChannelGuide()" title="What's on every DirecTV channel right now, and put one on a receiver">Channel guide</button>
       <button type="button" class="map-bar-btn" onclick="toggleFlip()">${FLIP ? 'Unflip' : 'Flip'}</button>
       ${CAN_EDIT && LAYOUT ? '<button type="button" class="map-bar-btn" onclick="editStart()">Edit map</button>' : ''}`;
   }

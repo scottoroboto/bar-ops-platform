@@ -700,6 +700,20 @@ app.get('/api/sports', (req, res) => {
   res.json({ ...sports.view(), canEdit: isManager(req) });
 });
 
+// Channel guide sheet (public/staff_guide.js): what's on now from the
+// last guide scan, filtered by ?q=; a bare number not in the scan is
+// looked up on a receiver right away.
+app.get('/api/sports/guide', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const out = sports.guideNow(q);
+  const m = q.match(/^(\d{1,4})(?:-(\d{1,4}))?$/);
+  if (m && !out.entries.some((e) => e.major === Number(m[1]))) {
+    try { out.lookup = await sports.lookupChannel(Number(m[1]), m[2] ? Number(m[2]) : null); }
+    catch (err) { out.lookup = { major: Number(m[1]), error: err.message }; }
+  }
+  res.json(out);
+});
+
 app.post('/api/sports/tune', async (req, res) => {
   const { gameId, slots, major, minor, force } = req.body || {};
   if (!(Number(major) > 0)) return res.status(400).json({ error: 'This game has no channel yet.' });
