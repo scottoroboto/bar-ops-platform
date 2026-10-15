@@ -91,10 +91,19 @@ async function clockAction(client, person, action, memo, deviceId) {
 
   if (action === 'in') {
     if (open) return { ok: false, error: 'Already clocked in.' };
+    // The punch needs a bar. Home bar first; otherwise the first bar they
+    // work at, then wherever they last punched (maintenance staff with no
+    // home bar hit a bare 500 here, Oct 2026).
+    let locationId = person.location_id || (Array.isArray(person.location_ids) && person.location_ids[0]) || null;
+    if (!locationId) {
+      const { rows: last } = await client.query('SELECT location_id FROM time_entries WHERE person_id = $1 ORDER BY clock_in DESC LIMIT 1', [person.id]);
+      locationId = last[0] ? last[0].location_id : null;
+    }
+    if (!locationId) return { ok: false, error: 'No bar is set on your account yet, so the punch has nowhere to go — ask your manager to set your location.' };
     const { rows } = await client.query(
       `INSERT INTO time_entries (person_id, location_id, clock_in, memo, device_id)
        VALUES ($1,$2, now(), $3, $4) RETURNING *`,
-      [person.id, person.location_id, memo || null, deviceId || null]
+      [person.id, locationId, memo || null, deviceId || null]
     );
     return { ok: true, entry: rows[0] };
   }

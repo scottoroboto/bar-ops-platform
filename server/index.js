@@ -3253,12 +3253,12 @@ res.json(result);
 
 // ---------------- Time Clock ----------------
 app.get('/api/timeclock/status', auth.requireSession('light'), async (req, res) => {
-const result = await req.withAuthedClient((client) => timeclock.getStatus(client, req.person.id));
-res.json(result);
+try { res.json(await req.withAuthedClient((client) => timeclock.getStatus(client, req.person.id))); }
+catch (err) { console.error('[timeclock] status failed', req.person.id, err); res.status(500).json({ ok: false, error: 'Could not load your clock right now. Try again in a minute.' }); }
 });
 app.post('/api/timeclock/punch', auth.requireSession('light'), async (req, res) => {
-const result = await req.withAuthedClient((client) => timeclock.clockAction(client, req.person, req.body.action, req.body.memo, req.body.deviceId));
-res.json(result);
+try { res.json(await req.withAuthedClient((client) => timeclock.clockAction(client, req.person, req.body.action, req.body.memo, req.body.deviceId))); }
+catch (err) { console.error('[timeclock] punch failed', req.person.id, req.body && req.body.action, err); res.status(500).json({ ok: false, error: 'The punch did not save. Try again, and tell your manager if it keeps happening.' }); }
 });
 app.get('/api/timeclock/roster', auth.requireSession('light'), async (req, res) => {
 if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
