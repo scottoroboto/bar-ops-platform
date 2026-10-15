@@ -877,6 +877,10 @@ function openEmployeeDetail(id) {
 
   document.getElementById('detailHomeFields').style.display = 'none';
   document.getElementById('detailSummaryFields').style.display = 'none';
+  // Delete for good: owner, inactive account, not themselves. The server
+  // also refuses anyone with a punch on record.
+  document.getElementById('detailDangerFields').style.display = isOwner && p.status === 'inactive' && p.role !== 'owner' ? '' : 'none';
+  document.getElementById('detailDangerResult').innerHTML = '';
 
   // Role is deliberately a separate section/action from the fields above —
   // see saveEmployeeRole(). Owner can't demote themselves (would leave the
@@ -956,6 +960,20 @@ async function submitResendCredentials() {
   }
 }
 
+async function purgeEmployee() {
+  const id = document.getElementById('detailPersonId').value;
+  const p = ALL_EMPLOYEES.find((x) => x.id === id);
+  const name = p ? p.name : 'this account';
+  if (!confirm(`Delete ${name} for good? This removes the account and any shifts or drafts they have. It can't be undone.`)) return;
+  const resultEl = document.getElementById('detailDangerResult');
+  try {
+    const r = await withStepUp(() => api(`/api/employees/${id}/purge`, { method: 'POST', body: {} }));
+    if (!r.ok) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(r.error)}</p>`; return; }
+    closeEmployeeDetail();
+    showMsg(`${r.name} is gone.`, 'success');
+    await loadAllEmployees();
+  } catch (e) { resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; }
+}
 function closeEmployeeDetail() {
   document.getElementById('employeeDetailModal').style.display = 'none';
   document.getElementById('modalBackdrop').style.display = 'none';

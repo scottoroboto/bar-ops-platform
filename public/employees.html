@@ -288,6 +288,14 @@
     </div>
     <div id="detailRoleResult"></div>
   </div>
+  <div id="detailDangerFields" style="display:none; margin-top:22px; padding-top:18px; border-top:1px solid var(--card-border);">
+    <div class="detail-label" style="margin-bottom:10px;">Delete for good (owner)</div>
+    <p class="muted" style="margin-top:-6px;" id="detailDangerHint">For a test account or a duplicate. Only an inactive account that has never clocked in; their shifts and drafts go with it.</p>
+    <div class="stack-actions">
+      <button class="secondary" style="margin-top:0; border-color:var(--danger); color:var(--danger);" id="detailPurgeBtn" onclick="purgeEmployee()">Delete this account for good</button>
+    </div>
+    <div id="detailDangerResult"></div>
+  </div>
 </div>
 
 <!-- Request pay raise modal (manager) -->

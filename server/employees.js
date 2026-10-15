@@ -537,6 +537,37 @@ async function discardPending({ personId }) {
   });
 }
 
+// Owner-only "delete for good" (Oct 2026): test accounts and duplicates.
+// Only an inactive account that has never clocked in; punches are payroll
+// records and stay. Their drafts, shifts, time off and availability go
+// with them; anything else still pointing at them (a cash count they
+// did, a service call they opened) blocks it with a plain message.
+async function purgePerson({ personId }) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query('SELECT id, name, role, status, photo_path FROM people WHERE id = $1', [personId]);
+    const p = rows[0];
+    if (!p) return { ok: false, error: 'Not found.' };
+    if (p.role === 'owner') return { ok: false, error: 'An owner account can’t be deleted.' };
+    if (p.status === 'active') return { ok: false, error: 'Deactivate the account first, then delete it.' };
+    const { rows: punches } = await client.query('SELECT count(*)::int AS n FROM time_entries WHERE person_id = $1', [personId]);
+    if (punches[0].n) return { ok: false, error: `${p.name} has ${punches[0].n} time clock punch${punches[0].n === 1 ? '' : 'es'} — payroll records — so the account stays. Leave it inactive.` };
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM shift_drafts WHERE person_id = $1', [personId]);
+      await client.query('DELETE FROM shifts WHERE person_id = $1', [personId]);
+      await client.query('DELETE FROM time_off_requests WHERE person_id = $1', [personId]);
+      await client.query('DELETE FROM people WHERE id = $1', [personId]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (err.code === '23503') return { ok: false, error: `${p.name} still has records in the app (${(err.table || 'another table').replace(/_/g, ' ')}), so the account can’t be deleted. Leave it inactive.` };
+      throw err;
+    }
+    if (p.photo_path) await storage.deletePersonPhoto(p.photo_path).catch(() => {});
+    return { ok: true, name: p.name };
+  });
+}
+
 // Emails a prospective hire a link to /apply.html. Not tied to any existing
 // people row (they haven't applied yet), so notifications_log gets a
 // synthetic relatedId just to satisfy its NOT NULL constraint — this is an
@@ -786,6 +817,7 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 }
 
 module.exports = {
+  purgePerson,
   createPendingEmployee, setPersonLocations, getPhotoUrl, setOwnPhoto, removeOwnPhoto, getOwnPhotoUrl, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
   setEmployeeStatus, requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,

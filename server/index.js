@@ -3088,6 +3088,14 @@ const result = await employees.discardPending({ personId: req.params.id });
 res.json(result);
 });
 
+// Owner-only: delete an inactive, never-clocked-in account for good
+// (test accounts, duplicates). See employees.purgePerson for the guards.
+app.post('/api/employees/:id/purge', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+if (String(req.params.id) === String(req.person.id)) return res.status(400).json({ ok: false, error: 'Not your own account.' });
+res.json(await employees.purgePerson({ personId: req.params.id }));
+});
+
 // A person's profile photo (applicants and employees alike), for the
 // Employees app's pending list and data card. Same audience as the
 // lists that show the person: owner sees everyone; a manager sees
