@@ -3021,6 +3021,8 @@ try {
   const person = await employees.createPendingEmployee({ ...req.body, name, email, phone, position, requestedLocationId, photoFile });
   res.json({ ok: true, person });
 } catch (e) {
+  // Already applied / already has an account (employees.findDuplicate).
+  if (e.statusCode === 409) return res.status(409).json({ ok: false, error: e.message });
   // A storage failure (storage.js tags those with statusCode — most
   // likely the bucket/env isn't configured) is nothing the applicant
   // can fix: tell them to try again without the photo rather than

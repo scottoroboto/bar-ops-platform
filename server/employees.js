@@ -81,8 +81,32 @@ function welcomeEmailText({ username, tempPassword, pin, enabledApps }) {
 // (server/storage.js): mint the person's uuid here, upload under it,
 // then INSERT with photo_path already set — one write, no orphaned row
 // if the upload throws. The route has already checked type/size.
+// Someone who already has an account or an open application with this
+// email or phone (Oct 2026: two people applied twice and both copies got
+// activated). Digits-only phone compare; email case-insensitive.
+async function findDuplicate(client, { email, phone, excludeId = null, statuses = ['active', 'pending_review'] }) {
+  const e = String(email || '').trim().toLowerCase();
+  const ph = String(phone || '').replace(/\D/g, '');
+  if (!e && !ph) return null;
+  const { rows } = await client.query(
+    `SELECT id, name, status FROM people
+     WHERE status = ANY($1) AND ($4::uuid IS NULL OR id <> $4)
+       AND (($2 <> '' AND lower(email) = $2) OR ($3 <> '' AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $3))
+     ORDER BY (status = 'active') DESC, created_at LIMIT 1`,
+    [statuses, e, ph, excludeId]);
+  return rows[0] || null;
+}
+
 async function createPendingEmployee({ name, email, phone, position, requestedLocationId, jotformSubmissionId, photoFile }) {
   return withServiceClient(async (client) => {
+    const dup = await findDuplicate(client, { email, phone });
+    if (dup) {
+      const err = new Error(dup.status === 'active'
+        ? 'There is already an account with this email or phone. Sign in instead, or ask your manager if you can’t get in.'
+        : 'An application with this email or phone is already waiting for review. Your manager will get to it — no need to apply again.');
+      err.statusCode = 409;
+      throw err;
+    }
     const id = crypto.randomUUID();
     let photoPath = null;
     if (photoFile) {
@@ -225,7 +249,11 @@ async function listPending() {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
       `SELECT id, name, email, phone, location_id, position, pay_rate, created_at, department,
-              (photo_path IS NOT NULL) AS has_photo, ${LOCATION_IDS_SQL} AS location_ids
+              (photo_path IS NOT NULL) AS has_photo, ${LOCATION_IDS_SQL} AS location_ids,
+              (SELECT a.name FROM people a WHERE a.status = 'active' AND a.id <> people.id
+                 AND ((people.email IS NOT NULL AND people.email <> '' AND lower(a.email) = lower(people.email))
+                   OR (people.phone IS NOT NULL AND people.phone <> '' AND regexp_replace(COALESCE(a.phone, ''), '\\D', '', 'g') = regexp_replace(people.phone, '\\D', '', 'g')))
+                 ORDER BY a.created_at LIMIT 1) AS duplicate_of
        FROM people WHERE status = 'pending_review' ORDER BY created_at ASC`
     );
     return rows;
@@ -266,6 +294,8 @@ async function activateEmployee({ personId, appAccess, payrollOnFile = true, act
     const person = existingRows[0];
     if (!person) return { ok: false, error: 'Employee not found.' };
     if (person.status === 'active') return { ok: false, error: 'Already active.' };
+    const dup = await findDuplicate(client, { email: person.email, phone: person.phone, excludeId: personId, statuses: ['active'] });
+    if (dup) return { ok: false, error: `${dup.name} already has an active account with this email or phone. This looks like a second application — discard it instead of activating.` };
 
     let username = person.username;
     let tempPassword = null;

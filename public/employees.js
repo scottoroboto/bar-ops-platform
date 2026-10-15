@@ -205,6 +205,7 @@ function renderPendingList() {
       <div style="flex:1; min-width:0;">
         <div class="name">${escapeHtml(p.name)}</div>
         <div class="sub">${escapeHtml(p.email || p.phone || 'no contact on file')} · ${p.position ? escapeHtml(p.position) + ' · ' : ''}${personLocationIds(p).length ? escapeHtml(personLocationIds(p).map(locationName).join(', ')) : 'no location yet'}</div>
+        ${p.duplicate_of ? `<div class="sub" style="color:var(--danger); font-weight:700;">Same email or phone as ${escapeHtml(p.duplicate_of)}, who is already active — probably a second application. Discard it.</div>` : ''}
       </div>
       <div class="stack-actions" style="margin-top:0;">
         ${p.id === discardConfirmId ? `
