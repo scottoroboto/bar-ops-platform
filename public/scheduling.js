@@ -307,7 +307,7 @@ async function renderScheduler() {
     <div class="card" style="position:relative;">
       <label>Schedules</label>
       <div class="picker-btn" id="schedPickerBtn" onclick="toggleSchedPicker(event)"></div>
-      <div class="picker-popover" id="schedPickerPopover" style="display:none;"></div>
+      <div class="picker-popover" id="schedPickerPopover" style="display:none;" onclick="event.stopPropagation()"></div>
     </div>
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
@@ -372,6 +372,8 @@ function closeSchedPicker() {
   if (pop) pop.style.display = 'none';
   document.removeEventListener('click', closeSchedPickerOnOutsideClick);
 }
+// Stays open while schedules are ticked (the popover swallows its own
+// clicks above); a click anywhere else closes it.
 function closeSchedPickerOnOutsideClick(evt) {
   const pop = document.getElementById('schedPickerPopover');
   const btn = document.getElementById('schedPickerBtn');

@@ -278,6 +278,12 @@ async function sendOnboardingInvite() {
 let ALL_EMPLOYEES = [];
 let LOC_FILTER = 'all';
 let DEPT_FILTER = 'all'; // 'all' | 'bar' | 'kitchen' — the sub-row under a bar chip (Oct 2026)
+let SETUP_FILTER = false; // owner: only people whose access hasn't been set up yet
+// "Set up" = the owner has been through their Access page: a department
+// and at least one schedule they can work. Staff and managers only.
+function needsSetup(p) {
+  return p.status === 'active' && p.role !== 'owner' && p.role !== 'maintenance' && (!p.department || !(p.schedules_n > 0));
+}
 
 async function loadAllEmployees() {
   if (ME.role !== 'owner' && ME.role !== 'manager') return;
@@ -295,9 +301,11 @@ function renderLocFilters() {
     .concat([{ key: 'maint', label: 'Maint' }]);
   const isBar = LOCATIONS.some(l => String(l.id) === String(LOC_FILTER));
   const sub = [{ key: 'all', label: 'Everyone' }, { key: 'bar', label: 'Bar' }, { key: 'kitchen', label: 'Kitchen' }];
+  const needN = ME.role === 'owner' ? ALL_EMPLOYEES.filter(needsSetup).length : 0;
+  const setupChip = ME.role === 'owner' ? `<button type="button" class="loc-filter setup ${SETUP_FILTER ? 'active' : ''}" onclick="SETUP_FILTER = !SETUP_FILTER; renderLocFilters(); renderAllEmployees();" title="Active people with no department or no schedule they can work yet — open their Access page">Needs setup${needN ? ` <b>${needN}</b>` : ''}</button>` : '';
   document.getElementById('locFilters').innerHTML = chips.map(c =>
     `<button type="button" class="loc-filter ${LOC_FILTER === c.key ? 'active' : ''}" onclick="setLocFilter('${c.key}')">${escapeHtml(c.label)}</button>`
-  ).join('') + (isBar ? `<div class="loc-filters sub">${sub.map(c =>
+  ).join('') + setupChip + (isBar ? `<div class="loc-filters sub">${sub.map(c =>
     `<button type="button" class="loc-filter small ${DEPT_FILTER === c.key ? 'active' : ''}" onclick="setDeptFilter('${c.key}')">${c.label}</button>`).join('')}</div>` : '');
 }
 
@@ -330,6 +338,11 @@ function applyLocFilter(list) {
   if (DEPT_FILTER !== 'all') out = out.filter(p => { const d = personDept(p); return d === DEPT_FILTER || d === 'both'; });
   return out;
 }
+function applySetupFilter(list) {
+  if (!SETUP_FILTER) return list;
+  // Newest sign-ups first: that's the pile to work through.
+  return list.filter(needsSetup).sort((a, b) => String(b.hire_date || '').localeCompare(String(a.hire_date || '')));
+}
 
 // Status filter — a plain select like Sort by, not a chip row like
 // LOC_FILTER, so it's read straight from the DOM rather than tracked in a
@@ -355,7 +368,7 @@ function applySort(list) {
 function renderAllEmployees() {
   const el = document.getElementById('employeeList');
   if (!ALL_EMPLOYEES.length) { el.innerHTML = '<p class="muted">No active employees yet.</p>'; return; }
-  const rows = applySort(applyStatusFilter(applyLocFilter(ALL_EMPLOYEES)));
+  const rows = applySort(applyStatusFilter(applySetupFilter(applyLocFilter(ALL_EMPLOYEES))));
   if (!rows.length) { el.innerHTML = '<p class="muted">Nobody matches this filter.</p>'; return; }
   el.innerHTML = rows.map(empRowHtml).join('');
 }
@@ -433,7 +446,7 @@ function lockBadgeHtml(p) {
 // the card.
 function empRowHtml(p) {
   const nameBlock = `<div class="emp-who">
-      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}${lockBadgeHtml(p)}</div>
+      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}${lockBadgeHtml(p)}${ME.role === 'owner' && needsSetup(p) ? ` <span class="badge danger" title="${!p.department ? 'No department yet' : 'No schedule they can work yet'} — open their Access page">needs setup</span>` : ''}</div>
       <div class="emp-roleinfo">${escapeHtml(cap(p.role))} &middot; ${escapeHtml(p.position || '—')} <span class="emp-locs">${locChipsHtml(p)}</span></div>
     </div>`;
   if (ME.role === 'owner') {

@@ -466,6 +466,8 @@ async function listAllWithAccess(locationFilter) {
     }
     const { rows: people } = await client.query(
       `SELECT id, name, role, location_id, ${LOCATION_IDS_SQL} AS location_ids, username, email, phone, address, status, position, pay_rate, department,
+              (SELECT count(*)::int FROM employee_schedules es WHERE es.person_id = people.id) AS schedules_n,
+              (SELECT count(*)::int FROM employee_positions ep WHERE ep.person_id = people.id) AS positions_n,
               password_verified_at, (photo_path IS NOT NULL) AS has_photo,
               pin_locked_at, password_locked_at,
               activated_at, COALESCE(activated_at, created_at) AS hire_date

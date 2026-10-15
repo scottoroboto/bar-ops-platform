@@ -391,6 +391,10 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
   border: 1px solid var(--card-border); background: transparent; color: var(--muted); cursor: pointer;
 }
 .loc-filter.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.loc-filter.setup { border-color: var(--danger); color: var(--danger); }
+.loc-filter.setup.active { background: var(--danger); color: #fff; }
+.loc-filter.setup b { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; text-align: center; }
+.loc-filter.setup.active b { background: #fff; color: var(--danger); }
 .loc-filters.sub { width: 100%; padding-left: 6px; margin-top: 2px; }
 .loc-filter.small { font-size: 12px; padding: 3px 10px; }
 .roster-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
@@ -520,6 +524,7 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .sc-preset-save { font-size: 13px; color: #4f8dfd; text-decoration: none; padding: 6px 2px; }
 /* Add shift: Sat–Fri day boxes */
 .sc-days { display: flex; flex-wrap: nowrap; gap: 4px; margin: 4px 0 10px; }
+.sc-days .sc-day { margin: 0; } /* the page's label:first-child rule gave Sat a different margin */
 .sc-day { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 5px 0 6px; border: 1px solid var(--card-border); border-radius: 8px; font-size: 12px; cursor: pointer; user-select: none; }
 .sc-day input { margin: 0; width: auto; }
 .sc-day.own { border-color: #4f8dfd; color: #8fb6ff; }
