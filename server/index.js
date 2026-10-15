@@ -3020,6 +3020,7 @@ if (photoFile && photoFileError(photoFile)) return res.status(400).json({ ok: fa
 try {
   const person = await employees.createPendingEmployee({ ...req.body, name, email, phone, position, requestedLocationId, photoFile });
   res.json({ ok: true, person });
+  employees.notifyNewApplicant(person).catch((err) => console.error('[employees] applicant notify', err.message));
 } catch (e) {
   // Already applied / already has an account (employees.findDuplicate).
   if (e.statusCode === 409) return res.status(409).json({ ok: false, error: e.message });

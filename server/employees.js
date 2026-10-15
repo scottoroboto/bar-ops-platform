@@ -568,6 +568,29 @@ async function purgePerson({ personId }) {
   });
 }
 
+// A new application came in: tell the owner(s) right away, by text when
+// their alert settings take texts (Employees > Notifications / My
+// alert settings), by email otherwise. Never blocks the applicant.
+async function notifyNewApplicant(person) {
+  return withServiceClient(async (client) => {
+    const { rows: owners } = await client.query(
+      `SELECT p.id, p.name, p.phone, p.email, COALESCE(mns.notify_channel, 'email') AS channel
+       FROM people p LEFT JOIN monitoring_notify_settings mns ON mns.person_id = p.id
+       WHERE p.role = 'owner' AND p.status = 'active'`);
+    const { rows: loc } = person.location_id ? await client.query('SELECT name FROM locations WHERE id = $1', [person.location_id]) : { rows: [] };
+    const where = loc[0] ? loc[0].name : 'no bar picked';
+    const base = (process.env.APP_BASE_URL || 'https://app.ticketsportsbar.com').replace(/\/$/, '');
+    const link = `${base}/employees.html`;
+    const line = `${person.name} applied for ${person.position || 'a job'} at ${where}.`;
+    for (const o of owners) {
+      const wantsSms = (o.channel === 'sms' || o.channel === 'both') && o.phone;
+      const wantsEmail = (o.channel === 'email' || o.channel === 'both' || !wantsSms) && o.email;
+      if (wantsSms) await notify.sendSms(client, 'people', person.id, o.phone, `New application: ${line}\nReview and set up: ${link}`).catch((err) => console.error('[employees] applicant sms', err.message));
+      if (wantsEmail) await notify.sendEmail(client, 'people', person.id, o.email, `New application: ${person.name}`, `${line}\n\nReview the application and set up their access: ${link}`).catch((err) => console.error('[employees] applicant email', err.message));
+    }
+  });
+}
+
 // Emails a prospective hire a link to /apply.html. Not tied to any existing
 // people row (they haven't applied yet), so notifications_log gets a
 // synthetic relatedId just to satisfy its NOT NULL constraint — this is an
@@ -817,6 +840,7 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 }
 
 module.exports = {
+  notifyNewApplicant,
   purgePerson,
   createPendingEmployee, setPersonLocations, getPhotoUrl, setOwnPhoto, removeOwnPhoto, getOwnPhotoUrl, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
