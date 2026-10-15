@@ -700,18 +700,14 @@ app.get('/api/sports', (req, res) => {
   res.json({ ...sports.view(), canEdit: isManager(req) });
 });
 
-// Channel guide sheet (public/staff_guide.js): what's on now from the
-// last guide scan, filtered by ?q=; a bare number not in the scan is
-// looked up on a receiver right away.
-app.get('/api/sports/guide', async (req, res) => {
-  const q = String(req.query.q || '').trim();
-  const out = sports.guideNow(q);
-  const m = q.match(/^(\d{1,4})(?:-(\d{1,4}))?$/);
-  if (m && !out.entries.some((e) => e.major === Number(m[1]))) {
-    try { out.lookup = await sports.lookupChannel(Number(m[1]), m[2] ? Number(m[2]) : null); }
-    catch (err) { out.lookup = { major: Number(m[1]), error: err.message }; }
-  }
-  res.json(out);
+// Channel guide sheet (public/staff_guide.js): a time grid from the
+// receivers' guide. ?from=<ms> picks the 3-hour window, ?q= filters rows,
+// ?extra=618,705-1 adds channel numbers the scan list doesn't cover.
+app.get('/api/sports/guide', (req, res) => {
+  const extra = String(req.query.extra || '').split(',').map((s) => s.trim()).filter(Boolean).map((s) => {
+    const m = s.match(/^(\d{1,4})(?:-(\d{1,4}))?$/); return m ? { major: Number(m[1]), minor: m[2] ? Number(m[2]) : null } : null;
+  }).filter(Boolean);
+  res.json(sports.guideGrid({ from: Number(req.query.from) || undefined, q: req.query.q, extra }));
 });
 
 app.post('/api/sports/tune', async (req, res) => {

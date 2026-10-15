@@ -667,53 +667,124 @@ function start(options) {
 }
 
 // ------------------------------------------------------------------ channel guide (Oct 2026)
-// What the receivers' guide says is on right now, for the Channel guide
-// sheet on the TVs and Map pages. Built from the last scan (the networks,
-// the owner's extra ranges, Sunday Ticket block); a scan older than ten
-// minutes is kicked off in the background and the client asks again.
+// A time grid for the Channel guide sheet on the TVs and Map pages:
+// channels down, half hours across, like the DirecTV guide. A receiver
+// only answers "what's on channel N at time T", so each channel is
+// walked forward through the window using the programs' own durations
+// (a few calls per channel). Windows are cached ten minutes; the scan
+// fills in as it goes and the client polls while `scanning`.
+const GRID_HOURS = 3;
+const GRID_MAX_CALLS_PER_CHANNEL = 8;
+let grid = cache.get('sportsGrid') || { windows: {} }; // key "from" -> { from, to, at, done, entries: [{ major, minor, callsign, title, episode, start, end }], errors }
+const gridRunning = new Map();                            // key -> promise
+
 function networkLabelFor(callsign) {
   const key = callsign ? callsignKey(callsign) : null;
   const n = key ? NETWORKS.find((x) => x.keys[0] === key) : null;
   return n ? n.label : (callsign || '');
 }
-function guideNow(q) {
+function windowKey(from) { return String(Math.floor(from / (30 * 60 * 1000)) * 30 * 60 * 1000); }
+function windowFor(from) {
+  const f = Number(windowKey(from));
+  return { key: String(f), from: f, to: f + GRID_HOURS * 3600 * 1000 };
+}
+
+async function scanWindowNow(win, channels) {
+  const rcvs = (deps.receivers() || []).filter((r) => r.ip);
+  const w = grid.windows[win.key] = { from: win.from, to: win.to, at: Date.now(), done: false, entries: [], errors: 0 };
+  if (!rcvs.length) { w.done = true; w.error = 'No DirecTV receiver is answering.'; return w; }
+  const jobs = channels.slice();
+  await Promise.all(rcvs.map(async (r) => {
+    while (jobs.length) {
+      const c = jobs.shift();
+      let t = win.from;
+      for (let i = 0; i < GRID_MAX_CALLS_PER_CHANNEL && t < win.to; i += 1) {
+        let p;
+        try { p = await directv.getProgInfo(r.ip, r.port || 8080, c.major, c.minor, Math.floor(t / 1000)); }
+        catch (err) { w.errors += 1; break; }       // not in the lineup, or a busy receiver
+        if (!p || p.isOffAir) break;
+        const start = Number(p.startTime) * 1000 || t;
+        const end = start + (Number(p.duration) || 1800) * 1000;
+        if (!w.entries.some((e) => e.major === c.major && (e.minor ?? null) === (c.minor ?? null) && e.start === start)) {
+          w.entries.push({ major: c.major, minor: c.minor, callsign: p.callsign || null, title: p.title || '', episode: p.episodeTitle || '', start, end });
+        }
+        if (end <= t) break;                        // a receiver answered nonsense; don't loop
+        t = end + 1000;
+      }
+    }
+  }));
+  w.done = true;
+  w.at = Date.now();
+  cache.set('sportsGrid', grid);
+  return w;
+}
+function scanWindow(win, channels) {
+  if (!gridRunning.has(win.key)) {
+    gridRunning.set(win.key, scanWindowNow(win, channels).finally(() => gridRunning.delete(win.key)));
+  }
+  return gridRunning.get(win.key);
+}
+
+// What the sheet asks for: { from, q, extra: [{major, minor}] }.
+// extra = channel numbers typed in that the scan list doesn't cover;
+// they're walked the same way and appear as their own rows.
+function guideGrid({ from, q, extra = [] } = {}) {
   const now = Date.now();
+  const win = windowFor(Math.max(Number(from) || now, now - 2 * 3600 * 1000));
+  const channels = scanChannels();
+  const keyOf = (c) => chKey(c);
+  const have = new Set(channels.map(keyOf));
+  for (const x of extra) if (x && x.major > 0 && !have.has(keyOf(x))) { channels.push({ major: Number(x.major), minor: x.minor == null ? null : Number(x.minor) }); have.add(keyOf(x)); }
+  let w = grid.windows[win.key];
+  const stale = !w || now - w.at > 10 * 60 * 1000;
+  // Channels typed in since the window was scanned get their own pass.
+  const missing = w ? channels.filter((c) => !w.scanned || !w.scanned.has(keyOf(c))) : channels;
+  if ((stale || missing.length) && !gridRunning.has(win.key)) {
+    if (stale) {
+      scanWindow(win, channels).catch(() => {});
+      w = grid.windows[win.key];
+      w.scanned = new Set(channels.map(keyOf));
+    } else {
+      const addKeys = missing.map(keyOf);
+      const prev = w;
+      gridRunning.set(win.key, (async () => {
+        const part = { from: win.from, to: win.to, at: Date.now(), done: false, entries: [], errors: 0 };
+        const saved = grid.windows[win.key];
+        grid.windows[win.key] = part;
+        await scanWindowNow(win, missing).catch(() => {});
+        const got = grid.windows[win.key];
+        grid.windows[win.key] = { ...prev, entries: [...(saved ? saved.entries : []), ...got.entries], at: Date.now(), done: true, scanned: new Set([...(prev.scanned || []), ...addKeys]) };
+        cache.set('sportsGrid', grid);
+      })().finally(() => gridRunning.delete(win.key)));
+      w = grid.windows[win.key] = { ...prev, done: false };
+    }
+  }
+  if (!w) w = { from: win.from, to: win.to, at: null, done: false, entries: [] };
+  // Rows: every channel, with its programs clipped to the window.
   const needle = String(q || '').trim().toLowerCase();
   const byCh = new Map();
-  for (const e of guide.entries || []) {
-    if (e.end <= now) continue;
-    const k = chKey(e);
-    const cur = byCh.get(k);
-    // Keep the entry on now; else the soonest upcoming one.
-    if (!cur || (e.start <= now && cur.start > now) || (e.start > now && cur.start > now && e.start < cur.start)) byCh.set(k, e);
+  for (const c of channels) byCh.set(keyOf(c), { major: c.major, minor: c.minor, callsign: null, network: '', programs: [] });
+  for (const e of w.entries || []) {
+    if (e.end <= win.from || e.start >= win.to) continue;
+    const row = byCh.get(chKey(e));
+    if (!row) continue;
+    if (!row.callsign && e.callsign) { row.callsign = e.callsign; row.network = networkLabelFor(e.callsign); }
+    row.programs.push({ title: e.title, episode: e.episode, start: e.start, end: e.end, onNow: e.start <= now && e.end > now });
   }
-  let entries = [...byCh.values()].map((e) => ({
-    major: e.major, minor: e.minor, callsign: e.callsign, network: networkLabelFor(e.callsign), title: e.title, episode: e.episode,
-    start: e.start, end: e.end, onNow: e.start <= now,
-  }));
-  if (needle) {
-    entries = entries.filter((e) => `${e.major} ${e.callsign || ''} ${e.network} ${e.title} ${e.episode}`.toLowerCase().includes(needle));
-  }
-  entries.sort((a, b) => a.major - b.major || (a.minor ?? 0) - (b.minor ?? 0));
-  const stale = now - (guide.at || 0) > 10 * 60 * 1000;
-  if (stale && !guideRunning) { lastGuideAt = now; scanGuide().catch(() => {}); }
-  return { at: guide.at || null, scanning: !!guideRunning || (stale && !guide.entries.length), channels: (guide.entries || []).length ? byCh.size : 0, entries, error: guide.error || null };
-}
-// One channel number the scan doesn't cover: ask a receiver directly.
-async function lookupChannel(major, minor) {
-  const r = (deps.receivers() || []).find((x) => x.ip);
-  if (!r) throw new Error('No DirecTV receiver is answering.');
-  const now = Date.now();
-  const p = await directv.getProgInfo(r.ip, r.port || 8080, major, minor, Math.floor(now / 1000));
-  if (!p || p.isOffAir) return { major, minor, offAir: true };
-  const start = Number(p.startTime) * 1000 || now;
-  return { major, minor, callsign: p.callsign || null, network: networkLabelFor(p.callsign), title: p.title || '', episode: p.episodeTitle || '', start, end: start + (Number(p.duration) || 3600) * 1000, onNow: true };
+  let rows = [...byCh.values()];
+  for (const r of rows) r.programs.sort((a, b) => a.start - b.start);
+  if (needle) rows = rows.filter((r) => `${r.major} ${r.callsign || ''} ${r.network} ${r.programs.map((p) => `${p.title} ${p.episode}`).join(' ')}`.toLowerCase().includes(needle));
+  else rows = rows.filter((r) => r.programs.length || !w.done);
+  rows.sort((a, b) => a.major - b.major || (a.minor ?? 0) - (b.minor ?? 0));
+  const slots = [];
+  for (let t = win.from; t < win.to; t += 30 * 60 * 1000) slots.push(t);
+  return { from: win.from, to: win.to, now, slots, rows, scanning: !w.done || gridRunning.has(win.key), at: w.at, error: w.error || null, channels: channels.length };
 }
 
 function version_() { return version; }
 
 module.exports = {
-  guideNow, lookupChannel,
+  guideGrid,
   LEAGUES, NETWORKS, start, tick, sweep, scanGuide, view, version: version_, gameById, optionsFor,
   addPlan, cancelPlan, setNetworkChannel, setGameChannel, setMyTeam, setScanExtra, scanExtra, channelList, guideMatches,
   canonical, normalizeEvent, fetchDay, channelFor, checkChannel,
