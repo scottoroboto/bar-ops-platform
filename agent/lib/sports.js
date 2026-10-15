@@ -687,7 +687,7 @@ const GRID_HOURS = 3;
 const GRID_MAX_CALLS_PER_CHANNEL = 8;
 const DAY_MAX_CALLS_PER_CHANNEL = 40;
 const DEFAULT_LINEUP_RANGES = '2-99, 200-399, 600-799';
-const DEFAULT_PRESCAN_HOUR = 8;          // bar time; the scan covers from here to 3am
+const DEFAULT_PRESCAN_HOUR = 6;          // bar time (Scotto: 6-7am); the scan covers from here to 3am
 const PRESCAN_END_HOUR = 3;
 const COVER_FRESH_MS = 20 * 60 * 60 * 1000;
 
