@@ -137,6 +137,7 @@ function renderNowPlaying() {
     <div class="mu-song">${escapeHtml(t.title || (m.playing ? '…' : 'Paused'))}</div>
     <div class="mu-artist">${escapeHtml(t.artist || '')}</div>
     <div class="mu-station">${station ? `<b>STATION</b>${escapeHtml(station)}` : ''}</div>
+    ${m.shuffle && m.shuffle.on ? `<div class="mu-shuffling">&#128256; Shuffling <b>${escapeHtml(m.shuffle.listName)}</b> · one song per station · ${m.shuffle.songs || 0} so far <button type="button" class="mu-mini" onclick="setShuffle('${escapeHtml(m.shuffle.listId)}', false)">STOP</button></div>` : ''}
     <div class="mu-transport">
       <button class="mu-tb${busy('previous')}" onclick="musicCmd('previous')" title="Previous">&#9198;</button>
       ${m.playing
@@ -192,6 +193,7 @@ function renderStations() {
       <button type="button" class="mu-sort mu-favbtn${list || showingDeleted ? ' on' : ''}" onclick="toggleFavMenu()">${favLabel} &#9662;</button>
       ${FAV_MENU_OPEN ? favMenuHtml() : ''}
     </div>
+    ${list ? `<button type="button" class="mu-sort mu-shuffle${m.shuffle && m.shuffle.on && String(m.shuffle.listId) === String(list.id) ? ' on' : ''}${MUSIC_BUSY === 'shuffle' ? ' busy' : ''}" onclick="setShuffle('${list.id}', !(m.shuffle && m.shuffle.on && String(m.shuffle.listId) === String(list.id)))" title="One song from each station in this list, in random order">&#128256; Shuffle</button>` : ''}
     ${list ? `<button type="button" class="mu-sort" onclick="openSheet({ kind: 'listmenu', list: listById('${list.id}') })" title="Copy or delete this list">&#8943;</button>` : ''}
     ${m.pandora && m.pandora.enabled ? `<button type="button" class="mu-sort mu-add" onclick="openSheet({ kind: 'add' })">&#65291; Add station</button>` : ''}
   </div>
@@ -294,7 +296,7 @@ function favMenuHtml() {
   const hiddenCount = ((MUSIC && MUSIC.hiddenStations) || []).length;
   return `<div class="mu-menu" onclick="event.stopPropagation()">
     <button type="button" class="mu-menu-item create" onclick="openSheet({ kind: 'newlist' })">&#65291; Create your favorites list</button>
-    ${lists.map((l) => `<button type="button" class="mu-menu-item${STATION_SORT === 'list:' + l.id ? ' on' : ''}" onclick="setStationSort('list:${l.id}')">&#9733; ${escapeHtml(l.name)} <span class="n">${(l.stations || []).length}</span></button>`).join('')}
+    ${lists.map((l) => `<button type="button" class="mu-menu-item${STATION_SORT === 'list:' + l.id ? ' on' : ''}" onclick="setStationSort('list:${l.id}')">&#9733; ${escapeHtml(l.name)}${MUSIC && MUSIC.shuffle && MUSIC.shuffle.on && String(MUSIC.shuffle.listId) === String(l.id) ? ' &#128256;' : ''} <span class="n">${(l.stations || []).length}</span></button>`).join('')}
     ${!lists.length ? '<div class="mu-menu-empty muted">No lists yet</div>' : ''}
     <div class="mu-menu-sep"></div>
     ${hiddenCount ? `<button type="button" class="mu-menu-item dim${STATION_SORT === 'deleted-stations' ? ' on' : ''}" onclick="setStationSort('deleted-stations')">Deleted stations <span class="n">${hiddenCount}</span></button>` : ''}
@@ -481,6 +483,16 @@ async function stationPurge(uri, favoriteId, title) {
   catch (e) { alert(e.message); }
 }
 
+async function setShuffle(listId, on) {
+  if (MUSIC_BUSY) return;
+  MUSIC_BUSY = 'shuffle'; renderStations();
+  try {
+    const r = await api('/api/music/shuffle', { method: 'POST', body: JSON.stringify({ listId, on }) });
+    MUSIC = { ...MUSIC, ...(r.state || {}), shuffle: r.shuffle };
+  } catch (e) { alert(e.message); }
+  MUSIC_BUSY = null; renderPage();
+  setTimeout(refreshAll, 2000);
+}
 async function musicStation(id) {
   if (MUSIC_BUSY) return;
   MUSIC_BUSY = id; renderStations();

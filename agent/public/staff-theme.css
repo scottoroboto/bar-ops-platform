@@ -1072,6 +1072,10 @@ body.staff {
 /* Music: favorites lists (patch_040) — menu, long-press sheet, stars */
 .staff .mu-favwrap { position: relative; }
 .staff .mu-favbtn { white-space: nowrap; }
+.staff .mu-shuffle { white-space: nowrap; }
+.staff .mu-shuffle.on { color: #06110A; background: var(--neon-cyan); border-color: var(--neon-cyan); }
+.staff .mu-shuffling { margin-top: 6px; font-size: 12px; color: var(--muted-strong); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.staff .mu-shuffling b { color: var(--neon-cyan); }
 .staff .mu-menu {
   position: absolute; right: 0; top: 50px; z-index: 20; min-width: 380px; max-height: 60vh; overflow-y: auto;
   background: #14141B; border: 1px solid var(--border-strong); border-radius: 12px; padding: 6px; box-shadow: 0 16px 40px rgba(0,0,0,0.6);

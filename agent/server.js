@@ -14,6 +14,7 @@ const health = require('./lib/health');
 const speedtest = require('./lib/speedtest');
 const sonos = require('./lib/sonos');
 const pandora = require('./lib/pandora');
+const shuffle = require('./lib/shuffle');
 const sports = require('./lib/sports');
 const kitchen = require('./lib/kitchen');
 const sensors = require('./lib/sensors');
@@ -256,6 +257,7 @@ app.get('/api/music/state', async (req, res) => {
     lists: config.music_lists || [],
     currentFavoriteId: currentStationId(all),
     pandora: pandora.status(),
+    shuffle: shuffle.status(),
     isOwner: req.vcActor === 'admin',
   });
 });
@@ -330,23 +332,39 @@ app.post('/api/music/pandora/add', async (req, res) => {
     res.json({ ok: true, station: { id: `P:${st.stationId}`, title: st.name, art: st.art }, playing, playError });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
+// One place that starts a station by id (a tap, or the list shuffle).
+async function playStation(id) {
+  if (String(id).startsWith('P:')) {
+    const s = pandora.stationById(String(id).slice(2));
+    if (!s) throw new Error('That station is no longer on the Pandora account.');
+    return sonos.playPandoraStation(s);
+  }
+  return sonos.playFavorite(String(id));
+}
 app.post('/api/music/station', async (req, res) => {
   const { id } = req.body || {};
   if (!id) return res.status(400).json({ error: 'Missing station "id".' });
   try {
-    let r;
-    if (String(id).startsWith('P:')) {
-      const s = pandora.stationById(String(id).slice(2));
-      if (!s) return res.status(404).json({ error: 'That station is no longer on the Pandora account.' });
-      r = await sonos.playPandoraStation(s);
-    } else {
-      r = await sonos.playFavorite(String(id));
-    }
+    if (shuffle.status().on) shuffle.stop('station picked by hand');
+    const r = await playStation(id);
     activity.record('music.station', { actor: req.vcActor, targetType: 'music', targetId: null, detail: { station: r.station } });
-    res.json({ ok: true, ...r });
+    res.json({ ok: true, ...r, shuffle: shuffle.status() });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+// Shuffle a favorites list: one song per station, then another station
+// from the same list (lib/shuffle.js). { listId, on }.
+app.post('/api/music/shuffle', async (req, res) => {
+  const { listId, on } = req.body || {};
+  try {
+    if (!on) return res.json({ ok: true, shuffle: shuffle.stop('turned off') });
+    const list = ((cache.get('config') || {}).music_lists || []).find((l) => String(l.id) === String(listId) && !l.deleted_at);
+    if (!list) return res.status(404).json({ error: 'That list is gone.' });
+    const st = await shuffle.start({ list, stations: musicStations() });
+    activity.record('music.shuffle', { actor: req.vcActor, targetType: 'music', targetId: String(list.id), detail: { list: list.name } });
+    res.json({ ok: true, shuffle: st, state: sonos.getState() });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 // ---------------- Attention: TVs the bar should look at (cloud patch_034) ----------------
@@ -1345,6 +1363,8 @@ app.listen(config.PORT, () => {
   health.start();
   speedtest.start();
   sonos.start();
+  shuffle.init({ sonos, stations: musicStations, playStation, log: (m) => console.log(m) });
+  setInterval(() => shuffle.tick().catch((e) => console.error('[shuffle] tick', e.message)), 4000);
   pandora.start();
   kitchen.start();
   sensors.start();
