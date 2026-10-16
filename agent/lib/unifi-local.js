@@ -55,6 +55,7 @@ async function login() {
 }
 
 async function authed(method, path, body) {
+  if (path.includes('__SITE__')) { if (!config.UNIFI_SITE) await resolveSite(); path = path.replace('__SITE__', site()); }
   if (!session || Date.now() - session.at > 30 * 60 * 1000) await login();
   const headers = { Cookie: session.cookie, ...(session.csrf ? { 'X-CSRF-Token': session.csrf } : {}) };
   let res = await request(method, path, body, headers);
@@ -66,7 +67,36 @@ async function authed(method, path, body) {
   return res;
 }
 
-const site = () => config.UNIFI_SITE || 'default';
+// Which Network site to read. UNIFI_SITE when set; otherwise the site
+// on this controller that actually holds the adopted devices, found
+// once an hour. (Oct 2026: T2's new CloudKey came with an empty
+// "Default" site next to the live one, and the box reported 0 clients
+// because it was asking Default.)
+let resolvedSite = null; let resolvedAt = 0; let resolving = null;
+const site = () => config.UNIFI_SITE || resolvedSite || 'default';
+async function resolveSite() {
+  if (config.UNIFI_SITE) return config.UNIFI_SITE;
+  if (resolvedSite && Date.now() - resolvedAt < 60 * 60 * 1000) return resolvedSite;
+  if (resolving) return resolving;
+  resolving = (async () => {
+    try {
+      const r = await authed('GET', '/proxy/network/api/self/sites');
+      const sites = (r.json && r.json.data) || [];
+      let best = null;
+      for (const st of sites) {
+        const d = await authed('GET', `/proxy/network/api/s/${st.name}/stat/device`);
+        const n = ((d.json && d.json.data) || []).length;
+        if (!best || n > best.n) best = { name: st.name, n, desc: st.desc };
+      }
+      if (best && best.name !== resolvedSite) console.log(`[unifi] reading site "${best.desc || best.name}" (${best.n} device${best.n === 1 ? '' : 's'})`);
+      if (best) { resolvedSite = best.name; resolvedAt = Date.now(); }
+      return site();
+    } catch (err) {
+      return site();
+    } finally { resolving = null; }
+  })();
+  return resolving;
+}
 
 // Where the gateway keeps its last speed test depends on the Network
 // version. Newer releases (10.x on Scotto's T1 UDM, 2026-09-26) put it on
@@ -79,7 +109,7 @@ function isGateway(d) {
 }
 
 async function gatewayDevice() {
-  const res = await authed('GET', `/proxy/network/api/s/${site()}/stat/device`);
+  const res = await authed('GET', `/proxy/network/api/s/__SITE__/stat/device`);
   if (res.status !== 200) throw new Error(`UniFi device read failed (${res.status}).`);
   return ((res.json && res.json.data) || []).find(isGateway) || null;
 }
@@ -101,7 +131,7 @@ async function lastResult() {
       via: 'device',
     };
   }
-  const res = await authed('GET', `/proxy/network/api/s/${site()}/stat/health`);
+  const res = await authed('GET', `/proxy/network/api/s/__SITE__/stat/health`);
   if (res.status !== 200) throw new Error(`UniFi health read failed (${res.status}).`);
   const rows = (res.json && res.json.data) || [];
   const wan = rows.find((r) => r.subsystem === 'wan') || null;
@@ -151,7 +181,7 @@ async function wanLinks() {
 // How many devices are on the network right now (every VLAN, wired and
 // wireless), for the home screen's NETWORK row.
 async function clientCount() {
-  const res = await authed('GET', `/proxy/network/api/s/${site()}/stat/sta`);
+  const res = await authed('GET', `/proxy/network/api/s/__SITE__/stat/sta`);
   if (res.status !== 200) throw new Error(`UniFi client read failed (${res.status}).`);
   return ((res.json && res.json.data) || []).length;
 }
@@ -159,7 +189,7 @@ async function clientCount() {
 // Active clients with what a DHCP reservation needs (Oct 2026: pinning
 // the DirecTV receivers after T1's power cut moved them).
 async function clients() {
-  const res = await authed('GET', `/proxy/network/api/s/${site()}/stat/sta`);
+  const res = await authed('GET', `/proxy/network/api/s/__SITE__/stat/sta`);
   if (res.status !== 200) throw new Error(`UniFi client read failed (${res.status}).`);
   return ((res.json && res.json.data) || []).map((c) => ({
     mac: String(c.mac || '').toLowerCase(), ip: c.ip || c.last_ip || null, name: c.name || c.hostname || null, oui: c.oui || null,
@@ -181,19 +211,19 @@ function inSubnet(ip, cidr) {
 // nothing on the wire; the box simply keeps it from now on.
 async function reserveIp(mac, ip) {
   const m = String(mac || '').toLowerCase();
-  const users = await authed('GET', `/proxy/network/api/s/${site()}/rest/user`);
+  const users = await authed('GET', `/proxy/network/api/s/__SITE__/rest/user`);
   if (users.status !== 200) throw new Error(`UniFi client list failed (${users.status}).`);
   const u = ((users.json && users.json.data) || []).find((x) => String(x.mac || '').toLowerCase() === m);
   if (!u) throw new Error(`UniFi has no client record for ${m}.`);
   let networkId = u.network_id || null;
   if (!networkId) { const c = (await clients()).find((x) => x.mac === m); networkId = c && c.networkId; }
   if (!networkId) {
-    const nets = await authed('GET', `/proxy/network/api/s/${site()}/rest/networkconf`);
+    const nets = await authed('GET', `/proxy/network/api/s/__SITE__/rest/networkconf`);
     const n = ((nets.json && nets.json.data) || []).find((x) => x.ip_subnet && inSubnet(ip, x.ip_subnet));
     networkId = n && n._id;
   }
   if (!networkId) throw new Error(`Could not tell which UniFi network ${ip} belongs to.`);
-  const res = await authed('PUT', `/proxy/network/api/s/${site()}/rest/user/${u._id}`, { use_fixedip: true, fixed_ip: ip, network_id: networkId });
+  const res = await authed('PUT', `/proxy/network/api/s/__SITE__/rest/user/${u._id}`, { use_fixedip: true, fixed_ip: ip, network_id: networkId });
   if (res.status !== 200) throw new Error(`UniFi reservation failed (${res.status}): ${(res.json && res.json.meta && res.json.meta.msg) || String(res.text || '').slice(0, 120)}`);
   return { mac: m, ip, name: u.name || u.hostname || null, alreadyFixed: !!u.use_fixedip && u.fixed_ip === ip };
 }
@@ -210,7 +240,7 @@ async function runSpeedTest({ waitMs = 120 * 1000 } = {}) {
   const beforeRun = before && before.lastRun ? before.lastRun.getTime() : 0;
   // Newer versions want the gateway's MAC on the command; older ones ignore it.
   const body = { cmd: 'speedtest', ...(before && before.mac ? { mac: before.mac } : {}) };
-  const res = await authed('POST', `/proxy/network/api/s/${site()}/cmd/devmgr`, body);
+  const res = await authed('POST', `/proxy/network/api/s/__SITE__/cmd/devmgr`, body);
   if (res.status !== 200) throw new Error(`UniFi speed test refused (${res.status}): ${(res.json && res.json.meta && res.json.meta.msg) || res.text.slice(0, 120)}`);
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
