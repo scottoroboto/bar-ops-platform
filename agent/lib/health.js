@@ -116,13 +116,18 @@ async function reportOnce() {
 // so a bar with no TVs adopted yet still reports its lines.
 const unifiLocal = require('./unifi-local');
 let lastWanSig = null;
+let lastWanError = null;
+function noteWanError(msg) { if (msg !== lastWanError) { console.warn(`[health] ${msg}`); lastWanError = msg; } }
 async function reportWans() {
   if (!unifiLocal.configured()) return;
   let wans;
-  try { wans = await unifiLocal.wanLinks(); } catch (err) { return; } // UDM unreachable: say nothing rather than guess
-  if (!wans.length) return;
+  // UDM unreachable: say nothing to the cloud rather than guess, but say
+  // it once in the log so a bad address or login isn't silent (Oct 2026).
+  try { wans = await unifiLocal.wanLinks(); } catch (err) { noteWanError(`UniFi read failed: ${err.message}`); return; }
+  if (!wans.length) { noteWanError('UniFi answered but listed no WAN links on the gateway.'); return; }
   let clients = null;
-  try { clients = await unifiLocal.clientCount(); } catch (err) { /* the WAN links still go up */ }
+  try { clients = await unifiLocal.clientCount(); } catch (err) { noteWanError(`UniFi client count failed: ${err.message}`); }
+  if (lastWanError) { console.log('[health] UniFi reads are working again'); lastWanError = null; }
   try {
     await sync.pushWans(wans, clients);
     const sig = wans.map((w) => `${w.port}:${w.up ? 'up' : 'down'}:${w.ip || ''}`).join(' ');
