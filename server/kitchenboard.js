@@ -19,6 +19,10 @@ const notify = require('./notify');
 const DEFAULT_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
 const STALE_AFTER_MS = 15 * 60 * 1000;
 const OFF_PLAN_GRACE_MIN = 10;
+// Any SpotOn job title with one of these words counts as kitchen, on top
+// of the kb_settings.kitchen_roles list.
+const KITCHEN_ROLE_RE = /kitchen|cook|chef|dish|prep|fry|grill|line/i;
+const KITCHEN_ROLE_SQL = 'kitchen|cook|chef|dish|prep|fry|grill|line';
 const BOARD_HOURS = { from: 9, to: 25 }; // 9am through 1am (next day) on screen B
 
 // ---- time helpers (same technique as server/timeclock.js) ---------------
@@ -243,8 +247,11 @@ async function view(locationId, { now = new Date() } = {}) {
     const weekend = isWeekend(bdate);
     const foodGoal = num(weekend ? s.food_goal_weekend : s.food_goal_weekday);
     const laborGoal = num(weekend ? s.labor_goal_weekend : s.labor_goal_weekday);
+    // The settings list, plus any SpotOn job title that says kitchen
+    // (Oct 2026: titles got renamed in the POS and the assistant kitchen
+    // manager vanished from the board). Same rule in the SQL below.
     const roles = s.kitchen_roles.map((r) => r.toLowerCase());
-    const isKitchen = (role) => roles.includes(String(role || '').toLowerCase());
+    const isKitchen = (role) => roles.includes(String(role || '').toLowerCase()) || KITCHEN_ROLE_RE.test(String(role || ''));
 
     const punches = (await client.query('SELECT * FROM kb_punches WHERE location_id = $1 AND business_date = $2 ORDER BY clock_in', [locationId, bdate])).rows
       .filter((r) => isKitchen(r.role_name))
@@ -267,8 +274,8 @@ async function view(locationId, { now = new Date() } = {}) {
     let rate = actualHours >= 0.5 ? laborSoFar / actualHours : null;
     if (rate == null) {
       const r = (await client.query(
-        `SELECT SUM(labor_total) AS l, SUM(reg_hours + ot_hours) AS h FROM kb_punches WHERE location_id = $1 AND business_date >= $2 AND business_date < $3 AND lower(role_name) = ANY($4)`,
-        [locationId, ymdAddDays(bdate, -14), bdate, roles],
+        `SELECT SUM(labor_total) AS l, SUM(reg_hours + ot_hours) AS h FROM kb_punches WHERE location_id = $1 AND business_date >= $2 AND business_date < $3 AND (lower(role_name) = ANY($4) OR role_name ~* $5)`,
+        [locationId, ymdAddDays(bdate, -14), bdate, roles, KITCHEN_ROLE_SQL],
       )).rows[0];
       rate = r && num(r.h) > 0 ? num(r.l) / num(r.h) : null;
     }
@@ -337,8 +344,8 @@ async function view(locationId, { now = new Date() } = {}) {
     const weekStart = ymdAddDays(bdate, -satOffset);
     const week = [];
     const weekRows = (await client.query(
-      `SELECT business_date, SUM(labor_total) AS labor FROM kb_punches WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND lower(role_name) = ANY($4) GROUP BY business_date`,
-      [locationId, weekStart, ymdAddDays(weekStart, 6), roles],
+      `SELECT business_date, SUM(labor_total) AS labor FROM kb_punches WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND (lower(role_name) = ANY($4) OR role_name ~* $5) GROUP BY business_date`,
+      [locationId, weekStart, ymdAddDays(weekStart, 6), roles, KITCHEN_ROLE_SQL],
     )).rows;
     const weekFood = (await client.query(
       `SELECT DISTINCT ON (business_date) business_date, food_net FROM kb_sales_snapshots WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL ORDER BY business_date, at DESC`,
@@ -368,10 +375,10 @@ async function view(locationId, { now = new Date() } = {}) {
         `WITH food AS (SELECT DISTINCT ON (business_date) business_date, food_net FROM kb_sales_snapshots
                         WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL ORDER BY business_date, at DESC),
               labor AS (SELECT business_date, SUM(labor_total) AS labor FROM kb_punches
-                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND lower(role_name) = ANY($4) GROUP BY business_date)
+                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND (lower(role_name) = ANY($4) OR role_name ~* $5) GROUP BY business_date)
          SELECT COALESCE(SUM(food.food_net), 0) AS food, COALESCE(SUM(labor.labor), 0) AS labor, COUNT(food.business_date) AS days
            FROM food LEFT JOIN labor ON labor.business_date = food.business_date`,
-        [locationId, start, bdate, roles],
+        [locationId, start, bdate, roles, KITCHEN_ROLE_SQL],
       )).rows[0];
       const food = num(r.food); const labor = num(r.labor);
       periods[key] = { pct: food > 0 ? Math.round((labor / food) * 100) : null, food: Math.round(food), days: Number(r.days), since: start };
