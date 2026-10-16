@@ -3215,10 +3215,27 @@ res.json(result);
 
 // Certifications shown on the employee data card — owner-only add/remove
 // (see server/employees.js and db/patch_022).
-app.post('/api/employees/:id/certifications', auth.requireSession('full'), async (req, res) => {
+app.post('/api/employees/:id/certifications', auth.requireSession('full'), parsePhotoUpload, async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can add a certification.' });
-const result = await employees.addCertification({ personId: req.params.id, name: req.body.name, acquiredOn: req.body.acquiredOn || null, addedBy: req.person.id });
-res.json(result);
+const photoFile = req.file || null;
+if (photoFile && photoFileError(photoFile)) return res.status(400).json({ ok: false, error: photoFileError(photoFile) });
+try {
+  const result = await employees.addCertification({ personId: req.params.id, name: req.body.name, acquiredOn: req.body.acquiredOn || null, expiresOn: req.body.expiresOn || null, addedBy: req.person.id, photoFile });
+  res.json(result);
+} catch (e) {
+  console.error('[employees] add certification', e.message);
+  res.status(e.statusCode || 500).json({ ok: false, error: e.statusCode ? `Couldn't save the photo (${e.message}).` : 'Could not add the certification.' });
+}
+});
+// The photo itself: owner, managers (they see the card) and the employee
+// it belongs to.
+app.get('/api/employees/:id/certifications/:certId/photo', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner' && req.person.role !== 'manager' && req.person.id !== req.params.id) return res.status(403).json({ ok: false, error: 'Not allowed.' });
+try {
+  res.json(await employees.getCertPhotoUrl({ personId: req.params.id, certificationId: req.params.certId }));
+} catch (e) {
+  res.status(e.statusCode || 500).json({ ok: false, error: e.message });
+}
 });
 app.delete('/api/employees/:id/certifications/:certId', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can remove a certification.' });

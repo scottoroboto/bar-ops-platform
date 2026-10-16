@@ -135,6 +135,20 @@ async function deletePersonPhoto(path) {
   if (error) console.warn(`[storage] could not delete photo ${path}: ${error.message}`);
 }
 
+// ---- Certificate photos (patch_073) -----------------------------------
+// A picture of an employee's ServSafe / TIPS / etc. card. Lives in the
+// same people-photos bucket, under a certs/ sub-folder of the person's
+// own folder, so the bucket's mime/size limits apply and purging a
+// person takes their certificates with it.
+async function uploadCertPhoto({ buffer, mimetype, personId }) {
+  const ext = extensionFor(mimetype);
+  return uploadTo(PHOTOS_BUCKET, `${personId}/certs/${crypto.randomUUID()}.${ext}`, buffer, mimetype, 'Certificate photo');
+}
+
+async function getSignedCertPhotoUrl(path) {
+  return signedUrlFor(PHOTOS_BUCKET, path, 'certificate photo');
+}
+
 // ---- Amusement scale photos (patch_041) -------------------------------
 // The photo of the scale display a collection item's weight was read
 // from, plus the $10-roll scale check at the start of a visit. Keyed by
@@ -159,5 +173,6 @@ module.exports = {
   uploadReceipt, getSignedReceiptUrl,
   uploadAmusementPhoto, getSignedAmusementPhotoUrl, isConfigured,
   uploadPersonPhoto, getSignedPersonPhotoUrl, deletePersonPhoto, looksLikeImage, PHOTO_MIMES,
+  uploadCertPhoto, getSignedCertPhotoUrl,
   EXT_BY_MIME,
 };

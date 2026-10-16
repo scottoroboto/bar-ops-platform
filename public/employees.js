@@ -446,7 +446,7 @@ function lockBadgeHtml(p) {
 // the card.
 function empRowHtml(p) {
   const nameBlock = `<div class="emp-who">
-      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}${lockBadgeHtml(p)}${ME.role === 'owner' && needsSetup(p) ? ` <span class="badge danger" title="${!p.department ? 'No department yet' : 'No schedule they can work yet'} — open their Access page">needs setup</span>` : ''}</div>
+      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}${lockBadgeHtml(p)}${ME.role === 'owner' && needsSetup(p) ? ` <span class="badge danger" title="${!p.department ? 'No department yet' : 'No schedule they can work yet'} — open their Access page">needs setup</span>` : ''}${certsNeedingAttention(p) ? ` <span class="badge stale" title="A certification is expired or expiring within 60 days">cert due</span>` : ''}</div>
       <div class="emp-roleinfo">${escapeHtml(cap(p.role))} &middot; ${escapeHtml(p.position || '—')} <span class="emp-locs">${locChipsHtml(p)}</span></div>
     </div>`;
   if (ME.role === 'owner') {
@@ -899,31 +899,101 @@ function detailTileHtml(label, value) {
   return `<div class="stat-tile"><div class="l">${escapeHtml(label)}</div><div class="n" style="font-size:19px; margin-top:2px;">${escapeHtml(value)}</div></div>`;
 }
 
+// Expiry state for the badge on a cert row: expired / within 60 days /
+// fine / no date.
+function certExpiry(c) {
+  if (!c.expires_on) return null;
+  const exp = new Date(String(c.expires_on).slice(0, 10) + 'T12:00:00');
+  const days = Math.round((exp - Date.now()) / 86400000);
+  if (days < 0) return { cls: 'danger', text: 'Expired ' + fmtDate(c.expires_on) };
+  if (days <= 60) return { cls: 'stale', text: `Expires ${fmtDate(c.expires_on)} (${days} day${days === 1 ? '' : 's'})` };
+  return { cls: 'on', text: 'Expires ' + fmtDate(c.expires_on) };
+}
+
+// Certs expired or due within 60 days — the roster uses this to flag a
+// person before the health inspector does.
+function certsNeedingAttention(p) {
+  return (p.certifications || []).map(certExpiry).filter(e => e && e.cls !== 'on').length;
+}
+
+function certCheckHtml(c) {
+  const chk = c.photo_check;
+  if (!chk || !chk.summary) return '';
+  const cls = chk.match === 'match' ? 'ok' : (chk.match === 'mismatch' ? 'bad' : 'note');
+  return `<div class="cert-check ${cls}">${escapeHtml(chk.summary)}</div>`;
+}
+
 function renderDetailCerts(p, isOwner) {
   const certs = p.certifications || [];
   document.getElementById('detailCerts').innerHTML = certs.length
-    ? certs.map(c => `
-      <div class="cert-row">
-        <span class="check">${ICONS.check}</span>
-        <span class="cert-name">${escapeHtml(c.name)}</span>
-        <span class="cert-date">${c.acquired_on ? fmtDate(c.acquired_on) : ''}</span>
-        ${isOwner ? `<span class="cert-remove" onclick="removeCertification('${c.id}')" title="Remove">&times;</span>` : ''}
-      </div>`).join('')
+    ? certs.map(c => {
+      const exp = certExpiry(c);
+      return `
+      <div class="cert-row ${exp && exp.cls === 'danger' ? 'expired' : ''}">
+        <div class="cert-main">
+          <span class="check">${exp && exp.cls === 'danger' ? '!' : ICONS.check}</span>
+          <span class="cert-name">${escapeHtml(c.name)}</span>
+          <span class="cert-date">${c.acquired_on ? 'Acquired ' + fmtDate(c.acquired_on) : ''}</span>
+          ${isOwner ? `<span class="cert-remove" onclick="removeCertification('${c.id}')" title="Remove">&times;</span>` : ''}
+        </div>
+        <div class="cert-sub">
+          ${exp ? `<span class="badge ${exp.cls}">${escapeHtml(exp.text)}</span>` : '<span class="badge off">No expiration date</span>'}
+          ${c.photo_path ? `<a href="#" class="cert-photo-link" onclick="viewCertPhoto('${c.id}'); return false;">View photo</a>` : ''}
+        </div>
+        ${certCheckHtml(c)}
+      </div>`;
+    }).join('')
     : '<p class="muted">No certifications on file.</p>';
+}
+
+function certPhotoPicked(input) {
+  const f = input.files && input.files[0];
+  document.getElementById('certPhotoLabel').textContent = f ? `Photo: ${f.name}` : 'Add a photo of the certificate';
+  document.getElementById('certPhotoPick').classList.toggle('has-file', !!f);
+}
+
+async function viewCertPhoto(certId) {
+  const id = document.getElementById('detailPersonId').value;
+  try {
+    const r = await api(`/api/employees/${id}/certifications/${certId}/photo`);
+    if (!r.ok) { showMsg(r.error || 'No photo on file.', 'error'); return; }
+    window.open(r.url, '_blank');
+  } catch (e) {
+    showMsg(e.message, 'error');
+  }
 }
 
 async function addCertification() {
   const id = document.getElementById('detailPersonId').value;
   const name = document.getElementById('certName').value.trim();
-  const acquiredOn = document.getElementById('certDate').value || null;
-  if (!name) return;
+  const acquiredOn = document.getElementById('certDate').value || '';
+  const expiresOn = document.getElementById('certExpires').value || '';
+  const photoInput = document.getElementById('certPhoto');
+  const photo = photoInput.files && photoInput.files[0];
+  if (!name) { showMsg('Enter the certification name first.', 'error'); return; }
+  const btn = document.getElementById('certAddBtn');
+  btn.disabled = true;
+  btn.textContent = photo ? 'Reviewing photo…' : 'Adding…';
   try {
-    const result = await withStepUp(() => api(`/api/employees/${id}/certifications`, { method: 'POST', body: { name, acquiredOn } }));
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('acquiredOn', acquiredOn);
+    fd.append('expiresOn', expiresOn);
+    if (photo) fd.append('photo', photo, photo.name);
+    const result = await withStepUp(() => apiUpload(`/api/employees/${id}/certifications`, fd));
     if (!result.ok) { showMsg(result.error || 'Could not add certification.', 'error'); return; }
+    const chk = result.certification && result.certification.photo_check;
+    if (chk && chk.summary) showMsg(chk.summary, chk.match === 'mismatch' ? 'error' : 'success');
+    photoInput.value = '';
+    certPhotoPicked(photoInput);
+    document.getElementById('certExpires').value = '';
     await loadAllEmployees();
     openEmployeeDetail(id);
   } catch (e) {
     showMsg(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Add';
   }
 }
 

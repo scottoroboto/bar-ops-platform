@@ -4,6 +4,7 @@ const { withServiceClient, locationIdsOf } = require('./db');
 const notify = require('./notify');
 const auth = require('./auth');
 const storage = require('./storage');
+const certread = require('./certread');
 
 // NOTE: 'monitoring' was added to employee_apps' app_key CHECK constraint
 // back in patch_010 but never added here — meaning no one could ever be
@@ -496,14 +497,25 @@ async function listAllWithAccess(locationFilter) {
 // card. Free-text name (no fixed enum — new cert types shouldn't need a
 // migration, same reasoning as monitored_systems.kind).
 // ---------------------------------------------------------------------
-async function addCertification({ personId, name, acquiredOn, addedBy }) {
+async function addCertification({ personId, name, acquiredOn, expiresOn, addedBy, photoFile }) {
   const trimmed = (name || '').trim();
   if (!trimmed) return { ok: false, error: 'Certification name is required.' };
+  // Photo first (needs no row), then the AI read of it, then one INSERT
+  // with everything populated — same id-first shape as person photos.
+  let photoPath = null;
+  let photoCheck = null;
+  let expires = expiresOn || null;
+  if (photoFile) {
+    photoPath = await storage.uploadCertPhoto({ buffer: photoFile.buffer, mimetype: photoFile.mimetype, personId });
+    photoCheck = await certread.readCertPhoto({ buffer: photoFile.buffer, mimetype: photoFile.mimetype, enteredExpiresOn: expires, enteredName: trimmed });
+    // Owner left expires blank and the card shows one: use the card's.
+    if (!expires && photoCheck.match === 'filled' && photoCheck.expires_on) expires = photoCheck.expires_on;
+  }
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO employee_certifications (person_id, name, acquired_on, added_by)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [personId, trimmed, acquiredOn || null, addedBy]
+      `INSERT INTO employee_certifications (person_id, name, acquired_on, expires_on, added_by, photo_path, photo_check)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [personId, trimmed, acquiredOn || null, expires, addedBy, photoPath, photoCheck ? JSON.stringify(photoCheck) : null]
     );
     return { ok: true, certification: rows[0] };
   });
@@ -511,9 +523,20 @@ async function addCertification({ personId, name, acquiredOn, addedBy }) {
 
 async function removeCertification({ certificationId }) {
   return withServiceClient(async (client) => {
-    const { rowCount } = await client.query('DELETE FROM employee_certifications WHERE id = $1', [certificationId]);
-    if (!rowCount) return { ok: false, error: 'Not found.' };
+    const { rows } = await client.query('DELETE FROM employee_certifications WHERE id = $1 RETURNING photo_path', [certificationId]);
+    if (!rows.length) return { ok: false, error: 'Not found.' };
+    if (rows[0].photo_path) storage.deletePersonPhoto(rows[0].photo_path).catch(() => {});
     return { ok: true };
+  });
+}
+
+// Signed URL for a certificate photo. Caller has already decided who may
+// look (owner, or the employee it belongs to — see the route).
+async function getCertPhotoUrl({ personId, certificationId }) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query('SELECT photo_path FROM employee_certifications WHERE id = $1 AND person_id = $2', [certificationId, personId]);
+    if (!rows.length || !rows[0].photo_path) return { ok: false, error: 'No photo on file.' };
+    return { ok: true, url: await storage.getSignedCertPhotoUrl(rows[0].photo_path) };
   });
 }
 
@@ -845,5 +868,5 @@ module.exports = {
   createPendingEmployee, setPersonLocations, getPhotoUrl, setOwnPhoto, removeOwnPhoto, getOwnPhotoUrl, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,
   setEmployeeStatus, requestPayRaise, listPayRateRequests, decidePayRateRequest, getOwnerNote, setOwnerNote,
-  addCertification, removeCertification, APP_KEYS, MANAGER_ONLY_APP_KEYS, VALID_ROLES, VALID_STATUSES,
+  addCertification, removeCertification, getCertPhotoUrl, APP_KEYS, MANAGER_ONLY_APP_KEYS, VALID_ROLES, VALID_STATUSES,
 };

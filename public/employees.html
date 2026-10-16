@@ -199,11 +199,19 @@
     <div class="detail-label">Certifications</div>
     <div id="detailCerts"></div>
     <div id="detailCertsAdd" style="display:none; margin-top:10px;">
-      <div style="display:flex; gap:8px;">
-        <input id="certName" placeholder="Certification name" list="certSuggestions" style="flex:1;">
-        <input id="certDate" type="date" style="width:160px;">
-        <button class="small ghost" style="margin-top:0; flex-shrink:0;" onclick="addCertification()">Add</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <input id="certName" placeholder="Certification name" list="certSuggestions" style="flex:1 1 100%;">
+        <label class="cert-field"><span>Acquired</span><input id="certDate" type="date"></label>
+        <label class="cert-field"><span>Expires</span><input id="certExpires" type="date"></label>
       </div>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+        <label class="cert-photo-pick" id="certPhotoPick">
+          <input id="certPhoto" type="file" accept="image/*" capture="environment" onchange="certPhotoPicked(this)">
+          <span id="certPhotoLabel">Add a photo of the certificate</span>
+        </label>
+        <button class="small ghost" id="certAddBtn" style="margin-top:0; flex-shrink:0; margin-left:auto;" onclick="addCertification()">Add</button>
+      </div>
+      <p class="muted" style="font-size:12px; margin:6px 0 0;">With a photo, the app reads the card and confirms the expiration date. Leave Expires blank to take it from the photo.</p>
       <datalist id="certSuggestions">
         <option value="ServeSafe Server">
         <option value="ServeSafe Food Handler">

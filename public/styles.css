@@ -510,6 +510,23 @@ table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transfor
 .cert-row .cert-name { font-weight: 600; }
 .cert-row .cert-date { color: var(--muted); font-size: 12.5px; margin-left: auto; }
 .cert-row .cert-remove { color: var(--muted); cursor: pointer; flex-shrink: 0; }
+.cert-row { flex-direction: column; align-items: stretch; gap: 6px; }
+.cert-row .cert-main { display: flex; align-items: center; gap: 10px; }
+.cert-row.expired .check { color: #ff8a9a; font-weight: 800; width: 16px; justify-content: center; }
+.cert-row .cert-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-left: 26px; }
+.cert-row .cert-photo-link { font-size: 12.5px; color: var(--accent); text-decoration: none; }
+.cert-row .cert-check { font-size: 12.5px; color: var(--muted); padding-left: 26px; }
+.cert-row .cert-check.ok { color: #6be3a4; }
+.cert-row .cert-check.bad { color: #ff8a9a; font-weight: 600; }
+.cert-field { display: flex; flex-direction: column; gap: 3px; flex: 1 1 140px; font-size: 11.5px; color: var(--muted); margin: 0 !important; }
+.cert-field input { width: 100%; }
+.cert-photo-pick {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 9px; cursor: pointer;
+  border: 1px dashed var(--card-border); color: var(--muted); font-size: 13px; margin: 0 !important; flex: 1 1 auto; min-width: 0;
+}
+.cert-photo-pick input { display: none; }
+.cert-photo-pick.has-file { border-style: solid; color: var(--text); }
+.cert-photo-pick span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Small pill labels — currently used for the roster row / detail card
    location chips (locChipsHtml() in employees.js). .warn is for a chip that
