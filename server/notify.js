@@ -58,6 +58,20 @@ async function notificationsEnabled(client) {
   return !rows.length || rows[0].body !== 'off';
 }
 
+// Every time in an alert, text or email is written in the bar's own
+// clock (Central), never the server's UTC — a raw Date in a template
+// string prints "GMT+0000", which is how the network alerts read until
+// 2026-10-17. e.g. "Fri, Oct 17, 3:05 PM CDT".
+const BUSINESS_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
+function fmtBarTime(v, { date = true } = {}) {
+  const d = v instanceof Date ? v : new Date(v);
+  if (!v || Number.isNaN(d.getTime())) return String(v || '');
+  return d.toLocaleString('en-US', {
+    timeZone: BUSINESS_TZ, hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+    ...(date ? { weekday: 'short', month: 'short', day: 'numeric' } : {}),
+  });
+}
+
 async function sendEmail(client, relatedTable, relatedId, to, subject, text) {
   if (!(await notificationsEnabled(client))) {
     console.log(`[notify][email][DISABLED] to=${to} subject="${subject}" (master notifications toggle is off — nothing sent)`);
@@ -139,4 +153,4 @@ async function sendSms(client, relatedTable, relatedId, rawTo, body) {
   }
 }
 
-module.exports = { sendEmail, sendSms, emailConfigured, smsConfigured, notificationsEnabled, toE164 };
+module.exports = { sendEmail, sendSms, emailConfigured, smsConfigured, notificationsEnabled, toE164, fmtBarTime, BUSINESS_TZ };

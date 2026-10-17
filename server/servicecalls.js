@@ -258,7 +258,7 @@ async function notifyNewCall(client, call) {
   const recipients = await recipientsFor(call);
   const equipmentLabel = call.equipment_name || call.equipment_other || 'Unspecified equipment';
   const subject = `New service call: ${equipmentLabel} @ ${call.location_name}`;
-  const text = `${call.created_by_name} opened a service call at ${call.location_name}.\n\nEquipment: ${equipmentLabel}\nDescription: ${call.description}\nOpened: ${call.created_at}\n\nOpen the app to view and close this call.`;
+  const text = `${call.created_by_name} opened a service call at ${call.location_name}.\n\nEquipment: ${equipmentLabel}\nDescription: ${call.description}\nOpened: ${notify.fmtBarTime(call.created_at)}\n\nOpen the app to view and close this call.`;
   const smsBody = `Service call: ${equipmentLabel} @ ${call.location_name} (by ${call.created_by_name}). ${call.description}`.slice(0, 300);
 
   for (const person of recipients) {
@@ -279,7 +279,7 @@ async function notifyCallClosed(client, call) {
   if (!person || !person.email) return;
   const equipmentLabel = call.equipment_name || call.equipment_other || 'Unspecified equipment';
   const subject = `Service call closed: ${equipmentLabel} @ ${call.location_name}`;
-  const text = `${call.closed_by_name} closed the service call you opened at ${call.location_name}.\n\nEquipment: ${equipmentLabel}\nRemedy: ${call.remedy}\nClosed: ${call.closed_at}`;
+  const text = `${call.closed_by_name} closed the service call you opened at ${call.location_name}.\n\nEquipment: ${equipmentLabel}\nRemedy: ${call.remedy}\nClosed: ${notify.fmtBarTime(call.closed_at)}`;
   await notify.sendEmail(client, 'service_calls', call.id, person.email, subject, text);
 }
 

@@ -6,6 +6,7 @@
 // store and writes through their own functions, so every rule they
 // enforce (owner-only, last-owner guard, SMS consent) still applies.
 const { withServiceClient } = require('./db');
+const notify = require('./notify');
 const employees = require('./employees');
 const home = require('./home');
 const summary = require('./summary');
@@ -95,7 +96,7 @@ async function view(personId) {
       own: {
         phone: p.phone || null, email: p.email || null,
         pin: p.pin_locked_at ? 'locked' : p.has_pin ? 'set' : 'not set',
-        password: p.password_locked_at ? 'locked' : p.password_verified_at ? `verified ${p.password_verified_at}` : 'never signed in',
+        password: p.password_locked_at ? 'locked' : p.password_verified_at ? `verified ${notify.fmtBarTime(p.password_verified_at)}` : 'never signed in',
         lastSignIn: lastSession[0] ? { at: lastSession[0].created_at, tier: lastSession[0].session_tier, sharedDevice: !!lastSession[0].device_id } : null,
         notifyChannel: notify.notify_channel || 'email', smsConsentAt: notify.sms_consent_at || null, smsConsentPhone: notify.sms_consent_phone || null,
         reminders: rem[0] ? { clockIn: rem[0].clock_in_enabled, clockOut: rem[0].clock_out_enabled, channel: rem[0].notify_channel } : null,

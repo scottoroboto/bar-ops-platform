@@ -701,7 +701,7 @@ async function agentServiceCall({ locationId, systemId }) {
     const { rows: eq } = await svc.query(`SELECT id FROM equipment_types WHERE active = true AND name ILIKE 'tv%' ORDER BY name LIMIT 1`);
     const destinationIds = await avServiceCallDestinations(svc);
     const since = alert.opened_at;
-    const description = `${system.name} isn't responding — reported from the ${system.location_name} TV Staff page. Down since ${since instanceof Date ? since.toLocaleString('en-US', { timeZone: BUSINESS_TZ }) : since}. Turn On from the iPad didn't bring it back.`;
+    const description = `${system.name} isn't responding — reported from the ${system.location_name} TV Staff page. Down since ${notify.fmtBarTime(since)}. Turn On from the iPad didn't bring it back.`;
     const { rows: created } = await svc.query(
       `INSERT INTO service_calls (location_id, equipment_type_id, equipment_other, description, created_by)
        VALUES ($1,$2,$3,$4,$5) RETURNING id`,
@@ -829,16 +829,16 @@ async function notifyAlert(svc, system, alert, kind) {
       ? `⚠ ${names[0]} is ${first.status} — ${system.location_name}`
       : `⚠ ${alerts.length} ${catLabel}s ${first.status} — ${system.location_name}`;
     text = (alerts.length === 1 ? `${first.message}\n\n` : `${alerts.length} ${catLabel}s at ${system.location_name} went ${first.status} together:\n${names.map((n) => `  • ${n}`).join('\n')}\n\n`)
-      + `Down since: ${first.opened_at}\n\nYou'll get one note when it recovers. Anything still down is in the 6am summary.`;
+      + `Down since: ${notify.fmtBarTime(first.opened_at)}\n\nYou'll get one note when it recovers. Anything still down is in the 6am summary.`;
   } else if (kind === 'reminder') {
     subject = `⚠ Still: ${system.name} — ${system.location_name}`;
-    text = `${first.message}\n\nOpen since ${first.opened_at} and not acknowledged. Acknowledge it to stop these reminders; it still clears itself when the reading comes back.`;
+    text = `${first.message}\n\nOpen since ${notify.fmtBarTime(first.opened_at)} and not acknowledged. Acknowledge it to stop these reminders; it still clears itself when the reading comes back.`;
   } else if (kind === 'service_call') {
     subject = `⚠ TV needs service: ${system.name} — ${system.location_name}`;
-    text = `The bar reported ${system.name} at ${system.location_name} from the TV Staff page. It has been unreachable since ${first.opened_at} and Turn On didn't bring it back.\n\nA service call has been opened (Service Calls app). Open the app to view.`;
+    text = `The bar reported ${system.name} at ${system.location_name} from the TV Staff page. It has been unreachable since ${notify.fmtBarTime(first.opened_at)} and Turn On didn't bring it back.\n\nA service call has been opened (Service Calls app). Open the app to view.`;
   } else {
     subject = `✓ ${system.name} recovered — ${system.location_name}`;
-    text = `${system.name} at ${system.location_name} is back to normal.\n\nWas ${first.status} from ${first.opened_at} until now.`;
+    text = `${system.name} at ${system.location_name} is back to normal.\n\nWas ${first.status} from ${notify.fmtBarTime(first.opened_at)} until ${notify.fmtBarTime(first.closed_at || new Date())}.`;
   }
 
   let sentToday = await alertEmailsSentToday(svc);
