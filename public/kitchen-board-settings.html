@@ -13,6 +13,19 @@
   .kb-pulls td { padding: 4px 8px 4px 0; border-top: 1px solid var(--card-border, #eee); }
   .kb-ok { color: #2e8b57; font-weight: 700; } .kb-bad { color: #c0392b; font-weight: 700; }
   .kb-dev { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--card-border, #eee); }
+  .fc-wrap { overflow-x: auto; }
+  .fc-table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .fc-table th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 4px 8px 6px 0; }
+  .fc-table td { padding: 7px 8px 7px 0; border-top: 1px solid var(--card-border, #eee); vertical-align: top; }
+  .fc-table td.n { text-align: right; white-space: nowrap; } .fc-table th.n { text-align: right; }
+  .fc-range { display: block; font-size: 11.5px; color: var(--muted); }
+  .fc-why { font-size: 12.5px; } .fc-why b { font-weight: 700; }
+  .fc-table tr.has-why td { padding-bottom: 2px; }
+  .fc-table tr.fc-why-row td { border-top: 0; padding-top: 0; color: var(--muted); }
+  .fc-stats { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 8px 0 12px; font-size: 14px; }
+  .fc-stats div { min-width: 0; } .fc-stats .k { font-size: 12px; color: var(--muted); display: block; }
+  .fc-out { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--card-border, #eee); font-size: 13.5px; }
+  .fc-out .why { color: var(--muted); font-size: 12.5px; display: block; }
 </style>
 </head>
 <body>
@@ -50,6 +63,27 @@
       <span class="switch"><input type="checkbox" id="managersCanView"><span class="slider"></span></span>
     </label>
     <button class="primary" onclick="saveSettings()">Save</button>
+  </div>
+
+  <div class="card" id="forecastCard">
+    <h2>Sales forecast</h2>
+    <p class="muted">What each day usually does, learned from this bar's SpotOn history: day of the week, time of year, holidays, and Alabama, FSU and Saints game days. The kitchen TV shows today's number and where today is heading.</p>
+    <div id="fcBody"><p class="muted">Loading…</p></div>
+    <h3 style="margin-top:18px;">Days left out</h3>
+    <p class="muted" style="font-size:13px;">Days that would throw the forecast off: closed, a storm, a pull that broke, a one-off surge. The app finds the obvious ones; you can leave out any other day, or put one back.</p>
+    <div id="fcOut"></div>
+    <div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+      <input id="fcOutDate" type="date" style="margin:0; width:auto;">
+      <input id="fcOutReason" placeholder="Why, e.g. Private party" maxlength="120" style="flex:1; min-width:160px; margin:0;">
+      <button class="small secondary" style="margin:0;" onclick="leaveOutDay()">Leave this day out</button>
+    </div>
+    <h3 style="margin-top:18px;">History</h3>
+    <p class="muted" style="font-size:13px;" id="fcHistoryNote"></p>
+    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+      <label for="fcHistoryFrom" style="margin:0; font-size:14px;">Read SpotOn history back to</label>
+      <input id="fcHistoryFrom" type="date" style="margin:0; width:auto;">
+      <button class="small ghost" style="margin:0;" onclick="saveHistoryFrom()">Save</button>
+    </div>
   </div>
 
   <div class="card" id="devicesCard" style="display:none;">

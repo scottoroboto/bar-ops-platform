@@ -15,6 +15,7 @@
 const crypto = require('crypto');
 const { withServiceClient } = require('./db');
 const notify = require('./notify');
+const forecast = require('./forecast');
 
 const DEFAULT_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
 const STALE_AFTER_MS = 15 * 60 * 1000;
@@ -192,14 +193,43 @@ async function ingest(locationId, payload) {
       );
       kept += 1;
     }
-    // A punch that vanished from SpotOn's report (deleted by a manager) goes too.
-    await client.query('DELETE FROM kb_punches WHERE location_id = $1 AND business_date = $2 AND last_seen_at < $3', [locationId, bdate, now]);
+    // A punch that vanished from SpotOn's report (deleted by a manager) goes
+    // too. Not when a backfill came with no punches at all: that's the
+    // month's Employee Time read failing, and it must not wipe the day.
+    if (!backfill || punches.length) await client.query('DELETE FROM kb_punches WHERE location_id = $1 AND business_date = $2 AND last_seen_at < $3', [locationId, bdate, now]);
     const { food, total } = p.dsr ? foodFromSales(p.dsr.sales, settings.food_keys) : { food: null, total: null };
-    if (backfill) await client.query('DELETE FROM kb_sales_snapshots WHERE location_id = $1 AND business_date = $2', [locationId, bdate]);
-    await client.query(
-      'INSERT INTO kb_sales_snapshots (location_id, business_date, at, food_net, total_net, raw) VALUES ($1, $2, $3, $4, $5, $6)',
-      [locationId, bdate, snapAt, food, total, JSON.stringify({ dsr: p.dsr || null, hourly: p.hourly || null }).slice(0, 400000)],
-    );
+    // The permanent daily record the sales forecast learns from (patch_076).
+    // A backfill is the after-close read and is final; a live pull keeps
+    // the day open. A backfill that couldn't read the sales recap counts an
+    // attempt, so days before the bar opened stop being asked for.
+    if (total != null) {
+      await client.query(
+        `INSERT INTO sales_daily (location_id, business_date, food_net, total_net, final, source, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now())
+         ON CONFLICT (location_id, business_date) DO UPDATE SET food_net = EXCLUDED.food_net, total_net = EXCLUDED.total_net,
+           final = sales_daily.final OR EXCLUDED.final, source = EXCLUDED.source, updated_at = now()
+         WHERE NOT sales_daily.final OR EXCLUDED.final`,
+        [locationId, bdate, food, total, backfill, backfill ? 'backfill' : 'live'],
+      );
+    } else if (backfill) {
+      await client.query(
+        `INSERT INTO sales_daily (location_id, business_date, source, read_attempts) VALUES ($1, $2, 'backfill', 1)
+         ON CONFLICT (location_id, business_date) DO UPDATE SET read_attempts = sales_daily.read_attempts + 1, updated_at = now()`,
+        [locationId, bdate],
+      );
+    }
+    // Snapshots are the board's intraday record (60 days). A backfill adds
+    // the day's closing number without touching the live ones (they make
+    // the forecast's hour-by-hour pace curve), and skips days the 60-day
+    // prune would only delete again.
+    const recent = bdate >= ymdAddDays(businessDate(new Date(), tz, settings.day_start_hour), -58);
+    if (!backfill || recent) {
+      if (backfill) await client.query('DELETE FROM kb_sales_snapshots WHERE location_id = $1 AND business_date = $2 AND at = $3', [locationId, bdate, snapAt]);
+      await client.query(
+        'INSERT INTO kb_sales_snapshots (location_id, business_date, at, food_net, total_net, raw) VALUES ($1, $2, $3, $4, $5, $6)',
+        [locationId, bdate, snapAt, food, total, JSON.stringify({ dsr: p.dsr || null, hourly: p.hourly || null }).slice(0, 400000)],
+      );
+    }
     if (backfill) return { ok: true, businessDate: bdate, punches: kept, food, total, backfill: true };
     const { rows } = await client.query('INSERT INTO kb_pulls (location_id, ok, ms, punches) VALUES ($1, true, $2, $3) RETURNING id', [locationId, p.ms != null ? Math.round(p.ms) : null, kept]);
     // Keep the snapshot table tidy: 60 days.
@@ -238,6 +268,9 @@ function fmtTime(date, tz) {
 }
 
 async function view(locationId, { now = new Date() } = {}) {
+  // The sales forecast (server/forecast.js, cached); the board works without it.
+  let fc = null;
+  try { fc = await forecast.forLocation(locationId, { now }); } catch (err) { console.error('[kitchen] forecast failed:', err.message); }
   return withServiceClient(async (client) => {
     const tz = await siteTz(client, locationId);
     const s = await settingsFor(client, locationId);
@@ -284,10 +317,23 @@ async function view(locationId, { now = new Date() } = {}) {
     const laborPctProjected = expectedFood > 0 && (rate != null || schedRemaining === 0) ? Math.round((projectedLabor / expectedFood) * 100) : null;
     const laborPctSoFar = foodSoFar ? Math.round((laborSoFar / foodSoFar) * 100) : null;
 
-    // Where sales "should" be by now: the goal spread over 9am-close by hours elapsed.
+    // Where sales "should" be by now: the share of a normal day's food
+    // sales by this time (the forecast's pace curve, same weekday, last 8
+    // weeks); without one, the goal spread evenly over 9am-close.
     const openStart = zonedToUtc(`${bdate}T${String(BOARD_HOURS.from).padStart(2, '0')}:00:00`, tz);
     const closeAt = new Date(openStart.getTime() + (BOARD_HOURS.to - BOARD_HOURS.from) * 3600000);
-    const paceFrac = Math.min(1, Math.max(0, (now - openStart) / (closeAt - openStart)));
+    const fcToday = fc && fc.ready && fc.today === bdate ? fc.days.find((d) => d.date === bdate) : null;
+    const curve = fcToday && fc.curve ? fc.curve : null;
+    const shareAt = (t) => (curve ? forecast.curveAt(curve, (t - dayStart) / 60000) : null);
+    const curveFrac = shareAt(now);
+    const paceFrac = curveFrac != null ? curveFrac : Math.min(1, Math.max(0, (now - openStart) / (closeAt - openStart)));
+    const foodForecast = fcToday ? {
+      fc: fcToday.food.fc, lo: fcToday.food.lo, hi: fcToday.food.hi, bar: fcToday.bar.fc,
+      expectedNow: curveFrac != null ? Math.round(fcToday.food.fc * curveFrac) : null,
+      // Sales so far plus the part of a normal day still to come.
+      projected: foodSoFar != null && curveFrac != null ? Math.round(foodSoFar + fcToday.food.fc * (1 - curveFrac)) : null,
+      drivers: fcToday.drivers.map((d) => ({ label: d.label, pct: d.food })),
+    } : null;
 
     const showName = (n) => (s.show_names ? n : null);
     const onClock = punches.filter((r) => !r.is_clocked_out && !r.clock_out).map((r) => {
@@ -329,7 +375,8 @@ async function view(locationId, { now = new Date() } = {}) {
       const food = past || current ? (a != null && b != null ? Math.max(0, b - a) : (b != null && h === BOARD_HOURS.from ? b : null)) : null;
       const planned = shifts.filter((sh) => sh.start <= mid && sh.end > mid).length;
       const actual = past || current ? punches.filter((r) => r.clock_in <= mid && (r.clock_out || now) > mid).length : null;
-      hours.push({ hour: h % 24, label: `${((h % 12) || 12)}${h % 24 < 12 ? 'a' : 'p'}`, food: food == null ? null : Math.round(food), expected: past || current ? null : Math.round(perHourExpected), planned, actual, current, over: actual != null && actual > planned });
+      const expected = past || current ? null : curve ? Math.round(fcToday.food.fc * Math.max(0, shareAt(end) - shareAt(start))) : Math.round(perHourExpected);
+      hours.push({ hour: h % 24, label: `${((h % 12) || 12)}${h % 24 < 12 ? 'a' : 'p'}`, food: food == null ? null : Math.round(food), expected, planned, actual, current, over: actual != null && actual > planned });
     }
     const overHours = hours.filter((x) => x.over);
     let overNote = null;
@@ -348,7 +395,7 @@ async function view(locationId, { now = new Date() } = {}) {
       [locationId, weekStart, ymdAddDays(weekStart, 6), roles, KITCHEN_ROLE_SQL],
     )).rows;
     const weekFood = (await client.query(
-      `SELECT DISTINCT ON (business_date) business_date, food_net FROM kb_sales_snapshots WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL ORDER BY business_date, at DESC`,
+      'SELECT business_date, food_net FROM sales_daily WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL',
       [locationId, weekStart, ymdAddDays(weekStart, 6)],
     )).rows;
     for (let i = 0; i < 7; i += 1) {
@@ -359,21 +406,21 @@ async function view(locationId, { now = new Date() } = {}) {
       const goal = num(isWeekend(d) ? s.labor_goal_weekend : s.labor_goal_weekday);
       const label = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][weekdayOf(d)];
       if (d === bdate) week.push({ day: label, pct: laborPctProjected, goal, state: 'live' });
-      else if (d > bdate) week.push({ day: label, pct: null, goal, state: 'future' });
+      else if (d > bdate) { const f = fc && fc.ready ? fc.days.find((x) => x.date === d) : null; week.push({ day: label, pct: null, goal, state: 'future', fc: f ? f.food.fc : null }); }
       else week.push({ day: label, pct: food ? Math.round((labor / food) * 100) : null, goal, state: food ? (labor / food * 100 <= goal ? 'hit' : 'missed') : 'nodata' });
     }
 
-    // Week / month / year to date: SpotOn's labor $ over the last food
-    // snapshot of each day, today's so-far included. Only as far back as
-    // the board has been collecting.
+    // Week / month / year to date: SpotOn's labor $ over each day's food
+    // sales (sales_daily, kept for good), today's so-far included. Only as
+    // far back as the board has history.
     const periods = {};
-    const firstDay = (await client.query('SELECT MIN(business_date) AS d FROM kb_sales_snapshots WHERE location_id = $1', [locationId])).rows[0];
+    const firstDay = (await client.query('SELECT MIN(business_date) AS d FROM sales_daily WHERE location_id = $1 AND food_net IS NOT NULL', [locationId])).rows[0];
     const since = firstDay && firstDay.d ? toYmd(firstDay.d) : bdate;
     for (const [key, from] of [['week', weekStart], ['month', `${bdate.slice(0, 7)}-01`], ['year', `${bdate.slice(0, 4)}-01-01`]]) {
       const start = from > since ? from : since;
       const r = (await client.query(
-        `WITH food AS (SELECT DISTINCT ON (business_date) business_date, food_net FROM kb_sales_snapshots
-                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL ORDER BY business_date, at DESC),
+        `WITH food AS (SELECT business_date, food_net FROM sales_daily
+                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL),
               labor AS (SELECT business_date, SUM(labor_total) AS labor FROM kb_punches
                         WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND (lower(role_name) = ANY($4) OR role_name ~* $5) GROUP BY business_date)
          SELECT COALESCE(SUM(food.food_net), 0) AS food, COALESCE(SUM(labor.labor), 0) AS labor, COUNT(food.business_date) AS days
@@ -391,7 +438,7 @@ async function view(locationId, { now = new Date() } = {}) {
       stale: !lastOkAt || now - lastOkAt > STALE_AFTER_MS,
       lastError: lastPull && !lastPull.ok ? lastPull.error : null,
       rotateSeconds: s.rotate_seconds,
-      food: { soFar: foodSoFar == null ? null : Math.round(foodSoFar), goal: Math.round(foodGoal), pct: foodSoFar != null && foodGoal > 0 ? Math.round((foodSoFar / foodGoal) * 100) : null, paceFrac: Math.round(paceFrac * 100) / 100, onPace: foodSoFar != null && foodGoal > 0 ? foodSoFar / foodGoal >= paceFrac - 0.05 : null },
+      food: { soFar: foodSoFar == null ? null : Math.round(foodSoFar), goal: Math.round(foodGoal), pct: foodSoFar != null && foodGoal > 0 ? Math.round((foodSoFar / foodGoal) * 100) : null, paceFrac: Math.round(paceFrac * 100) / 100, onPace: foodSoFar != null && foodGoal > 0 ? foodSoFar / foodGoal >= paceFrac - 0.05 : null, forecast: foodForecast },
       labor: { pctProjected: laborPctProjected, pctSoFar: laborPctSoFar, goal: laborGoal, hit: laborPctProjected == null ? null : laborPctProjected <= laborGoal, weekGoal: num(s.labor_goal_week) },
       hours: { actual: round1(actualHours), scheduledSoFar: round1(schedSoFar), scheduledTotal: round1(schedTotal), over: round1(actualHours - schedSoFar) },
       foodCost: null, // not set up yet (purchases / food inventory): shows "—"
@@ -426,16 +473,29 @@ async function locationForDevice(token) {
   });
 }
 
-// Business dates that already have a day's sales stored (backfill skips them).
+// Business dates the box need not read again: a final (after-close) read,
+// or three tries that found no sales recap (before the bar opened, or a
+// day it was closed). Live-only days are re-read once overnight so the
+// sales after the last 1:30am pull are counted.
 async function haveDates(locationId, from, to) {
   return withServiceClient(async (client) => (await client.query(
-    'SELECT DISTINCT business_date FROM kb_sales_snapshots WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL ORDER BY business_date',
+    `SELECT business_date FROM sales_daily WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3
+        AND (final OR read_attempts >= 3) ORDER BY business_date`,
     [locationId, from, to],
   )).rows.map((r) => toYmd(r.business_date)));
+}
+
+// How far back the box reads SpotOn history (kb_settings.history_from).
+async function historyFrom(locationId) {
+  return withServiceClient(async (client) => {
+    const { rows } = await client.query('SELECT history_from FROM kb_settings WHERE location_id = $1', [locationId]);
+    return rows[0] && rows[0].history_from ? toYmd(rows[0].history_from) : '2022-01-01';
+  });
 }
 
 async function recentPulls(locationId, limit = 12) {
   return withServiceClient(async (client) => (await client.query('SELECT at, ok, error, ms, punches FROM kb_pulls WHERE location_id = $1 ORDER BY at DESC LIMIT $2', [locationId, limit])).rows);
 }
 
-module.exports = { ingest, view, settingsFor, updateSettings, managerViewLocations, createDevice, listDevices, revokeDevice, locationForDevice, recentPulls, haveDates, foodFromSales, businessDate };
+module.exports = {
+  historyFrom, ingest, view, settingsFor, updateSettings, managerViewLocations, createDevice, listDevices, revokeDevice, locationForDevice, recentPulls, haveDates, foodFromSales, businessDate };

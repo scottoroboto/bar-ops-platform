@@ -118,11 +118,13 @@ async function tick() {
 }
 
 // ---- history ---------------------------------------------------------------
-// Past days, read once so week / month / year to date are real. Runs by
-// itself overnight (2am-7am, after the kitchen's last pull) for any day
-// since BACKFILL_FROM the cloud doesn't have yet, and from
-// tools/spoton-backfill.js by hand.
-const BACKFILL_FROM = process.env.SPOTON_BACKFILL_FROM || `${new Date().getFullYear()}-01-01`;
+// Past days, read once so week / month / year to date are real and the
+// sales forecast has years to learn from. Runs by itself overnight
+// (2am-7am, after the kitchen's last pull) for any day the cloud doesn't
+// have a final number for, and from tools/spoton-backfill.js by hand.
+// How far back: the cloud's setting (kitchen board, history_from), else
+// SPOTON_BACKFILL_FROM, else Jan 1 2022.
+const BACKFILL_FROM = process.env.SPOTON_BACKFILL_FROM || '2022-01-01';
 const NIGHT_FROM = 2 * 60;   // 2:00am
 const NIGHT_UNTIL = 7 * 60;  // 7:00am
 let backfilling = false;
@@ -139,7 +141,11 @@ function bizDate(clockInLocal) {
   return Number(m[2]) < 4 ? addDays(m[1], -1) : m[1];
 }
 
-async function backfill({ from = BACKFILL_FROM, to = null, force = false, log = () => {}, stopWhen = () => false } = {}) {
+async function backfill({ from = null, to = null, force = false, log = () => {}, stopWhen = () => false } = {}) {
+  if (!from) {
+    try { from = process.env.SPOTON_BACKFILL_FROM || await sync.kitchenHistoryFrom(); } catch (e) { /* cloud unreachable: fall back */ }
+    from = from || BACKFILL_FROM;
+  }
   to = to || addDays(todayYmd(), -1);
   if (!ymdOk(from) || from > to) throw new Error('Bad backfill range.');
   const have = force ? [] : await sync.kitchenHave(from, to);

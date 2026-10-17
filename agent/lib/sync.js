@@ -197,6 +197,14 @@ async function kitchenHave(from, to) {
   return (await res.json()).dates || [];
 }
 
+// How far back the cloud wants SpotOn history read (the owner's setting).
+async function kitchenHistoryFrom() {
+  const d = new Date().toISOString().slice(0, 10);
+  const res = await fetch(`${CLOUD_URL}/api/venue/agent/kitchen/have?from=${d}&to=${d}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`kitchen have failed: ${res.status}`);
+  return (await res.json()).historyFrom || null;
+}
+
 async function reportTvToken(tvId, wsToken) {
   const res = await fetch(`${CLOUD_URL}/api/venue/agent/tvs/${tvId}/token`, {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({ ws_token: wsToken }),
@@ -551,7 +559,7 @@ module.exports = {
   pushWans, reportSourceIdentity, adoptReceiver,
   pullAttention, clearAlert, serviceCall,
   register, pullConfig, heartbeat, start, stop,
-  reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems, kitchenPull, kitchenHave,
+  reportScheduleResult, reportTvToken, reportTvSlot, pushLayoutItems, kitchenPull, kitchenHave, kitchenHistoryFrom,
   createScene, pushEvent, updateEvent, deleteEvent, reportEventState,
   takeBackupNow, listBackups, restoreBackup, pushActivity, pushHealth,
   pollCommands,

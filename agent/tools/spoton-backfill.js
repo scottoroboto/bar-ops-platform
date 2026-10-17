@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Kitchen board history by hand. The box does this by itself overnight
-// (2am-7am, after the kitchen's last pull) for any day since Jan 1 the
-// cloud doesn't have; this runs the same thing right now.
-//   node tools/spoton-backfill.js                    missing days since Jan 1 (or SPOTON_BACKFILL_FROM)
+// (2am-7am, after the kitchen's last pull) for any day the cloud doesn't
+// have; this runs the same thing right now.
+//   node tools/spoton-backfill.js                    missing days since the cloud's history start (default Jan 1 2022)
 //   node tools/spoton-backfill.js 2026-06-01         missing days since June 1
 //   node tools/spoton-backfill.js 2026-01-01 2026-03-31 --force   redo a range even if stored
 // Safe to stop (Ctrl+C) and run again: stored days are skipped.

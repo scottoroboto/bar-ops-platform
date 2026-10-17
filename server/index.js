@@ -7,6 +7,7 @@ const { pool, withServiceClient, locationIdsOf } = require('./db');
 const auth = require('./auth');
 const employees = require('./employees');
 const certs = require('./certs');
+const forecast = require('./forecast');
 const tvpass = require('./tvpass');
 const timeclock = require('./timeclock');
 const servicecalls = require('./servicecalls');
@@ -5326,7 +5327,7 @@ res.status(400).json({ error: err.message });
 app.get('/api/venue/agent/kitchen/have', requireAgentAuth(), async (req, res) => {
 const ok = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 if (!ok(req.query.from) || !ok(req.query.to)) return res.status(400).json({ error: 'from and to as YYYY-MM-DD' });
-res.json({ dates: await kitchenboard.haveDates(req.vcSite.location_id, req.query.from, req.query.to) });
+res.json({ dates: await kitchenboard.haveDates(req.vcSite.location_id, req.query.from, req.query.to), historyFrom: await kitchenboard.historyFrom(req.vcSite.location_id) });
 });
 
 // Settings and TV links: the owner. The board: the owner, and managers at
@@ -5377,6 +5378,36 @@ try {
 res.json({ ok: true, settings: await kitchenboard.updateSettings(req.params.locationId, req.body, req.person.id) });
 } catch (err) {
 res.status(err.status || 400).json({ error: err.message });
+}
+});
+
+// Sales forecast (server/forecast.js, patch_076): the owner's view of the
+// next two weeks, accuracy, and the days left out of it.
+app.get('/api/kitchen-board/forecast/:locationId', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try {
+  res.json(await forecast.forLocation(req.params.locationId, { fresh: req.query.fresh === '1' }));
+} catch (err) {
+  console.error('[forecast] view failed:', err);
+  res.status(500).json({ error: 'Could not build the forecast.' });
+}
+});
+// The owner's call on a day: excluded true = leave out, false = keep it, null = let the app judge.
+app.post('/api/kitchen-board/forecast/:locationId/day', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try {
+  const b = req.body || {};
+  res.json(await forecast.setDay(req.params.locationId, b.date, b.excluded, b.reason, req.person.id));
+} catch (err) {
+  res.status(err.status || 400).json({ error: err.message });
+}
+});
+app.post('/api/kitchen-board/forecast/:locationId/history-from', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try {
+  res.json(await forecast.setHistoryFrom(req.params.locationId, (req.body || {}).date));
+} catch (err) {
+  res.status(err.status || 400).json({ error: err.message });
 }
 });
 
@@ -5515,6 +5546,18 @@ setInterval(() => {
 certs.runDue().then((n) => { if (n) console.log(`[certs] ${n} expiry notice(s) sent`); })
 .catch((err) => console.error('[certs] run error', err));
 }, 60 * 1000);
+
+// Sales forecast (patch_076): game schedules from ESPN a minute after boot
+// and then daily; each bar's forecast rebuilt hourly, which also logs
+// what it predicted so it can be graded later.
+const refreshForecastGames = () => forecast.refreshGames().catch((err) => console.error('[forecast] game schedule error', err.message));
+setTimeout(refreshForecastGames, 60 * 1000);
+setInterval(refreshForecastGames, 24 * 60 * 60 * 1000);
+setInterval(() => {
+withServiceClient((client) => client.query('SELECT location_id FROM kb_settings'))
+.then(async ({ rows }) => { for (const r of rows) await forecast.forLocation(r.location_id, { fresh: true }).catch((err) => console.error('[forecast] build error', err.message)); })
+.catch((err) => console.error('[forecast] hourly error', err.message));
+}, 60 * 60 * 1000);
 
 // The managers' morning summary (patch_069): each person's own hour, at
 // their bar's clock, once a day.

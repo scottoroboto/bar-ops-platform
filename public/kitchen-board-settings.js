@@ -41,6 +41,76 @@ async function loadAll() {
     document.getElementById('pulls').innerHTML = (pulls || []).map((p) => `<tr><td>${new Date(p.at).toLocaleString([], { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric' })}</td>
       <td class="${p.ok ? 'kb-ok' : 'kb-bad'}">${p.ok ? 'OK' : 'FAILED'}</td><td>${p.ok ? `${p.punches} punches · ${((p.ms || 0) / 1000).toFixed(0)}s` : escapeHtml(p.error || '')}</td></tr>`).join('') || '<tr><td class="muted">Nothing pulled yet. The bar\'s box needs SPOTON_USER / SPOTON_PASS in its .env.</td></tr>';
   } catch (e) { showMsg(e.message, 'error'); }
+  loadForecast();
+}
+
+// ---- Sales forecast (patch_076) ----------------------------------------
+const fcMoney = (n) => (n == null ? '—' : '$' + Math.round(n).toLocaleString());
+const fcDate = (ymd, opts) => new Date(ymd + 'T12:00:00').toLocaleDateString('en-US', opts || { weekday: 'short', month: 'short', day: 'numeric' });
+const fcSigned = (p) => (p == null ? '' : `${p >= 0 ? '+' : '−'}${Math.abs(p)}%`);
+
+async function loadForecast() {
+  const body = document.getElementById('fcBody');
+  let fc;
+  try { fc = await api(`/api/kitchen-board/forecast/${locId()}`); } catch (e) { body.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`; return; }
+  document.getElementById('fcHistoryFrom').value = fc.historyFrom || '';
+  const h = fc.history || {};
+  document.getElementById('fcHistoryNote').textContent = h.days
+    ? `Learning from ${h.days.toLocaleString()} days of sales, ${fcDate(h.from, { month: 'short', day: 'numeric', year: 'numeric' })} to ${fcDate(h.to, { month: 'short', day: 'numeric', year: 'numeric' })}. The bar's box reads more each night between 2 and 7am until it reaches the date below; the forecast gets sharper as it does.`
+    : 'No sales history yet.';
+  if (!fc.ready) { body.innerHTML = `<p class="muted">${escapeHtml(fc.reason || 'Not enough history yet.')}</p>`; renderLeftOut(fc); return; }
+  const acc = (a) => (a ? `typically within <b>${a.mape}%</b> · ${a.within15}% of days within 15%` : 'not enough days to check yet');
+  const teams = (fc.teamEffects || []).filter((t) => t.games > 0).map((t) => `${escapeHtml(t.team)} <b>${fcSigned(t.food)}</b> kitchen, <b>${fcSigned(t.bar)}</b> bar <span class="muted">(${t.games} game${t.games === 1 ? '' : 's'})</span>`).join('<br>');
+  const stats = `<div class="fc-stats">
+    <div><span class="k">Kitchen, last 8 weeks</span>${acc(fc.accuracy.food)}</div>
+    <div><span class="k">Bar, last 8 weeks</span>${acc(fc.accuracy.bar)}</div>
+    <div><span class="k">Game-day lift so far</span>${teams || '<span class="muted">No game days in the history yet</span>'}</div>
+  </div><p class="muted" style="font-size:12px; margin-top:-4px;">Accuracy is checked the honest way: each of the last 8 weeks predicted from only the days before it.</p>`;
+  const rows = fc.days.map((d, i) => `<tr class="${d.drivers.length ? 'has-why' : ''}">
+    <td style="white-space:nowrap;">${i === 0 ? '<b>Today</b>' : `${d.dow} ${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8, 10))}`}</td>
+    <td class="n"><b>${fcMoney(d.food.fc)}</b><span class="fc-range">${fcMoney(d.food.lo)}–${fcMoney(d.food.hi)}</span></td>
+    <td class="n"><b>${fcMoney(d.bar.fc)}</b><span class="fc-range">${fcMoney(d.bar.lo)}–${fcMoney(d.bar.hi)}</span></td>
+    <td class="n">${fcMoney(d.food.fc + d.bar.fc)}</td>
+  </tr>${d.drivers.length ? `<tr class="fc-why-row"><td colspan="4" class="fc-why">${d.drivers.map((x) => `${escapeHtml(x.label)}${x.food != null ? ` <b>${fcSigned(x.food)}</b>` : ''}`).join(' · ')}</td></tr>` : ''}`).join('');
+  body.innerHTML = stats + `<div class="fc-wrap"><table class="fc-table"><thead><tr><th>Day</th><th class="n">Kitchen</th><th class="n">Bar</th><th class="n">Total</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="font-size:12px;">Small numbers are the likely range (8 days in 10 land inside it). The % next to a game or holiday is its usual effect on the kitchen.</p>`;
+  renderLeftOut(fc);
+}
+
+function renderLeftOut(fc) {
+  const list = fc.leftOut || [];
+  const out = document.getElementById('fcOut');
+  out.innerHTML = list.length ? list.map((d) => `<div class="fc-out"><span><b>${fcDate(d.date, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</b> · ${fcMoney(d.total)}
+      <span class="why">${escapeHtml(d.why)}${d.manual ? ' · left out by you' : ' · left out by the app'}</span></span>
+      <button class="small ghost" style="margin:0; flex-shrink:0;" onclick="setForecastDay('${d.date}', ${d.manual ? 'null' : 'false'})">${d.manual ? 'Put back' : 'Use it anyway'}</button></div>`).join('')
+    : '<p class="muted" style="font-size:13px;">None.</p>';
+  if ((fc.keptByOwner || []).length) {
+    out.innerHTML += `<p class="muted" style="font-size:12.5px; margin-top:8px;">Kept by you even though they look unusual: ${fc.keptByOwner.map((d) => `${fcDate(d)} <a href="#" onclick="setForecastDay('${d}', null); return false;">let the app judge</a>`).join(', ')}</p>`;
+  }
+}
+
+async function setForecastDay(date, excluded, reason) {
+  try {
+    await withStepUp(() => api(`/api/kitchen-board/forecast/${locId()}/day`, { method: 'POST', body: { date, excluded, reason } }));
+    await loadForecast();
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+
+function leaveOutDay() {
+  const date = document.getElementById('fcOutDate').value;
+  const reason = document.getElementById('fcOutReason').value.trim();
+  if (!date) { showMsg('Pick the day to leave out.', 'error'); return; }
+  document.getElementById('fcOutDate').value = '';
+  document.getElementById('fcOutReason').value = '';
+  setForecastDay(date, true, reason || 'Left out by the owner');
+}
+
+async function saveHistoryFrom() {
+  const date = document.getElementById('fcHistoryFrom').value;
+  try {
+    await withStepUp(() => api(`/api/kitchen-board/forecast/${locId()}/history-from`, { method: 'POST', body: { date } }));
+    showMsg('Saved. The bar\'s box starts on it tonight between 2 and 7am.');
+  } catch (e) { showMsg(e.message, 'error'); }
 }
 
 async function saveSettings() {

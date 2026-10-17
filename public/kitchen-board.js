@@ -14,6 +14,18 @@ let lastGood = 0;
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => (n == null ? '—' : `$${Math.round(n).toLocaleString()}`);
+const kmoney = (n) => (n == null ? '—' : n >= 1000 ? `$${(n / 1000).toFixed(1)}K` : `$${Math.round(n)}`);
+const signed = (p) => (p == null ? '' : `${p >= 0 ? '+' : '−'}${Math.abs(p)}%`);
+
+// Today's forecast line on the food tile: what a day like today usually
+// does, where today is heading, and why (games, holidays).
+function forecastHtml(f) {
+  const x = f.forecast;
+  if (!x) return '<div class="sub" style="font-size:19px;margin-top:8px">White line = where we should be by now</div>';
+  const pace = x.projected != null ? ` · on pace for <b class="${x.projected >= x.fc ? 'blue' : 'amber'}">${money(x.projected)}</b>` : '';
+  const why = x.drivers.length ? `<div class="fcwhy">${x.drivers.map((d) => `<span>${esc(d.label)}${d.pct != null && d.pct !== 0 ? ` <b>${signed(d.pct)}</b>` : ''}</span>`).join('')}</div>` : '';
+  return `<div class="fcline">Forecast <b>${money(x.fc)}</b>${pace}</div>${why}<div class="sub" style="font-size:17px;margin-top:6px">White line = a normal day by this time</div>`;
+}
 
 function fit() {
   const sx = window.innerWidth / 1920; const sy = window.innerHeight / 1080;
@@ -68,7 +80,7 @@ function tilesHtml(compact) {
   const over = h.over > 0.05 ? `<span class="amber">+${h.over.toFixed(1)} hrs</span>` : `${h.over.toFixed(1)} hrs`;
   if (compact) {
     return `<div class="strip">
-      <div class="tile"><div class="lbl">Food sales</div><div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> goal</div></div>
+      <div class="tile"><div class="lbl">Food sales</div><div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> goal${f.forecast ? ` · fc <b>${kmoney(f.forecast.fc)}</b>` : ''}</div></div>
       <div class="tile"><div class="lbl">Labor % at close</div>${laborBadge}<div class="big ${l.pctProjected == null ? 'dim' : l.hit ? 'blue' : 'amber'}">${l.pctProjected == null ? '—' : l.pctProjected + '%'}</div><div class="sub">goal <b>${l.goal}%</b></div></div>
       <div class="tile"><div class="lbl">Hours</div>${hoursBadge}<div class="big ${h.over > 0.05 ? 'amber' : ''}">${h.actual.toFixed(1)}</div><div class="sub">scheduled <b>${h.scheduledSoFar.toFixed(1)}</b> · ${over}</div></div>
       <div class="tile"><div class="lbl">Food cost</div><div class="big dim">—</div><div class="sub">Not set up yet</div></div>
@@ -77,8 +89,8 @@ function tilesHtml(compact) {
   return `<div class="tiles">
     <div class="tile"><div class="lbl">Food sales</div>${foodBadge}
       <div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> goal${f.pct != null ? ` · ${f.pct}%` : ''}</div>
-      <div class="bar pace" style="--pace:${Math.round(f.paceFrac * 100)}%"><i style="width:${Math.min(100, f.pct || 0)}%"></i></div>
-      <div class="sub" style="font-size:19px;margin-top:8px">White line = where we should be by now</div></div>
+      <div class="bar pace" style="--pace:${Math.round(Math.min(1, f.paceFrac) * 100)}%"><i style="width:${Math.min(100, f.pct || 0)}%"></i></div>
+      ${forecastHtml(f)}</div>
     <div class="tile"><div class="lbl">Labor % at close</div>${laborBadge}
       <div class="big ${l.pctProjected == null ? 'dim' : l.hit ? 'blue' : 'amber'}">${l.pctProjected == null ? '—' : l.pctProjected + '%'}</div><div class="sub">goal <b>${l.goal}%</b> or less · projected</div></div>
     <div class="tile"><div class="lbl">Hours so far</div>${hoursBadge}
@@ -94,7 +106,7 @@ function screenA() {
   const offBody = off || notIn ? off + notIn : `<tr><td class="empty">${VIEW.scheduleKnown ? 'Everyone on plan' : 'No kitchen schedule published for today'}</td></tr>`;
   const sc = VIEW.sevenCheck;
   const check = sc ? `<div class="check"><span class="k">7 PM CHECK</span><span>${money(sc.foodAt7)} by 7:00 PM — ${sc.keep ? 'above' : 'below'} the ${money(sc.line)} slow-night line.</span><span class="${sc.keep ? 'blue' : 'amber'}">${sc.keep ? 'KEEP THE SCHEDULE' : 'CUT NIGHT B EARLY'}</span></div>` : '';
-  const week = VIEW.week.map((d) => `<div class="day ${d.state}"><div class="w">${d.day}</div><div class="p">${d.pct == null ? '—' : d.pct + '%'}</div><div class="r">${d.state === 'hit' ? 'HIT' : d.state === 'missed' ? 'MISSED' : d.state === 'live' ? '● LIVE' : '&nbsp;'}</div></div>`).join('');
+  const week = VIEW.week.map((d) => `<div class="day ${d.state}"><div class="w">${d.day}</div><div class="p">${d.pct == null ? '—' : d.pct + '%'}</div><div class="r">${d.state === 'hit' ? 'HIT' : d.state === 'missed' ? 'MISSED' : d.state === 'live' ? '● LIVE' : d.state === 'future' && d.fc ? `FC ${kmoney(d.fc)}` : '&nbsp;'}</div></div>`).join('');
   const goalW = VIEW.labor.weekGoal;
   const per = VIEW.periods || {};
   const perTile = (label, p) => {
