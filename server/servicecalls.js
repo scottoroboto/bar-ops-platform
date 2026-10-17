@@ -204,10 +204,11 @@ async function pendingCall(client, { id, pendingBy, note }) {
   if (existing.status === 'closed') return { ok: false, error: 'This call is already closed.' };
   if (existing.status === 'pending') return { ok: false, error: 'Already moved to Working.' };
 
-  await client.query(
+  const { rowCount } = await client.query(
     `UPDATE service_calls SET status = 'pending', pending_by = $1, pending_at = now(), pending_note = $2 WHERE id = $3`,
     [pendingBy, trimmed, id]
   );
+  if (!rowCount) return { ok: false, error: "This call couldn't be updated — it may be at a bar you're not set up for." };
   return { ok: true, call: await getCall(client, id) };
 }
 
@@ -218,10 +219,11 @@ async function closeCall(client, { id, closedBy, remedy }) {
   if (!existing) return { ok: false, error: 'Not found.' };
   if (existing.status === 'closed') return { ok: false, error: 'Already closed.' };
 
-  await client.query(
+  const { rowCount } = await client.query(
     `UPDATE service_calls SET status = 'closed', closed_by = $1, closed_at = now(), remedy = $2 WHERE id = $3`,
     [closedBy, remedy, id]
   );
+  if (!rowCount) return { ok: false, error: "This call couldn't be closed — it may be at a bar you're not set up for." };
   const call = await getCall(client, id);
   await notifyCallClosed(client, call).catch((err) => console.error('notifyCallClosed error', err));
   return { ok: true, call };

@@ -34,11 +34,23 @@ function getTwilioClient() {
   return twilioClient;
 }
 
+// The log line is bookkeeping, never the point: it runs inside the
+// caller's transaction, so it is fenced with a savepoint and any failure
+// (patch_075's missing policy, a constraint, …) is logged and swallowed
+// instead of aborting the transaction and silently undoing the caller's
+// real change along with it.
 async function logNotification(client, relatedTable, relatedId, channel, recipient, status, detail) {
-  await client.query(
-    `INSERT INTO notifications_log (related_table, related_id, channel, recipient, status, detail) VALUES ($1,$2,$3,$4,$5,$6)`,
-    [relatedTable, relatedId, channel, recipient, status, detail]
-  );
+  await client.query('SAVEPOINT notify_log');
+  try {
+    await client.query(
+      `INSERT INTO notifications_log (related_table, related_id, channel, recipient, status, detail) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [relatedTable, relatedId, channel, recipient, status, detail]
+    );
+    await client.query('RELEASE SAVEPOINT notify_log');
+  } catch (e) {
+    await client.query('ROLLBACK TO SAVEPOINT notify_log').catch(() => {});
+    console.error(`[notify] could not log ${channel} to ${recipient}: ${e.message}`);
+  }
 }
 
 // Master on/off switch for every outbound email/sms, platform-wide — added
