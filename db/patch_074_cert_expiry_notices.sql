@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS cert_expiry_notices (
   UNIQUE (certification_id, days_out)
 );
 ALTER TABLE cert_expiry_notices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cert_expiry_notices FORCE ROW LEVEL SECURITY;
 
 -- A manager whose certification lapses drops to staff until a current
 -- certificate is on file. These remember what to put back.
