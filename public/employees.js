@@ -446,7 +446,7 @@ function lockBadgeHtml(p) {
 // the card.
 function empRowHtml(p) {
   const nameBlock = `<div class="emp-who">
-      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}${lockBadgeHtml(p)}${ME.role === 'owner' && needsSetup(p) ? ` <span class="badge danger" title="${!p.department ? 'No department yet' : 'No schedule they can work yet'} — open their Access page">needs setup</span>` : ''}${certsNeedingAttention(p) ? ` <span class="badge stale" title="A certification is expired or expiring within 60 days">cert due</span>` : ''}</div>
+      <div class="emp-name">${escapeHtml(p.name)}${p.status !== 'active' ? ` <span class="badge off">${escapeHtml(p.status)}</span>` : ''}${lockBadgeHtml(p)}${ME.role === 'owner' && needsSetup(p) ? ` <span class="badge danger" title="${!p.department ? 'No department yet' : 'No schedule they can work yet'} — open their Access page">needs setup</span>` : ''}${p.role_before_cert_lapse ? ` <span class="badge danger" title="Manager role paused until a current certification is on file">role paused</span>` : (certsNeedingAttention(p) ? ` <span class="badge stale" title="A certification is expired or expiring within 60 days">cert due</span>` : '')}</div>
       <div class="emp-roleinfo">${escapeHtml(cap(p.role))} &middot; ${escapeHtml(p.position || '—')} <span class="emp-locs">${locChipsHtml(p)}</span></div>
     </div>`;
   if (ME.role === 'owner') {
@@ -814,7 +814,7 @@ function openEmployeeDetail(id) {
   avatar.style.backgroundImage = '';
   if (p.has_photo) { avatar.setAttribute('data-photo-for', p.id); fillPhotos(avatar.parentElement); } else avatar.removeAttribute('data-photo-for');
   document.getElementById('detailName').textContent = p.name;
-  document.getElementById('detailMeta').textContent = `${cap(p.role)} · ${p.position || '—'}${p.status !== 'active' ? ' · ' + p.status : ''}`;
+  document.getElementById('detailMeta').textContent = `${cap(p.role)} · ${p.position || '—'}${p.status !== 'active' ? ' · ' + p.status : ''}${p.role_before_cert_lapse ? ` · ${cap(p.role_before_cert_lapse)} role paused — certification expired ${p.role_lapsed_at ? fmtDate(p.role_lapsed_at) : ''}` : ''}`;
   document.getElementById('detailLocChips').innerHTML = locChipsHtml(p);
 
   const tiles = [];
@@ -938,7 +938,7 @@ function renderDetailCerts(p, isOwner) {
         </div>
         <div class="cert-sub">
           ${exp ? `<span class="badge ${exp.cls}">${escapeHtml(exp.text)}</span>` : '<span class="badge off">No expiration date</span>'}
-          ${c.photo_path ? `<a href="#" class="cert-photo-link" onclick="viewCertPhoto('${c.id}'); return false;">View photo</a>` : ''}
+          ${c.photo_path ? `<a href="#" class="cert-photo-link" onclick="viewCertPhoto('${c.id}'); return false;">View certificate</a>` : ''}
         </div>
         ${certCheckHtml(c)}
       </div>`;
@@ -948,7 +948,7 @@ function renderDetailCerts(p, isOwner) {
 
 function certPhotoPicked(input) {
   const f = input.files && input.files[0];
-  document.getElementById('certPhotoLabel').textContent = f ? `Photo: ${f.name}` : 'Add a photo of the certificate';
+  document.getElementById('certPhotoLabel').textContent = f ? `File: ${f.name}` : 'Add the certificate — photo of the card or full page, or a PDF';
   document.getElementById('certPhotoPick').classList.toggle('has-file', !!f);
 }
 
@@ -983,7 +983,8 @@ async function addCertification() {
     const result = await withStepUp(() => apiUpload(`/api/employees/${id}/certifications`, fd));
     if (!result.ok) { showMsg(result.error || 'Could not add certification.', 'error'); return; }
     const chk = result.certification && result.certification.photo_check;
-    if (chk && chk.summary) showMsg(chk.summary, chk.match === 'mismatch' ? 'error' : 'success');
+    if (result.roleRestored) showMsg('Certificate is current — their manager role is back on.', 'success');
+    else if (chk && chk.summary) showMsg(chk.summary, chk.match === 'mismatch' ? 'error' : 'success');
     photoInput.value = '';
     certPhotoPicked(photoInput);
     document.getElementById('certExpires').value = '';

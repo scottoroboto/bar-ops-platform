@@ -6,6 +6,7 @@ const cors = require('cors');
 const { pool, withServiceClient, locationIdsOf } = require('./db');
 const auth = require('./auth');
 const employees = require('./employees');
+const certs = require('./certs');
 const tvpass = require('./tvpass');
 const timeclock = require('./timeclock');
 const servicecalls = require('./servicecalls');
@@ -2995,6 +2996,12 @@ function parsePhotoUpload(req, res, next) {
     next();
   });
 }
+// Certificates may also be a PDF (a full-page certificate emailed by the
+// training provider) — same leading-bytes check as the images.
+function certFileError(file) {
+  if (file.mimetype === 'application/pdf') return file.buffer.subarray(0, 5).toString('ascii') === '%PDF-' ? null : 'That file is not a readable PDF.';
+  return photoFileError(file) ? 'The certificate needs to be a JPEG, PNG, HEIC or WebP photo, or a PDF.' : null;
+}
 function photoFileError(file) {
   if (!storage.PHOTO_MIMES.includes(file.mimetype) || !storage.looksLikeImage(file.buffer, file.mimetype)) {
     return 'The photo needs to be a JPEG, PNG, HEIC or WebP image.';
@@ -3218,7 +3225,7 @@ res.json(result);
 app.post('/api/employees/:id/certifications', auth.requireSession('full'), parsePhotoUpload, async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Only the owner can add a certification.' });
 const photoFile = req.file || null;
-if (photoFile && photoFileError(photoFile)) return res.status(400).json({ ok: false, error: photoFileError(photoFile) });
+if (photoFile && certFileError(photoFile)) return res.status(400).json({ ok: false, error: certFileError(photoFile) });
 try {
   const result = await employees.addCertification({ personId: req.params.id, name: req.body.name, acquiredOn: req.body.acquiredOn || null, expiresOn: req.body.expiresOn || null, addedBy: req.person.id, photoFile });
   res.json(result);
@@ -5500,6 +5507,13 @@ setTimeout(() => { monitoring.logUnifiProbe().catch((err) => console.error('[mon
 setInterval(() => {
 monitoring.runDailySummaryIfDue().then((r) => { if (r.ran) console.log(`[monitoring] daily summary sent to ${r.sent} people`); })
 .catch((err) => console.error('[monitoring] daily summary error', err));
+}, 60 * 1000);
+
+// Certification expiry notices and the manager rule (patch_074): checked
+// every minute, sends once per step per cert from 9am bar time.
+setInterval(() => {
+certs.runDue().then((n) => { if (n) console.log(`[certs] ${n} expiry notice(s) sent`); })
+.catch((err) => console.error('[certs] run error', err));
 }, 60 * 1000);
 
 // The managers' morning summary (patch_069): each person's own hour, at

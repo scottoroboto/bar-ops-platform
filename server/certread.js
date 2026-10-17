@@ -30,7 +30,7 @@ const SCHEMA = {
   additionalProperties: false,
 };
 
-const PROMPT = `This photo was uploaded as proof of an employee's certification (for example a ServSafe, TIPS, food handler or food manager card or certificate).
+const PROMPT = `This image or document was uploaded as proof of an employee's certification (for example a ServSafe, TIPS, food handler or food manager credential). It may be a wallet card, a full-page certificate, or a scan/PDF of either; it may be rotated or photographed at an angle.
 Read what is printed on it. Report the certification name, the holder's name, the issue or completion date and the expiration date exactly as printed, converted to YYYY-MM-DD. If the certificate only states a validity period (e.g. "valid for 5 years") with no explicit expiration date, leave expires_on null and say so in the note. Never guess a date that is not on the card. If the photo is not a certificate at all, set is_certificate to false.`;
 
 // ISO date helpers — Postgres hands dates back as JS Date objects; the
@@ -64,6 +64,13 @@ function compare(read, entered) {
 async function readCertPhoto({ buffer, mimetype, enteredExpiresOn, enteredName }) {
   const client = getAnthropic();
   if (!client) return { match: 'unreadable', summary: 'Photo saved. Automatic review is off — ANTHROPIC_API_KEY is not set on the server.', skipped: true };
+  // The reader takes JPEG/PNG/WebP/GIF images and PDFs. HEIC (an iPhone
+  // photo picked from the library in its original format) is stored but
+  // can't be reviewed; most phones hand the browser a JPEG, so this is rare.
+  if (mimetype === 'image/heic') return { match: 'unreadable', summary: 'Photo saved. HEIC photos can\'t be reviewed automatically — check the date against the card yourself, or retake it with the camera.' };
+  const filePart = mimetype === 'application/pdf'
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } }
+    : { type: 'image', source: { type: 'base64', media_type: mimetype, data: buffer.toString('base64') } };
   try {
     const response = await client.messages.create({
       model: 'claude-opus-5-5',
@@ -72,7 +79,7 @@ async function readCertPhoto({ buffer, mimetype, enteredExpiresOn, enteredName }
       messages: [{
         role: 'user',
         content: [
-          { type: 'image', source: { type: 'base64', media_type: mimetype, data: buffer.toString('base64') } },
+          filePart,
           { type: 'text', text: PROMPT + (enteredName ? `\nThe owner filed this as "${enteredName}".` : '') },
         ],
       }],

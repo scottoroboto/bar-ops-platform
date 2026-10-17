@@ -5,6 +5,7 @@ const notify = require('./notify');
 const auth = require('./auth');
 const storage = require('./storage');
 const certread = require('./certread');
+const certs = require('./certs');
 
 // NOTE: 'monitoring' was added to employee_apps' app_key CHECK constraint
 // back in patch_010 but never added here — meaning no one could ever be
@@ -470,7 +471,7 @@ async function listAllWithAccess(locationFilter) {
               (SELECT count(*)::int FROM employee_schedules es WHERE es.person_id = people.id) AS schedules_n,
               (SELECT count(*)::int FROM employee_positions ep WHERE ep.person_id = people.id) AS positions_n,
               password_verified_at, (photo_path IS NOT NULL) AS has_photo,
-              pin_locked_at, password_locked_at,
+              pin_locked_at, password_locked_at, role_before_cert_lapse, role_lapsed_at,
               activated_at, COALESCE(activated_at, created_at) AS hire_date
        FROM people WHERE ${where} ORDER BY name`,
       params
@@ -517,7 +518,10 @@ async function addCertification({ personId, name, acquiredOn, expiresOn, addedBy
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [personId, trimmed, acquiredOn || null, expires, addedBy, photoPath, photoCheck ? JSON.stringify(photoCheck) : null]
     );
-    return { ok: true, certification: rows[0] };
+    // A manager who lost their role to a lapsed cert gets it back when a
+    // current one of the same name is filed (server/certs.js).
+    const restored = await certs.maybeRestoreRole(client, personId, rows[0]).catch((err) => { console.error('[employees] role restore', err.message); return false; });
+    return { ok: true, certification: rows[0], roleRestored: restored };
   });
 }
 
@@ -705,7 +709,7 @@ async function ownerUpdateRole({ personId, role, updatedBy }) {
       }
     }
     const { rows } = await client.query(
-      `UPDATE people SET role = $1, updated_at = now() WHERE id = $2 RETURNING id, name, role`,
+      `UPDATE people SET role = $1, role_before_cert_lapse = NULL, role_lapsed_cert_id = NULL, role_lapsed_at = NULL, updated_at = now() WHERE id = $2 RETURNING id, name, role`,
       [role, personId]
     );
     return { ok: true, person: rows[0] };
