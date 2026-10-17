@@ -22,9 +22,9 @@ const signed = (p) => (p == null ? '' : `${p >= 0 ? '+' : '−'}${Math.abs(p)}%`
 function forecastHtml(f) {
   const x = f.forecast;
   if (!x) return '<div class="sub" style="font-size:19px;margin-top:8px">White line = where we should be by now</div>';
-  const pace = x.projected != null ? ` · on pace for <b class="${x.projected >= x.fc ? 'blue' : 'amber'}">${money(x.projected)}</b>` : '';
+  const pace = x.projected != null ? `<div class="fcline">On pace for <b class="${x.projected >= x.fc ? 'blue' : 'amber'}">${money(x.projected)}</b></div>` : '';
   const why = x.drivers.length ? `<div class="fcwhy">${x.drivers.map((d) => `<span>${esc(d.label)}${d.pct != null && d.pct !== 0 ? ` <b>${signed(d.pct)}</b>` : ''}</span>`).join('')}</div>` : '';
-  return `<div class="fcline">Forecast <b>${money(x.fc)}</b>${pace}</div>${why}<div class="sub" style="font-size:17px;margin-top:6px">White line = a normal day by this time</div>`;
+  return `${pace}${why}<div class="sub" style="font-size:17px;margin-top:6px">White line = a normal ${esc(f.weekday || 'day')} by this time</div>`;
 }
 
 function fit() {
@@ -80,7 +80,7 @@ function tilesHtml(compact) {
   const over = h.over > 0.05 ? `<span class="amber">+${h.over.toFixed(1)} hrs</span>` : `${h.over.toFixed(1)} hrs`;
   if (compact) {
     return `<div class="strip">
-      <div class="tile"><div class="lbl">Food sales</div><div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> goal${f.forecast ? ` · fc <b>${kmoney(f.forecast.fc)}</b>` : ''}</div></div>
+      <div class="tile"><div class="lbl">Food sales</div><div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> ${f.targetKind === 'forecast' ? 'forecast' : 'goal'}</div></div>
       <div class="tile"><div class="lbl">Labor % at close</div>${laborBadge}<div class="big ${l.pctProjected == null ? 'dim' : l.hit ? 'blue' : 'amber'}">${l.pctProjected == null ? '—' : l.pctProjected + '%'}</div><div class="sub">goal <b>${l.goal}%</b></div></div>
       <div class="tile"><div class="lbl">Hours</div>${hoursBadge}<div class="big ${h.over > 0.05 ? 'amber' : ''}">${h.actual.toFixed(1)}</div><div class="sub">scheduled <b>${h.scheduledSoFar.toFixed(1)}</b> · ${over}</div></div>
       <div class="tile"><div class="lbl">Food cost</div><div class="big dim">—</div><div class="sub">Not set up yet</div></div>
@@ -88,7 +88,7 @@ function tilesHtml(compact) {
   }
   return `<div class="tiles">
     <div class="tile"><div class="lbl">Food sales</div>${foodBadge}
-      <div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> goal${f.pct != null ? ` · ${f.pct}%` : ''}</div>
+      <div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> ${f.targetKind === 'forecast' ? 'forecast' : 'goal'}${f.pct != null ? ` · ${f.pct}%` : ''}</div>
       <div class="bar pace" style="--pace:${Math.round(Math.min(1, f.paceFrac) * 100)}%"><i style="width:${Math.min(100, f.pct || 0)}%"></i></div>
       ${forecastHtml(f)}</div>
     <div class="tile"><div class="lbl">Labor % at close</div>${laborBadge}

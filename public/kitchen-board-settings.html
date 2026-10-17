@@ -43,8 +43,9 @@
   <div class="card" id="goalsCard">
     <h2>Goals</h2>
     <div class="kb-grid">
-      <div><label>Food sales goal, Sun–Thu ($)</label><input id="foodGoalWeekday" type="number" min="0" step="10"></div>
-      <div><label>Food sales goal, Fri–Sat ($)</label><input id="foodGoalWeekend" type="number" min="0" step="10"></div>
+      <div><label>Backup food target, Sun–Thu ($)</label><input id="foodGoalWeekday" type="number" min="0" step="10"></div>
+      <div><label>Backup food target, Fri–Sat ($)</label><input id="foodGoalWeekend" type="number" min="0" step="10"></div>
+      <p class="muted" style="grid-column:1/-1; font-size:12.5px; margin:6px 0 0;">The board's food target is the day's sales forecast. These two are used only on a day the forecast can't be built (not enough history yet).</p>
       <div><label>Labor % goal, Sun–Thu</label><input id="laborGoalWeekday" type="number" min="1" max="100" step="1"></div>
       <div><label>Labor % goal, Fri–Sat</label><input id="laborGoalWeekend" type="number" min="1" max="100" step="1"></div>
       <div><label>Labor % goal, whole week</label><input id="laborGoalWeek" type="number" min="1" max="100" step="1"></div>

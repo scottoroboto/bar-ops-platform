@@ -312,9 +312,6 @@ async function view(locationId, { now = new Date() } = {}) {
       )).rows[0];
       rate = r && num(r.h) > 0 ? num(r.l) / num(r.h) : null;
     }
-    const expectedFood = Math.max(foodGoal, foodSoFar || 0);
-    const projectedLabor = laborSoFar + (rate != null ? schedRemaining * rate : 0);
-    const laborPctProjected = expectedFood > 0 && (rate != null || schedRemaining === 0) ? Math.round((projectedLabor / expectedFood) * 100) : null;
     const laborPctSoFar = foodSoFar ? Math.round((laborSoFar / foodSoFar) * 100) : null;
 
     // Where sales "should" be by now: the share of a normal day's food
@@ -334,6 +331,15 @@ async function view(locationId, { now = new Date() } = {}) {
       projected: foodSoFar != null && curveFrac != null ? Math.round(foodSoFar + fcToday.food.fc * (1 - curveFrac)) : null,
       drivers: fcToday.drivers.map((d) => ({ label: d.label, pct: d.food })),
     } : null;
+    // The day's target (Scotto, 2026-10-17: the second mockup): the
+    // forecast when there is one; the weekday/weekend goal from settings
+    // only until the forecast has enough history.
+    const target = foodForecast ? foodForecast.fc : foodGoal;
+    // Labor % at close is labor over the food the day will end with: sales
+    // so far plus a normal rest of the day, else the target.
+    const expectedFood = foodForecast && foodForecast.projected != null ? foodForecast.projected : Math.max(target, foodSoFar || 0);
+    const projectedLabor = laborSoFar + (rate != null ? schedRemaining * rate : 0);
+    const laborPctProjected = expectedFood > 0 && (rate != null || schedRemaining === 0) ? Math.round((projectedLabor / expectedFood) * 100) : null;
 
     const showName = (n) => (s.show_names ? n : null);
     const onClock = punches.filter((r) => !r.is_clocked_out && !r.clock_out).map((r) => {
@@ -365,7 +371,7 @@ async function view(locationId, { now = new Date() } = {}) {
     const hours = [];
     const snapAt = (t) => { const x = [...snaps].reverse().find((q) => q.at <= t && q.food != null); return x ? x.food : null; };
     const remainingHours = Math.max(0, (closeAt - now) / 3600000);
-    const perHourExpected = remainingHours > 0 ? Math.max(0, foodGoal - (foodSoFar || 0)) / remainingHours : 0;
+    const perHourExpected = remainingHours > 0 ? Math.max(0, target - (foodSoFar || 0)) / remainingHours : 0;
     for (let h = BOARD_HOURS.from; h < BOARD_HOURS.to; h += 1) {
       const start = new Date(openStart.getTime() + (h - BOARD_HOURS.from) * 3600000);
       const end = new Date(start.getTime() + 3600000);
@@ -438,7 +444,7 @@ async function view(locationId, { now = new Date() } = {}) {
       stale: !lastOkAt || now - lastOkAt > STALE_AFTER_MS,
       lastError: lastPull && !lastPull.ok ? lastPull.error : null,
       rotateSeconds: s.rotate_seconds,
-      food: { soFar: foodSoFar == null ? null : Math.round(foodSoFar), goal: Math.round(foodGoal), pct: foodSoFar != null && foodGoal > 0 ? Math.round((foodSoFar / foodGoal) * 100) : null, paceFrac: Math.round(paceFrac * 100) / 100, onPace: foodSoFar != null && foodGoal > 0 ? foodSoFar / foodGoal >= paceFrac - 0.05 : null, forecast: foodForecast },
+      food: { soFar: foodSoFar == null ? null : Math.round(foodSoFar), goal: Math.round(target), targetKind: foodForecast ? 'forecast' : 'goal', pct: foodSoFar != null && target > 0 ? Math.round((foodSoFar / target) * 100) : null, paceFrac: Math.round(paceFrac * 100) / 100, onPace: foodSoFar != null && target > 0 ? foodSoFar / target >= paceFrac - 0.05 : null, forecast: foodForecast, weekday: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][weekdayOf(bdate)] },
       labor: { pctProjected: laborPctProjected, pctSoFar: laborPctSoFar, goal: laborGoal, hit: laborPctProjected == null ? null : laborPctProjected <= laborGoal, weekGoal: num(s.labor_goal_week) },
       hours: { actual: round1(actualHours), scheduledSoFar: round1(schedSoFar), scheduledTotal: round1(schedTotal), over: round1(actualHours - schedSoFar) },
       foodCost: null, // not set up yet (purchases / food inventory): shows "—"
