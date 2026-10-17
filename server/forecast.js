@@ -315,7 +315,7 @@ const cache = new Map(); // locationId -> { at, value }
 
 async function loadInputs(client, locationId, today) {
   const { rows: sales } = await client.query(
-    `SELECT business_date, food_net, total_net, excluded, excluded_reason FROM sales_daily
+    `SELECT business_date, food_net, total_net, excluded, excluded_reason, excluded_by FROM sales_daily
       WHERE location_id = $1 AND business_date < $2 ORDER BY business_date`, [locationId, today]);
   const { rows: games } = await client.query(
     `SELECT team_key, game_date, kickoff, time_tbd, opponent, home_away, season_type FROM sports_games ORDER BY kickoff NULLS LAST`);
@@ -372,7 +372,7 @@ function buildForecast({ sales, games, today, dayStartHour }) {
   }
 
   // Left-out days, newest first: the owner's own and the automatic ones.
-  const manual = sales.filter((r) => r.excluded === true).map((r) => ({ date: toYmd(r.business_date), total: r.total_net == null ? null : Math.round(Number(r.total_net)), why: r.excluded_reason || 'Left out by the owner', manual: true }));
+  const manual = sales.filter((r) => r.excluded === true).map((r) => ({ date: toYmd(r.business_date), total: r.total_net == null ? null : Math.round(Number(r.total_net)), why: r.excluded_reason || 'Left out by the owner', manual: true, byOwner: !!r.excluded_by }));
   const auto = new Map();
   for (const [k, label] of [['food', 'Kitchen'], ['bar', 'Bar']]) {
     for (const f of sides[k].fit.flagged) {
@@ -419,11 +419,12 @@ async function forLocation(locationId, { now = new Date(), fresh = false } = {})
     for (const s of snaps) { const d = toYmd(s.business_date); if (leftOut.has(d)) continue; if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push({ at: new Date(s.at), food: s.food_net == null ? null : Number(s.food_net) }); }
     const dayStartOf = (d) => zonedToUtc(`${d}T${p2(inputs.dayStartHour)}:00:00`, TZ);
     fc.curve = buildCurve(byDay, dayStartOf, dow(today));
-    // Keep what was said, to grade it later (once a day per bar).
+    // Keep what was said, to grade it later: the day's latest version per
+    // bar (so 'made the day before' is the last word that day).
     for (const d of fc.days) {
       await client.query(
         `INSERT INTO sales_forecasts (location_id, business_date, made_on, food_fc, bar_fc, detail) VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (location_id, business_date, made_on) DO NOTHING`,
+         ON CONFLICT (location_id, business_date, made_on) DO UPDATE SET food_fc = EXCLUDED.food_fc, bar_fc = EXCLUDED.bar_fc, detail = EXCLUDED.detail`,
         [locationId, d.date, today, d.food.fc, d.bar.fc, JSON.stringify({ food: d.food, bar: d.bar, drivers: d.drivers })]);
     }
     return fc;

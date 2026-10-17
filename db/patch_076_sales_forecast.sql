@@ -77,3 +77,9 @@ ON CONFLICT (location_id, business_date) DO NOTHING;
 -- Scotto: the $1,300 Friday at T2 was a half day for the hurricane.
 UPDATE sales_daily SET excluded = true, excluded_reason = 'Hurricane — half day', final = true
  WHERE business_date = '2026-10-09' AND location_id = (SELECT id FROM locations WHERE name = 'Ticket 2');
+
+-- Both bars ran far above normal for days after the storm (people without
+-- power); left out at setup so they don't lift October and the game-day
+-- effects. Visible on the settings page with "Put back".
+UPDATE sales_daily SET excluded = true, excluded_reason = 'After the hurricane — well above normal'
+ WHERE business_date BETWEEN '2026-10-11' AND '2026-10-15' AND excluded IS NULL;

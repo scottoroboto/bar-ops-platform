@@ -81,7 +81,7 @@ function renderLeftOut(fc) {
   const list = fc.leftOut || [];
   const out = document.getElementById('fcOut');
   out.innerHTML = list.length ? list.map((d) => `<div class="fc-out"><span><b>${fcDate(d.date, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</b> · ${fcMoney(d.total)}
-      <span class="why">${escapeHtml(d.why)}${d.manual ? ' · left out by you' : ' · left out by the app'}</span></span>
+      <span class="why">${escapeHtml(d.why)}${d.manual ? (d.byOwner ? ' · left out by you' : ' · left out at setup') : ' · left out by the app'}</span></span>
       <button class="small ghost" style="margin:0; flex-shrink:0;" onclick="setForecastDay('${d.date}', ${d.manual ? 'null' : 'false'})">${d.manual ? 'Put back' : 'Use it anyway'}</button></div>`).join('')
     : '<p class="muted" style="font-size:13px;">None.</p>';
   if ((fc.keptByOwner || []).length) {
