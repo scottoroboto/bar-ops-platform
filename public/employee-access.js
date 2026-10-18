@@ -149,7 +149,7 @@ async function setWidget(key, on) {
 // ---------------- Notifications ----------------
 function panelNotif() {
   const p = V.person; const S = V.summary; const A = V.alerts; const own = V.own;
-  const canSummary = p.role === 'manager' || p.role === 'maintenance';
+  const canSummary = p.role === 'manager' || p.role === 'maintenance' || p.role === 'owner';
   const routeChips = [{ id: '', label: 'Every bar', on: A.routes.some((r) => !r.locationId) }].concat(V.locations.map((l) => ({ id: l.id, label: l.name, on: A.routes.some((r) => r.locationId === l.id) })));
   const half = Math.ceil(A.categories.length / 2);
   const catRow = (c) => row(escapeHtml(c.label), '', `<select onchange="setAlertMode('${c.key}', this.value)"><option value="off" ${c.mode === 'off' ? 'selected' : ''}>Off</option><option value="immediate" ${c.mode === 'immediate' ? 'selected' : ''}>Right away</option><option value="daily" ${c.mode === 'daily' ? 'selected' : ''}>Daily summary</option></select>`);
@@ -163,7 +163,7 @@ function panelNotif() {
       ${row('Day/night cutoff', '', `<select onchange="setSummary({ dayNightCutoff: Number(this.value) })">${[16, 17, 18, 19, 20, 21].map((h) => `<option value="${h}" ${S.dayNightCutoff === h ? 'selected' : ''}>${h - 12}:00 PM</option>`).join('')}</select>`)}
       ${row('Late clock-in after', '', `<select onchange="setSummary({ lateAfterMin: Number(this.value) })">${[5, 10, 15].map((m) => `<option value="${m}" ${S.lateAfterMin === m ? 'selected' : ''}>${m} minutes</option>`).join('')}</select>`)}
       <div class="ac-actions"><button class="ghost" onclick="sendSummaryTest()">Send them a test now</button><span id="summaryTestResult" class="muted"></span></div>`
-      : '<p class="muted">The morning summary is for managers and maintenance.</p>'}
+      : '<p class="muted">The morning summary is for managers, maintenance and the owner.</p>'}
     <div class="ac-group">Equipment alerts, right away or daily</div>
     ${row('Routed for', 'Which bars\' equipment alerts reach this person, on top of Systems Monitoring access.', '')}
     ${chips(routeChips, "toggleRoute('%ID%')")}
