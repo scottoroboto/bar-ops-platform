@@ -320,7 +320,7 @@ async function loadInputs(client, locationId, today) {
   const { rows: games } = await client.query(
     `SELECT team_key, game_date, kickoff, time_tbd, opponent, home_away, season_type FROM sports_games ORDER BY kickoff NULLS LAST`);
   const { rows: [s] } = await client.query('SELECT day_start_hour, history_from FROM kb_settings WHERE location_id = $1', [locationId]);
-  return { sales, games, dayStartHour: s ? Number(s.day_start_hour) : 4, historyFrom: s && s.history_from ? toYmd(s.history_from) : '2022-01-01' };
+  return { sales, games, dayStartHour: s ? Number(s.day_start_hour) : 6, historyFrom: s && s.history_from ? toYmd(s.history_from) : '2022-01-01' };
 }
 
 function zonedToUtc(naive, tz) {

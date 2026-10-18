@@ -503,11 +503,12 @@ async function haveDates(locationId, from, to) {
   )).rows.map((r) => toYmd(r.business_date)));
 }
 
-// How far back the box reads SpotOn history (kb_settings.history_from).
-async function historyFrom(locationId) {
+// What the box needs from the settings: how far back it reads SpotOn
+// history, and the hour the business day rolls over.
+async function boxSettings(locationId) {
   return withServiceClient(async (client) => {
-    const { rows } = await client.query('SELECT history_from FROM kb_settings WHERE location_id = $1', [locationId]);
-    return rows[0] && rows[0].history_from ? toYmd(rows[0].history_from) : '2022-01-01';
+    const s = await settingsFor(client, locationId);
+    return { historyFrom: s.history_from ? toYmd(s.history_from) : '2022-01-01', dayStartHour: Number(s.day_start_hour) };
   });
 }
 
@@ -516,4 +517,4 @@ async function recentPulls(locationId, limit = 12) {
 }
 
 module.exports = {
-  historyFrom, ingest, view, settingsFor, updateSettings, managerViewLocations, createDevice, listDevices, revokeDevice, locationForDevice, recentPulls, haveDates, foodFromSales, businessDate };
+  boxSettings, ingest, view, settingsFor, updateSettings, managerViewLocations, createDevice, listDevices, revokeDevice, locationForDevice, recentPulls, haveDates, foodFromSales, businessDate };

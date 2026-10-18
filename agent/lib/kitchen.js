@@ -1,5 +1,5 @@
 // Kitchen board collector (T2 Kitchen Display spec, Oct 2026). Every 5
-// minutes from 7:30am to 3:45am (bar time) this box reads three SpotOn
+// minutes from 8am until just before the 6am rollover (bar time) this box reads three SpotOn
 // reports for today -- Employee Time (who's on, hours, SpotOn's labor $),
 // the Daily Sales Recap (food sales so far) and Hourly Sales -- and posts
 // them to the cloud (POST /api/venue/agent/kitchen/pull), which stores
@@ -13,13 +13,30 @@ const sync = require('./sync');
 const spoton = require('./spoton');
 
 const EVERY_MS = 5 * 60 * 1000;
-const OPEN_FROM = 7 * 60 + 30;   // 7:30am
-const OPEN_UNTIL = 3 * 60 + 45;  // 3:45am (next day): the bars close about 3am
 // SpotOn's business day runs past midnight to closing; the report for the
 // next calendar date is empty until then. Ask for the business day, which
-// rolls over at this hour (same as the cloud's kb_settings.day_start_hour).
-const DAY_START_HOUR = Number(process.env.SPOTON_DAY_START_HOUR || 4);
-function businessDayParam() { return spoton.dateParam(new Date(Date.now() - DAY_START_HOUR * 3600000), tz()); }
+// rolls over at the cloud's kb_settings.day_start_hour (6am, Scotto
+// 2026-10-18: bartenders stay late for inventory). Live pulls run until 5
+// minutes before the rollover; history is read from the rollover until
+// the morning's first live pull.
+const OPEN_FROM = 8 * 60;        // 8:00am
+let dayStartHour = Number(process.env.SPOTON_DAY_START_HOUR || cache.get('kitchenDayStartHour') || 6);
+let dayInfoAt = 0;
+function openUntil() { return Math.max(0, dayStartHour * 60 - 5); }
+function businessDayParam() { return spoton.dateParam(new Date(Date.now() - dayStartHour * 3600000), tz()); }
+// The cloud's settings (rollover hour, how far back to read history), every 6 hours.
+async function refreshDayInfo(force = false) {
+  if (!force && Date.now() - dayInfoAt < 6 * 3600000) return null;
+  try {
+    const info = await sync.kitchenSettings();
+    dayInfoAt = Date.now();
+    if (!process.env.SPOTON_DAY_START_HOUR && Number.isFinite(Number(info.dayStartHour))) {
+      dayStartHour = Number(info.dayStartHour);
+      cache.set('kitchenDayStartHour', dayStartHour);
+    }
+    return info;
+  } catch (e) { return null; }
+}
 // Location key from a SpotOn report address; T2's unless .env says otherwise.
 const LOCATION_KEY = process.env.SPOTON_LOCATION_KEY || '1215273229887737856';
 
@@ -39,7 +56,7 @@ function minutesNow() {
 
 function openNow() {
   const m = minutesNow();
-  return m >= OPEN_FROM || m < OPEN_UNTIL;
+  return m >= OPEN_FROM || m < openUntil();
 }
 
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
@@ -91,6 +108,7 @@ async function pullOnce() {
 
 async function tick() {
   if (running || backfilling || !spoton.enabled()) return;
+  await refreshDayInfo();
   if (!openNow()) {
     if (session && !backfilling) { await session.close().catch(() => {}); session = null; }
     nightly().catch(() => {});
@@ -125,13 +143,13 @@ async function tick() {
 // ---- history ---------------------------------------------------------------
 // Past days, read once so week / month / year to date are real and the
 // sales forecast has years to learn from. Runs by itself overnight
-// (4am-7am, after close and the last live pull) for any day the cloud doesn't
+// (6am-8am, after close, inventory and the last live pull) for any day the cloud doesn't
 // have a final number for, and from tools/spoton-backfill.js by hand.
 // How far back: the cloud's setting (kitchen board, history_from), else
 // SPOTON_BACKFILL_FROM, else Jan 1 2022.
 const BACKFILL_FROM = process.env.SPOTON_BACKFILL_FROM || '2022-01-01';
-const NIGHT_FROM = 4 * 60;   // 4:00am, after close and the last live pull
-const NIGHT_UNTIL = 7 * 60;  // 7:00am
+function nightFrom() { return dayStartHour * 60; } // the rollover: after close, inventory and the last live pull
+const NIGHT_UNTIL = OPEN_FROM;                       // until the morning's first live pull
 let backfilling = false;
 
 const ymdOk = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
@@ -139,16 +157,17 @@ function todayYmd() { return new Date().toLocaleDateString('en-CA', { timeZone: 
 function addDays(ymd, n) { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function mmdd(ymd) { const [y, m, d] = ymd.split('-'); return `${m}-${d}-${y}`; }
 function monthEnd(ymd) { const [y, m] = ymd.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); }
-// A punch's business day: its clock-in day, with 12am-4am counting toward the day before.
+// A punch's business day: its clock-in day, with clock-ins before the rollover counting toward the day before.
 function bizDate(clockInLocal) {
   const m = String(clockInLocal || '').match(/^(\d{4}-\d{2}-\d{2})T(\d{2})/);
   if (!m) return null;
-  return Number(m[2]) < 4 ? addDays(m[1], -1) : m[1];
+  return Number(m[2]) < dayStartHour ? addDays(m[1], -1) : m[1];
 }
 
 async function backfill({ from = null, to = null, force = false, log = () => {}, stopWhen = () => false } = {}) {
   if (!from) {
-    try { from = process.env.SPOTON_BACKFILL_FROM || await sync.kitchenHistoryFrom(); } catch (e) { /* cloud unreachable: fall back */ }
+    if (process.env.SPOTON_BACKFILL_FROM) from = process.env.SPOTON_BACKFILL_FROM;
+    else { const info = await refreshDayInfo(true); from = info && info.historyFrom; }
     from = from || BACKFILL_FROM;
   }
   to = to || addDays(todayYmd(), -1);
@@ -207,11 +226,11 @@ async function backfill({ from = null, to = null, force = false, log = () => {},
   return out;
 }
 
-// Overnight: once per night, between 4am and 7am, when the kitchen pulls are off.
+// Overnight: once per night, from the rollover (6am) until the 8am pulls start.
 async function nightly() {
   if (backfilling || running || !spoton.enabled()) return;
   const m = minutesNow();
-  if (m < NIGHT_FROM || m >= NIGHT_UNTIL) return;
+  if (m < nightFrom() || m >= NIGHT_UNTIL) return;
   const today = todayYmd();
   if (cache.get('kitchenBackfillNight') === today) return;
   backfilling = true;
@@ -227,12 +246,12 @@ async function nightly() {
 }
 
 function status() {
-  return { enabled: spoton.enabled(), open: openNow(), lastOkAt: lastOkAt ? new Date(lastOkAt).toISOString() : null, lastError, failures, backfilling, historyFrom: BACKFILL_FROM, lastHistoryNight: cache.get('kitchenBackfillNight') || null };
+  return { enabled: spoton.enabled(), open: openNow(), lastOkAt: lastOkAt ? new Date(lastOkAt).toISOString() : null, lastError, failures, backfilling, historyFrom: BACKFILL_FROM, dayStartHour, lastHistoryNight: cache.get('kitchenBackfillNight') || null };
 }
 
 function start() {
   if (timer || !spoton.enabled()) return;
-  console.log('[kitchen] collector on: SpotOn reports every 5 minutes, 7:30am-3:45am');
+  console.log(`[kitchen] collector on: SpotOn reports every 5 minutes, 8am until the ${dayStartHour}am rollover`);
   setTimeout(tick, 20000); // let the config sync land first
   timer = setInterval(tick, EVERY_MS);
 }

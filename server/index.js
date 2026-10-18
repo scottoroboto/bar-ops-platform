@@ -5327,7 +5327,7 @@ res.status(400).json({ error: err.message });
 app.get('/api/venue/agent/kitchen/have', requireAgentAuth(), async (req, res) => {
 const ok = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 if (!ok(req.query.from) || !ok(req.query.to)) return res.status(400).json({ error: 'from and to as YYYY-MM-DD' });
-res.json({ dates: await kitchenboard.haveDates(req.vcSite.location_id, req.query.from, req.query.to), historyFrom: await kitchenboard.historyFrom(req.vcSite.location_id) });
+res.json({ dates: await kitchenboard.haveDates(req.vcSite.location_id, req.query.from, req.query.to), ...(await kitchenboard.boxSettings(req.vcSite.location_id)) });
 });
 
 // Settings and TV links: the owner. The board: the owner, and managers at
