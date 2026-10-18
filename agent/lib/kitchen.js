@@ -1,5 +1,5 @@
 // Kitchen board collector (T2 Kitchen Display spec, Oct 2026). Every 5
-// minutes from 7:30am to 1:30am (bar time) this box reads three SpotOn
+// minutes from 7:30am to 3:45am (bar time) this box reads three SpotOn
 // reports for today -- Employee Time (who's on, hours, SpotOn's labor $),
 // the Daily Sales Recap (food sales so far) and Hourly Sales -- and posts
 // them to the cloud (POST /api/venue/agent/kitchen/pull), which stores
@@ -14,7 +14,12 @@ const spoton = require('./spoton');
 
 const EVERY_MS = 5 * 60 * 1000;
 const OPEN_FROM = 7 * 60 + 30;   // 7:30am
-const OPEN_UNTIL = 1 * 60 + 30;  // 1:30am (next day)
+const OPEN_UNTIL = 3 * 60 + 45;  // 3:45am (next day): the bars close about 3am
+// SpotOn's business day runs past midnight to closing; the report for the
+// next calendar date is empty until then. Ask for the business day, which
+// rolls over at this hour (same as the cloud's kb_settings.day_start_hour).
+const DAY_START_HOUR = Number(process.env.SPOTON_DAY_START_HOUR || 4);
+function businessDayParam() { return spoton.dateParam(new Date(Date.now() - DAY_START_HOUR * 3600000), tz()); }
 // Location key from a SpotOn report address; T2's unless .env says otherwise.
 const LOCATION_KEY = process.env.SPOTON_LOCATION_KEY || '1215273229887737856';
 
@@ -63,7 +68,7 @@ function punchesFrom(rows) {
 
 async function pullOnce() {
   if (!session) session = new spoton.Session({ log: (m) => console.log(`[kitchen] ${m}`) });
-  const day = spoton.dateParam(new Date(), tz());
+  const day = businessDayParam();
   const t0 = Date.now();
   const et = await session.fetchReport('employeetime', LOCATION_KEY, day);
   const rows = spoton.employeeTimeRows(et);
@@ -120,12 +125,12 @@ async function tick() {
 // ---- history ---------------------------------------------------------------
 // Past days, read once so week / month / year to date are real and the
 // sales forecast has years to learn from. Runs by itself overnight
-// (2am-7am, after the kitchen's last pull) for any day the cloud doesn't
+// (4am-7am, after close and the last live pull) for any day the cloud doesn't
 // have a final number for, and from tools/spoton-backfill.js by hand.
 // How far back: the cloud's setting (kitchen board, history_from), else
 // SPOTON_BACKFILL_FROM, else Jan 1 2022.
 const BACKFILL_FROM = process.env.SPOTON_BACKFILL_FROM || '2022-01-01';
-const NIGHT_FROM = 2 * 60;   // 2:00am
+const NIGHT_FROM = 4 * 60;   // 4:00am, after close and the last live pull
 const NIGHT_UNTIL = 7 * 60;  // 7:00am
 let backfilling = false;
 
@@ -202,7 +207,7 @@ async function backfill({ from = null, to = null, force = false, log = () => {},
   return out;
 }
 
-// Overnight: once per night, between 2am and 7am, when the kitchen pulls are off.
+// Overnight: once per night, between 4am and 7am, when the kitchen pulls are off.
 async function nightly() {
   if (backfilling || running || !spoton.enabled()) return;
   const m = minutesNow();
@@ -227,7 +232,7 @@ function status() {
 
 function start() {
   if (timer || !spoton.enabled()) return;
-  console.log('[kitchen] collector on: SpotOn reports every 5 minutes, 7:30am-1:30am');
+  console.log('[kitchen] collector on: SpotOn reports every 5 minutes, 7:30am-3:45am');
   setTimeout(tick, 20000); // let the config sync land first
   timer = setInterval(tick, EVERY_MS);
 }

@@ -177,6 +177,18 @@ async function ingest(locationId, payload) {
     const now = backfill ? new Date() : (p.pulledAt ? new Date(p.pulledAt) : new Date());
     const bdate = backfill ? p.businessDate : businessDate(now, tz, settings.day_start_hour);
     const snapAt = backfill ? new Date(dayStartUtc(bdate, tz, settings.day_start_hour).getTime() + 23 * 3600000) : now;
+    // A live pull for a calendar day the business day hasn't reached yet
+    // (an older box asking SpotOn for tomorrow's date after midnight) is
+    // empty: storing it would blank the day's sales and delete its punches.
+    // Count it as a good pull and keep the day as it was.
+    if (!backfill && p.reportDate) {
+      const m = String(p.reportDate).match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      const reportYmd = m ? `${m[3]}-${m[1]}-${m[2]}` : null;
+      if (reportYmd && reportYmd > bdate) {
+        await client.query('INSERT INTO kb_pulls (location_id, ok, ms, punches) VALUES ($1, true, $2, 0)', [locationId, p.ms != null ? Math.round(p.ms) : null]);
+        return { ok: true, businessDate: bdate, skipped: 'report date is ahead of the business day' };
+      }
+    }
     const punches = Array.isArray(p.punches) ? p.punches : [];
     let kept = 0;
     for (const x of punches) {
