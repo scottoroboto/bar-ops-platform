@@ -209,12 +209,26 @@ function effectPct(model, name) { return model && model.coef[name] != null ? Mat
 // ---------------------------------------------------------------- pace curve
 // Share of the day's food sales normally reached by each 15 minutes after
 // the business day starts, from the last 8 weeks of 5-minute snapshots.
+// Only days with their full 5-minute record count: until Oct 17 the
+// overnight history read replaced a day's snapshots with one closing
+// number, and a day like that looks as if nothing sold until after close
+// (it pulled the curve to ~0 all day, so "on pace for" came out as sales
+// so far plus the whole forecast). Partial days (a storm closing early)
+// are skipped too.
+const CURVE_MIN_SNAPS = 30;
 function buildCurve(snapsByDay, dayStartOf, wantDow) {
   const SLOTS = 24 * 4;
   const perDay = [];
-  for (const [date, snaps] of snapsByDay) {
+  const full = [...snapsByDay].filter(([date, snaps]) => {
+    const withFood = snaps.filter((x) => x.food != null);
+    if (withFood.length < CURVE_MIN_SNAPS) return false;
+    return withFood[0].at.getTime() <= dayStartOf(date).getTime() + 8 * 3600000; // reading by early afternoon
+  });
+  const finals = full.map(([, snaps]) => Math.max(...snaps.map((x) => x.food || 0)));
+  const typical = median(finals);
+  for (const [date, snaps] of full) {
     const final = Math.max(...snaps.map((s) => s.food || 0));
-    if (!(final > 50)) continue;
+    if (!(final > 50) || final < typical * 0.4) continue;
     const start = dayStartOf(date).getTime();
     const fr = new Array(SLOTS).fill(null); let j = 0; let last = 0;
     for (let k = 0; k < SLOTS; k += 1) {
@@ -415,8 +429,9 @@ async function forLocation(locationId, { now = new Date(), fresh = false } = {})
       `SELECT business_date, at, food_net FROM kb_sales_snapshots WHERE location_id = $1 AND business_date >= $2 AND business_date < $3 ORDER BY at`,
       [locationId, ymdAdd(today, -56), today]);
     const byDay = new Map();
-    const leftOut = new Set(fc.leftOut.map((x) => x.date));
-    for (const s of snaps) { const d = toYmd(s.business_date); if (leftOut.has(d)) continue; if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push({ at: new Date(s.at), food: s.food_net == null ? null : Number(s.food_net) }); }
+    // Left-out days still show how a day fills in (a surge day is busy all
+    // day, not shaped differently); half days are dropped by buildCurve.
+    for (const s of snaps) { const d = toYmd(s.business_date); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push({ at: new Date(s.at), food: s.food_net == null ? null : Number(s.food_net) }); }
     const dayStartOf = (d) => zonedToUtc(`${d}T${p2(inputs.dayStartHour)}:00:00`, TZ);
     fc.curve = buildCurve(byDay, dayStartOf, dow(today));
     // Keep what was said, to grade it later: the day's latest version per
