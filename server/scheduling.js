@@ -334,7 +334,7 @@ async function checkShiftConflicts(shift, options = {}) {
     );
     const allOther = liveShifts
       .filter((s) => !excludeShiftIds.has(String(s.id)))
-      .concat(extraShifts);
+      .concat(extraShifts.filter((s) => s.person_id == null || String(s.person_id) === String(shift.personId)));
     const thisRange = shiftRange(shift.date, shift.startTime, shift.endTime);
     allOther.forEach((s) => {
       if (shift.id && String(s.id) === String(shift.id)) return;
@@ -675,6 +675,9 @@ async function publishMyDrafts(overrideReasons, personId) {
   if (!drafts.length) return { success: true, published: 0, notifiedEmployees: 0 };
 
   const cancelTargetIds = drafts.filter((d) => d.action === 'cancel').map((d) => d.target_shift_id);
+  // A shift being moved by an update draft is checked at its new time
+  // (the draft), not its old one.
+  const movedIds = drafts.filter((d) => d.action === 'update' && d.target_shift_id).map((d) => d.target_shift_id);
   const employees = await getEmployeesForScheduling();
   const conflictsByDraft = [];
 
@@ -685,14 +688,17 @@ async function publishMyDrafts(overrideReasons, personId) {
       personId: d.person_id, scheduleId: d.schedule_id, positionId: d.position_id,
       date: d.shift_date, startTime: d.start_time, endTime: d.end_time,
     };
+    // Only this employee's other drafts can overlap this one (Oct 2026:
+    // every draft in the batch was compared, so two people on the same
+    // 7pm-3am shift blocked each other's publish).
     const otherDraftShifts = drafts
-      .filter((other) => other.id !== d.id && other.action !== 'cancel')
+      .filter((other) => other.id !== d.id && other.action !== 'cancel' && String(other.person_id) === String(d.person_id))
       .map((other) => ({
         id: 'draft-' + other.id, person_id: other.person_id, schedule_id: other.schedule_id,
         position_id: other.position_id, shift_date: other.shift_date, start_time: other.start_time,
-        end_time: other.end_time, status: 'scheduled',
+        end_time: other.end_time, status: 'scheduled', scheduleName: 'another of your drafts',
       }));
-    const conflicts = await checkShiftConflicts(candidate, { extraShifts: otherDraftShifts, excludeShiftIds: cancelTargetIds });
+    const conflicts = await checkShiftConflicts(candidate, { extraShifts: otherDraftShifts, excludeShiftIds: [...cancelTargetIds, ...movedIds] });
     const hardBlocks = conflicts.filter((c) => c.hardBlock);
     const softBlocks = conflicts.filter((c) => !c.hardBlock);
     const hasReason = !!overrideReasons[d.id];
