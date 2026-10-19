@@ -658,7 +658,27 @@ function openShiftModal(shift) {
 // Shift-time presets: this manager's own. A chip fills Start and End;
 // "Save as preset" keeps the current pair; × on a chip removes it.
 function presetLabel(p) { return `${formatTime12(p.startTime)}–${formatTime12(p.endTime)}`; }
+// Over 10 hours gets a warning (Scotto, 2026-10-19: a 7 AM–3 AM shift
+// went in that was meant to be 7 PM). Publish asks for a reason too.
+const LONG_SHIFT_HOURS = 10;
+function shiftHoursOf(start, end) {
+  if (!start || !end) return null;
+  const [sh, sm] = start.split(':').map(Number); const [eh, em] = end.split(':').map(Number);
+  let h = (eh * 60 + em - sh * 60 - sm) / 60; if (h <= 0) h += 24;
+  return h;
+}
+function renderLongShiftWarning() {
+  const el = document.getElementById('shLong');
+  if (!el) return;
+  const s = document.getElementById('shStart').value; const e = document.getElementById('shEnd').value;
+  const h = shiftHoursOf(s, e);
+  if (h != null && h > LONG_SHIFT_HOURS) {
+    el.innerHTML = `⚠ This shift is <b>${Math.round(h * 10) / 10} hours</b> (${formatTime12(s)}–${formatTime12(e)}). Double-check AM and PM.`;
+    el.style.display = '';
+  } else el.style.display = 'none';
+}
 function renderShiftPresets() {
+  renderLongShiftWarning();
   const el = document.getElementById('shPresets');
   if (!el) return;
   const cur = { startTime: document.getElementById('shStart').value, endTime: document.getElementById('shEnd').value };
@@ -743,7 +763,9 @@ async function submitShift() {
       if (dup.skipped && dup.skipped.length) note += ` Skipped: ${dup.skipped.join('; ')}.`;
     }
     closeShiftModal();
-    showMsg(`Saved as a draft — publish when ready.${note}`, (note.includes('Skipped') ? 'info' : 'success'));
+    const hrs = shiftHoursOf(payload.startTime, payload.endTime);
+    if (hrs > LONG_SHIFT_HOURS) note += ` Heads up: that's a ${Math.round(hrs * 10) / 10}-hour shift (${formatTime12(payload.startTime)}–${formatTime12(payload.endTime)}).`;
+    showMsg(`Saved as a draft — publish when ready.${note}`, (note.includes('Skipped') || note.includes('Heads up') ? 'info' : 'success'));
     loadSchedGrid();
   } catch (e) {
     resultEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;

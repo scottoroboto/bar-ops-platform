@@ -74,6 +74,8 @@ function zonedTimeToUtc(dateStr, timeStr) {
 // A shift's real start/end instant, in the bar's own timezone — crossing
 // midnight (end <= start) rolls the end onto the next calendar day, same
 // as the old system's shiftRange_.
+const LONG_SHIFT_HOURS = 10;
+
 function shiftRange(dateStr, startTime, endTime) {
   const start = zonedTimeToUtc(dateStr, startTime);
   let end = zonedTimeToUtc(dateStr, endTime);
@@ -347,6 +349,15 @@ async function checkShiftConflicts(shift, options = {}) {
         });
       }
     });
+
+    // Over 10 hours (soft): usually AM/PM picked wrong (Scotto, 2026-10-19).
+    const hours = (thisRange.end - thisRange.start) / 3600000;
+    if (hours > LONG_SHIFT_HOURS) {
+      conflicts.push({
+        type: 'long_shift', hardBlock: false,
+        message: `Long shift: ${Math.round(hours * 10) / 10} hours (${formatTime12hr(shift.startTime)}–${formatTime12hr(shift.endTime)}). Check AM/PM.`,
+      });
+    }
 
     // Approved time off covering this date (soft).
     const { rows: timeOff } = await client.query(
