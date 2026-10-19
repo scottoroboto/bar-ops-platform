@@ -849,11 +849,120 @@ async function photoUrl(path) {
   return storage.getSignedAmusementPhotoUrl(path);
 }
 
+// ---------------------------------------------------------------------
+// Spreadsheet export (owner, Scotto 2026-10-19): one finalized
+// collection, or every finalized collection in a date range (bar time,
+// both ends included), optionally at one location. An .xlsx with a
+// Collections sheet, a Games sheet (one row per game line) and, for a
+// range, a By game sheet.
+// ---------------------------------------------------------------------
+const EXPORT_TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
+async function exportWorkbook(client, { collectionId = null, from = null, to = null, locationId = null } = {}) {
+  const ExcelJS = require('exceljs');
+  const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+  const params = []; const where = ["c.status = 'final'"];
+  if (collectionId) { params.push(collectionId); where.push(`c.id = $${params.length}`); }
+  else {
+    if (!isDate(from) || !isDate(to)) throw httpError('Pick a start and end date.');
+    if (from > to) throw httpError('The start date is after the end date.');
+    params.push(from); where.push(`(c.finalized_at AT TIME ZONE '${EXPORT_TZ}')::date >= $${params.length}`);
+    params.push(to); where.push(`(c.finalized_at AT TIME ZONE '${EXPORT_TZ}')::date <= $${params.length}`);
+    if (locationId) { params.push(locationId); where.push(`c.location_id = $${params.length}`); }
+  }
+  const { rows: cols } = await client.query(
+    `SELECT c.*, al.name AS location_name, fb.name AS finalized_by_name, pb.name AS pos_posted_by_name,
+            (SELECT count(*) FROM amusement_collection_items i WHERE i.collection_id = c.id)::int AS item_count
+       FROM amusement_collections c JOIN amusement_locations al ON al.id = c.location_id
+       LEFT JOIN people fb ON fb.id = c.finalized_by LEFT JOIN people pb ON pb.id = c.pos_posted_by
+      WHERE ${where.join(' AND ')} ORDER BY c.finalized_at, al.name`, params);
+  if (!cols.length) throw httpError(collectionId ? 'That collection isn\'t finalized yet.' : 'No finalized collections in those dates.', 404);
+  const { rows: items } = await client.query(
+    `SELECT i.*, g.name AS game_name, g.tag_code, g.game_type, eb.name AS entered_by_name
+       FROM amusement_collection_items i JOIN amusement_games g ON g.id = i.game_id LEFT JOIN people eb ON eb.id = i.entered_by
+      WHERE i.collection_id = ANY($1::uuid[]) ORDER BY g.sort_order, g.name`, [cols.map((c) => c.id)]);
+
+  const ymd = (t) => (t ? new Date(t).toLocaleDateString('en-CA', { timeZone: EXPORT_TZ }) : '');
+  // The bar-time calendar day as an Excel date (midnight UTC, no time part).
+  const day = (t) => (t ? new Date(`${ymd(t)}T00:00:00Z`) : null);
+  const daysBetween = (a, b) => (a && b ? Math.max(1, Math.round((new Date(b) - new Date(a)) / 86400000)) : null);
+  const n = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+  const MONEY = '"$"#,##0.00';
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Bar Ops'; wb.created = new Date();
+  const sheet = (name, columns) => {
+    const ws = wb.addWorksheet(name, { views: [{ state: 'frozen', ySplit: 1 }] });
+    ws.columns = columns.map(([header, key, width, fmt]) => ({ header, key, width, style: fmt ? { numFmt: fmt } : {} }));
+    ws.getRow(1).font = { bold: true }; ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8ECF2' } };
+    return ws;
+  };
+  const totalRow = (ws, label, sums) => {
+    const r = ws.addRow({ [ws.columns[0].key]: label, ...sums });
+    r.font = { bold: true }; r.border = { top: { style: 'thin' } };
+  };
+
+  const byId = new Map(cols.map((c) => [c.id, c]));
+  const cs = sheet('Collections', [
+    ['Date', 'date', 12, 'm/d/yyyy'], ['Location', 'loc', 22], ['Collected by', 'by', 18], ['Period from', 'from', 12, 'm/d/yyyy'], ['Days', 'days', 7],
+    ['Games', 'games', 7], ['Quarters', 'q', 12, MONEY], ['Bills', 'b', 12, MONEY], ['Total', 't', 12, MONEY],
+    ['SpotOn', 'pos', 10], ['SpotOn ref', 'ref', 14], ['Posted by', 'pby', 16], ['Note', 'note', 40],
+  ]);
+  for (const c of cols) {
+    cs.addRow({
+      date: day(c.finalized_at), loc: c.location_name, by: c.finalized_by_name || '', from: day(c.period_start), days: daysBetween(c.period_start, c.finalized_at),
+      games: c.item_count, q: n(c.quarters_total), b: n(c.bills_total), t: n(c.total),
+      pos: c.pos_status === 'posted' ? 'Posted' : 'Queued', ref: c.pos_reference || '', pby: c.pos_posted_by_name || '', note: c.note || '',
+    });
+  }
+  const sum = (list, k) => round2(list.reduce((a, x) => a + Number(x[k] || 0), 0));
+  totalRow(cs, 'Total', { games: cols.reduce((a, c) => a + c.item_count, 0), q: sum(cols, 'quarters_total'), b: sum(cols, 'bills_total'), t: sum(cols, 'total') });
+
+  const gs = sheet('Games', [
+    ['Date', 'date', 12, 'm/d/yyyy'], ['Location', 'loc', 20], ['Game', 'game', 24], ['Tag', 'tag', 9], ['Type', 'type', 12], ['Days', 'days', 7],
+    ['Gross wt', 'gross', 10], ['Unit', 'unit', 6], ['Tare', 'tare', 8], ['Net g', 'net', 9], ['Quarters #', 'qn', 10], ['Quarters', 'q', 11, MONEY],
+    ['$1', 'b1', 6], ['$5', 'b5', 6], ['$10', 'b10', 6], ['$20', 'b20', 6], ['Bills (flat)', 'bf', 11, MONEY], ['Bills', 'b', 11, MONEY], ['Bills counted, screen game', 'bc', 14, MONEY],
+    ['Screen total', 'scr', 12, MONEY], ['Total', 't', 11, MONEY], ['Per day', 'pd', 10, MONEY], ['Condition', 'cond', 10], ['Note', 'note', 34], ['Entered by', 'eby', 16],
+  ]);
+  for (const i of items) {
+    const c = byId.get(i.collection_id);
+    const days = daysBetween(i.period_start || c.period_start || c.started_at, c.finalized_at);
+    gs.addRow({
+      date: day(c.finalized_at), loc: c.location_name, game: i.game_name, tag: i.tag_code || '', type: i.game_type || '', days,
+      gross: n(i.gross_weight), unit: i.gross_weight != null ? i.weight_unit : '', tare: n(i.tare_weight), net: n(i.net_weight_g), qn: n(i.quarter_count), q: n(i.quarters_amount),
+      b1: i.bills_1 || null, b5: i.bills_5 || null, b10: i.bills_10 || null, b20: i.bills_20 || null, bf: n(i.bills_flat_amount), b: n(i.bills_amount), bc: n(i.bills_counted_amount),
+      scr: n(i.screen_total), t: n(i.total), pd: days && i.total != null ? round2(Number(i.total) / days) : null,
+      cond: i.condition === 'issue' ? 'Issue' : i.condition === 'ok' ? 'OK' : i.condition ? String(i.condition) : '', note: i.note || '', eby: i.entered_by_name || '',
+    });
+  }
+  totalRow(gs, 'Total', { q: sum(items, 'quarters_amount'), b: sum(items, 'bills_amount'), t: sum(items, 'total') });
+
+  if (!collectionId) {
+    const games = new Map();
+    for (const i of items) {
+      const c = byId.get(i.collection_id);
+      const k = i.game_id;
+      const g = games.get(k) || { game: i.game_name, tag: i.tag_code || '', locs: new Set(), n: 0, q: 0, b: 0, t: 0, days: 0 };
+      g.locs.add(c.location_name); g.n += 1; g.q += Number(i.quarters_amount || 0); g.b += Number(i.bills_amount || 0); g.t += Number(i.total || 0);
+      g.days += daysBetween(i.period_start || c.period_start || c.started_at, c.finalized_at) || 0;
+      games.set(k, g);
+    }
+    const bg = sheet('By game', [['Game', 'game', 24], ['Tag', 'tag', 9], ['Location', 'loc', 24], ['Collections', 'n', 11], ['Quarters', 'q', 12, MONEY], ['Bills', 'b', 12, MONEY], ['Total', 't', 12, MONEY], ['Per day', 'pd', 10, MONEY]]);
+    for (const g of [...games.values()].sort((a, b) => b.t - a.t)) {
+      bg.addRow({ game: g.game, tag: g.tag, loc: [...g.locs].join(', '), n: g.n, q: round2(g.q), b: round2(g.b), t: round2(g.t), pd: g.days ? round2(g.t / g.days) : null });
+    }
+    totalRow(bg, 'Total', { n: items.length, q: sum(items, 'quarters_amount'), b: sum(items, 'bills_amount'), t: sum(items, 'total') });
+  }
+
+  const name = collectionId
+    ? `Games collection ${ymd(cols[0].finalized_at)} ${cols[0].location_name}`
+    : `Games collections ${from} to ${to}${locationId ? ' ' + cols[0].location_name : ''}`;
+  return { buffer: await wb.xlsx.writeBuffer(), filename: `${name.replace(/[^A-Za-z0-9 ._-]/g, '').trim()}.xlsx` };
+}
+
 module.exports = {
   getAccess, getSettings, updateSettings,
   listLocations, getLocation, createLocation, updateLocation,
   listGames, getGame, getGameByTag, createGame, updateGame, moveGame, setGameStatus, setGameTare, getGamePlacements, getGameHistory, listScaleChecks,
   getCollection, getCollectionSheet, startOrResumeCollection, computeItem, upsertItem, removeItem, recordScaleCheck, clearScaleCheck,
   updateCollectionNote, finalizeCollection, markPosted, discardDraft, listCollections,
-  report, readScalePhoto, readScreenPhoto, readerConfigured, storePhoto, photoUrl, GRAMS_PER_LB,
+  report, exportWorkbook, readScalePhoto, readScreenPhoto, readerConfigured, storePhoto, photoUrl, GRAMS_PER_LB,
 };

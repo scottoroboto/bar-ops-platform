@@ -5341,6 +5341,22 @@ app.get('/api/amusement/qr', auth.requireSession('light'), amusementRoute('colle
 // ---- Reports (owner) ----
 app.get('/api/amusement/report', auth.requireSession('light'), amusementRoute('owner', async (client, req) =>
   amusement.report(client, { days: req.query.days })));
+// Spreadsheet: ?collectionId= (one) or ?from=&to=[&locationId=] (a range).
+app.get('/api/amusement/export.xlsx', auth.requireSession('light'), async (req, res) => {
+  try {
+    if (!(await amusementGate(req, 'owner'))) return res.status(403).json({ error: 'Owner only.' });
+    const q = req.query;
+    const { buffer, filename } = await withServiceClient((client) => amusement.exportWorkbook(client, {
+      collectionId: q.collectionId ? String(q.collectionId) : null, from: q.from, to: q.to, locationId: q.locationId ? String(q.locationId) : null }));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(Buffer.from(buffer));
+  } catch (e) {
+    if (e.statusCode) return res.status(e.statusCode).json({ error: e.message });
+    console.error('[amusement] export failed', e);
+    res.status(500).json({ error: 'Could not build the spreadsheet.' });
+  }
+});
 
 const PORT = process.env.PORT || 3001;
 

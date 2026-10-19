@@ -1061,7 +1061,72 @@ async function renderReports(daysArg) {
     <div class="am-kicker">By location</div>
     <div class="card" style="padding:4px 14px;">${locs}</div>
     <div class="am-kicker">Collection log</div>
-    <div class="card" style="padding:4px 14px;">${log || '<p class="muted">Nothing yet.</p>'}</div>`;
+    <div class="card" style="padding:4px 14px;">${log || '<p class="muted">Nothing yet.</p>'}</div>
+    <div class="am-kicker">Export to spreadsheet</div>
+    <div class="card" id="exportCard">${exportCardHtml(r)}</div>`;
+}
+
+// Spreadsheet export (Scotto, 2026-10-19): one collection or a date range,
+// as an Excel file with Collections, Games and (for a range) By game sheets.
+let EXPORT_MODE = 'range';
+function exportCardHtml(r) {
+  const today = new Date().toLocaleDateString('en-CA');
+  const monthStart = today.slice(0, 8) + '01';
+  const options = r.log.map((c) => `<option value="${c.id}">${fmtDay(c.finalized_at)} · ${escapeHtml(c.location_name)} · ${money(c.total)}</option>`).join('');
+  return `<div class="am-filter" style="margin-bottom:10px;">
+      <button class="${EXPORT_MODE === 'range' ? 'on' : ''}" onclick="setExportMode('range')">Date range</button>
+      <button class="${EXPORT_MODE === 'one' ? 'on' : ''}" onclick="setExportMode('one')">One collection</button>
+    </div>
+    <div id="exportRange" style="display:${EXPORT_MODE === 'range' ? '' : 'none'};">
+      <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px;">
+        <div style="min-width:0;"><label for="expFrom">From</label><input id="expFrom" type="date" value="${monthStart}" style="margin:0; width:100%; min-width:0; box-sizing:border-box;"></div>
+        <div style="min-width:0;"><label for="expTo">To</label><input id="expTo" type="date" value="${today}" style="margin:0; width:100%; min-width:0; box-sizing:border-box;"></div>
+      </div>
+      <div class="am-filter" style="margin:8px 0 0;">${[['This month', monthStart, today], ['Last 30 days', shiftDay(today, -29), today], ['Last month', ...lastMonth(today)], ['This year', today.slice(0, 4) + '-01-01', today]].map(([l, f, t]) => `<button onclick="$('expFrom').value='${f}'; $('expTo').value='${t}'">${l}</button>`).join('')}</div>
+      <label for="expLoc" style="margin-top:8px;">Location</label>
+      <select id="expLoc" style="margin:0;"><option value="">All locations</option>${r.byLocation.map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('')}</select>
+    </div>
+    <div id="exportOne" style="display:${EXPORT_MODE === 'one' ? '' : 'none'};">
+      ${options ? `<label for="expCollection">Collection</label><select id="expCollection" style="margin:0;">${options}</select>` : '<p class="muted">No finalized collections yet.</p>'}
+    </div>
+    <button class="primary" id="expBtn" onclick="downloadExport()">Download spreadsheet</button>
+    <p class="muted" style="font-size:11px; margin:6px 0 0;">Excel file: one row per collection, one row per game, and per-game totals for a range. Opens in Excel, Numbers or Google Sheets.</p>`;
+}
+function shiftDay(ymd, n) { const d = new Date(ymd + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toLocaleDateString('en-CA'); }
+function lastMonth(ymd) { const d = new Date(ymd.slice(0, 8) + '01T12:00:00'); d.setDate(0); const end = d.toLocaleDateString('en-CA'); return [end.slice(0, 8) + '01', end]; }
+function setExportMode(m) {
+  EXPORT_MODE = m;
+  $('exportRange').style.display = m === 'range' ? '' : 'none';
+  $('exportOne').style.display = m === 'one' ? '' : 'none';
+  document.querySelectorAll('#exportCard > .am-filter:first-child button').forEach((b, i) => b.classList.toggle('on', (i === 0) === (m === 'range')));
+}
+async function downloadExport() {
+  const q = new URLSearchParams();
+  if (EXPORT_MODE === 'one') {
+    const sel = $('expCollection'); if (!sel || !sel.value) { showMsg('Pick a collection.', 'error'); return; }
+    q.set('collectionId', sel.value);
+  } else {
+    const from = $('expFrom').value; const to = $('expTo').value;
+    if (!from || !to) { showMsg('Pick a start and end date.', 'error'); return; }
+    if (from > to) { showMsg('The start date is after the end date.', 'error'); return; }
+    q.set('from', from); q.set('to', to);
+    if ($('expLoc').value) q.set('locationId', $('expLoc').value);
+  }
+  const btn = $('expBtn'); btn.disabled = true; btn.textContent = 'Building…';
+  try {
+    const res = await fetch('/api/amusement/export.xlsx?' + q.toString(), { headers: { Authorization: 'Bearer ' + getToken() } });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || 'Could not build the spreadsheet.'); }
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = m ? m[1] : 'Games collections.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) {
+    showMsg(e.message, 'error');
+  } finally { btn.disabled = false; btn.textContent = 'Download spreadsheet'; }
 }
 
 // ---------------------------------------------------------------------
