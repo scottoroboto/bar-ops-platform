@@ -69,8 +69,8 @@ function ymdAddDays(ymd, n) { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDa
 function toYmd(v) { return v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10); }
 function fmtTime(date, tz) { return new Date(date).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).replace(' ', '').replace('AM', 'a').replace('PM', 'p'); }
 function fmtHm(hhmm) { const [h, m] = String(hhmm).split(':').map(Number); const ap = h < 12 ? 'a' : 'p'; return `${(h % 12) || 12}${m ? ':' + String(m).padStart(2, '0') : ''}${ap}`; }
-function fmtDate(ymd) { return new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' }); }
-function fmtShort(ymd) { return new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'numeric', day: 'numeric' }); }
+function fmtDate(ymd) { return new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' }); }
+function fmtShort(ymd) { return new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'numeric', day: 'numeric', year: 'numeric' }); }
 function weekdayShort(ymd) { return new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short' }); }
 function hourLabel(h) { const k = ((h % 24) + 24) % 24; return k === 0 ? '12a' : k === 12 ? '12p' : `${k % 12}${k < 12 ? 'a' : 'p'}`; }
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
