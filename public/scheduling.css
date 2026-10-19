@@ -209,3 +209,33 @@ table th, table td { border-bottom: 1px solid var(--line); }
   #panelMine { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   #panelMine .card { padding: 12px; }
 }
+
+/* ---- Sales forecast under each date, and the day's Games/Events popup (server/slate.js) ---- */
+.fc-note { font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+th .fc-amt { display: block; margin-top: 4px; font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--ink); text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
+th .fc-link { display: block; margin-top: 2px; font-size: 11.5px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--ink3); text-decoration: none; }
+.day-panel { position: fixed; z-index: 20; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 40px); overflow-y: auto; padding: 18px 20px; margin: 0; }
+.day-panel .dp-x { position: absolute; right: 16px; top: 10px; font-size: 24px; color: var(--muted); cursor: pointer; }
+.day-panel .dp-title { margin: 0; font-size: 18px; }
+.day-panel .dp-sub { color: var(--muted); font-size: 13px; margin: 2px 0 6px; }
+.day-panel .dp-h { margin: 14px 0 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.day-panel .dp-hrs { display: grid; gap: 4px; align-items: end; height: 130px; margin-top: 18px; }
+.day-panel .dp-c { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; position: relative; min-width: 0; }
+.day-panel .dp-c i { display: block; width: 100%; background: var(--ink3); border-radius: 4px 4px 0 0; }
+.day-panel .dp-c.peak i { background: var(--ink2); }
+.day-panel .dp-v { font-size: 10px; color: var(--muted); margin-bottom: 2px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.day-panel .dp-ev { position: absolute; top: -16px; font-size: 10px; font-weight: 700; color: var(--warn-ink); white-space: nowrap; }
+.day-panel .dp-hl { display: grid; gap: 4px; margin-top: 4px; }
+.day-panel .dp-hl span { font-size: 10.5px; color: var(--muted); text-align: center; }
+.day-panel .dp-it { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.day-panel .dp-t { color: var(--muted); white-space: nowrap; min-width: 70px; font-variant-numeric: tabular-nums; }
+.day-panel .dp-n { flex: 1; min-width: 0; }
+.day-panel .dp-net { color: var(--muted); font-size: 12px; }
+.day-panel .dp-tag { font-size: 11px; font-weight: 700; color: var(--warn-ink); background: var(--warn-bg); border-radius: 999px; padding: 1px 7px; }
+.day-panel .dp-rm { color: var(--muted); text-decoration: none; margin-left: 6px; }
+.day-panel .dp-more summary { cursor: pointer; color: var(--ink3); font-size: 13px; font-weight: 600; padding: 8px 0; border-top: 1px solid var(--line); }
+.day-panel .dp-add { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.day-panel .dp-add select { width: auto; margin: 0; }
+.day-panel .dp-add input { flex: 1; min-width: 160px; margin: 0; }
+.day-panel .dp-add button { margin: 0; }
+.day-panel .dp-foot { font-size: 11.5px; color: var(--muted); margin: 12px 0 0; }

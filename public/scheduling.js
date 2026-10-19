@@ -30,6 +30,7 @@ let SHOW_ALL_STAFF = (() => { try { return localStorage.getItem('bp_schedShowAll
 const TIME_CHOICES = (() => { const out = []; for (let i = 0; i < 48; i++) { const m = (5 * 60 + i * 30) % (24 * 60); out.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`); } return out; })();
 const DEFAULT_START = '09:00', DEFAULT_END = '19:00';
 let SHIFT_PRESETS = [];         // this manager's own start/end presets (chips in the Add shift modal)
+let WEEK_FC = [];               // this week's sales forecast per (bar, side) for the selected schedules (server/slate.js)
 
 // ---------------- Date helpers (calendar-date-only, local time — these
 // dates carry no time-of-day meaning, so plain local Date math is fine and
@@ -122,7 +123,7 @@ function renderTabs() {
 }
 
 function closeAllModals() {
-  closeShiftModal(); closePublishModal(); closeTimeOffModal(); closeQualModal(); closePrintModal(); closeSchedPicker(); closePreview();
+  closeShiftModal(); closePublishModal(); closeTimeOffModal(); closeQualModal(); closePrintModal(); closeSchedPicker(); closePreview(); closeDayPanel();
 }
 
 // =========================================================
@@ -426,6 +427,8 @@ async function loadSchedGrid() {
   el.innerHTML = '<p class="muted">Loading…</p>';
   try {
     WEEK_SHIFTS = await api(`/api/scheduling/week?scheduleIds=${SELECTED_SCHEDULE_IDS.join(',')}&weekStart=${WEEK_START}`);
+    // The forecast is extra: the grid shows without it.
+    try { WEEK_FC = await api(`/api/scheduling/forecast?scheduleIds=${SELECTED_SCHEDULE_IDS.join(',')}&weekStart=${WEEK_START}`); } catch (e) { WEEK_FC = []; }
     const summary = await api('/api/scheduling/my-drafts/summary');
     DRAFT_COUNT = summary.count;
     renderDraftBanner();
@@ -440,8 +443,10 @@ async function loadSchedGrid() {
       el.innerHTML = `<p class="muted">Nobody is checked into ${SELECTED_SCHEDULE_IDS.length === 1 ? 'this schedule' : 'these schedules'} yet. Add people under Employees › their Access page › Scheduling, or <a href="#" onclick="event.preventDefault(); setShowAllStaff(true)">show everyone at ${locationCount === 1 ? 'this bar' : 'these bars'}</a>.</p>`;
       return;
     }
+    const anyFc = WEEK_FC.some(g => Object.keys(g.days || {}).length);
     el.innerHTML = `<p class="muted" style="margin:0 0 8px; font-size:12px;">${switchHtml}</p>
-    <table><thead><tr><th>Employee</th>${dates.map(d => `<th>${dayLabel(d)}</th>`).join('')}<th></th></tr></thead><tbody>
+    ${anyFc ? '<p class="fc-note">Forecasts are estimates and get more accurate as sales history builds.</p>' : ''}
+    <table><thead><tr><th>Employee</th>${dates.map(d => `<th>${dayLabel(d)}${fcHeadHtml(d)}</th>`).join('')}<th></th></tr></thead><tbody>
       ${roster.map(rowHtml).join('')}
       ${SHOW_ALL_STAFF && others.length ? `<tr><td colspan="9" class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; padding-top:10px;">Not checked into ${SELECTED_SCHEDULE_IDS.length === 1 ? 'this schedule' : 'these schedules'}</td></tr>${others.map(rowHtml).join('')}` : ''}
     </tbody></table>`;
@@ -479,6 +484,101 @@ async function copyEmployeeWeek(personId, btn) {
     showMsg(e.message, 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Copy → next wk'; }
   }
+}
+
+// ---- Sales forecast under each date + the day's Games/Events popup ----
+// One line per bar and side among the selected schedules ("~$3,600
+// kitchen"; with more than one bar, "T2 ~$3,600 kitchen"). Today and
+// later only. Tapping a line, or Games/Events, opens the day's popup.
+function fcHeadHtml(date) {
+  if (!WEEK_FC.length || date < todayISO()) return '';
+  const multi = new Set(WEEK_FC.map(g => g.locationId)).size > 1;
+  const lines = WEEK_FC.map((g, i) => (g.days && g.days[date] != null
+    ? `<a href="#" class="fc-amt" onclick="event.preventDefault(); openDayPanel(${i}, '${date}')">${multi ? escapeHtml(shortLoc(g.locationName)) + ' ' : ''}~$${Number(g.days[date]).toLocaleString()} ${g.side === 'food' ? 'kitchen' : 'bar'}</a>` : '')).join('');
+  const label = date === todayISO() ? "Today's Games/Events ›" : 'Games/Events ›';
+  return `${lines}<a href="#" class="fc-link" onclick="event.preventDefault(); openDayPanel(0, '${date}')">${label}</a>`;
+}
+
+let DAY_PANEL = null; // { group, date, data }
+async function openDayPanel(groupIndex, date) {
+  const g = WEEK_FC[groupIndex] || WEEK_FC[0];
+  if (!g) return;
+  let panel = document.getElementById('dayPanel');
+  if (!panel) { panel = document.createElement('div'); panel.id = 'dayPanel'; panel.className = 'card day-panel'; document.body.appendChild(panel); }
+  panel.innerHTML = '<p class="muted">Loading…</p>';
+  panel.style.display = '';
+  document.getElementById('modalBackdrop').style.display = '';
+  try {
+    const data = await api(`/api/scheduling/day?locationId=${encodeURIComponent(g.locationId)}&side=${g.side}&date=${date}`);
+    DAY_PANEL = { group: g, date, data };
+    renderDayPanel();
+  } catch (e) { panel.innerHTML = `<span class="dp-x" onclick="closeAllModals()">×</span><p class="msg error">${escapeHtml(e.message)}</p>`; }
+}
+function closeDayPanel() {
+  const panel = document.getElementById('dayPanel');
+  if (panel) panel.style.display = 'none';
+  DAY_PANEL = null;
+}
+function renderDayPanel() {
+  const { group: g, date, data: d } = DAY_PANEL;
+  const panel = document.getElementById('dayPanel');
+  const weekday = isoToDate(date).toLocaleDateString([], { weekday: 'long' });
+  const title = isoToDate(date).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+  const sideWord = g.side === 'food' ? 'kitchen' : 'bar';
+  const sub = [`${escapeHtml(shortLoc(d.locationName))} ${sideWord}`, d.forecast != null ? `forecast ~$${Number(d.forecast).toLocaleString()}` : 'no forecast for this day', d.busiest ? `busiest ${d.busiest}` : ''].filter(Boolean).join(' · ');
+  // Hour bars, with a marker where one of our teams' games starts.
+  let hoursHtml = '';
+  if (d.hours && d.hours.length) {
+    const max = Math.max(...d.hours.map(h => h.amount), 1);
+    const kick = {};
+    d.games.filter(x => x.tracked && x.hour != null).forEach(x => { (kick[x.hour] ||= []).push(`${x.tracked} ${x.time.replace(/:00 /, ' ').replace(/ (AM|PM)$/, '')}`); });
+    hoursHtml = `<div class="dp-h">Forecast by hour</div>
+      <div class="dp-hrs" style="grid-template-columns:repeat(${d.hours.length},1fr)">${d.hours.map(h => `<div class="dp-c ${h.amount === max ? 'peak' : ''}">${kick[h.hour] ? `<span class="dp-ev">▼ ${escapeHtml(kick[h.hour][0])}</span>` : ''}<span class="dp-v">${h.amount >= max * 0.45 ? '$' + h.amount : ''}</span><i style="height:${Math.max(2, Math.round(h.amount / max * 100))}px"></i></div>`).join('')}</div>
+      <div class="dp-hl" style="grid-template-columns:repeat(${d.hours.length},1fr)">${d.hours.map(h => `<span>${h.label}</span>`).join('')}</div>`;
+  } else if (d.forecast != null) {
+    hoursHtml = '<p class="muted" style="font-size:12.5px;">The hour-by-hour view needs a few more weeks of full days. It fills in on its own.</p>';
+  }
+  // Games and events, in time order. Our teams, ranked matchups and NFL show; the rest fold away.
+  const rows = [];
+  d.holidays.forEach(h => rows.push({ sort: -1, time: 'All day', html: `<b>${escapeHtml(h)}</b>` }));
+  d.events.forEach(e => rows.push({ sort: e.time ? Number(e.time.replace(':', '')) : -1, time: e.time ? formatTime12(e.time).replace(/\s*(AM|PM)$/, ' $1') : 'All day',
+    html: `<b>${escapeHtml(e.name)}</b> <a href="#" class="dp-rm" title="Remove" onclick="event.preventDefault(); removeDayEvent('${e.id}')">×</a>` }));
+  const gameRow = x => ({ sort: x.hour != null ? x.hour * 100 : 2400, time: x.time,
+    html: `${x.tracked ? '<b>' : ''}${escapeHtml(x.matchup)}${x.tracked ? '</b> <span class="dp-tag">ours</span>' : ''} <span class="dp-net">${escapeHtml([x.league, x.network].filter(Boolean).join(' · '))}</span>` });
+  const big = d.games.filter(x => x.tracked || x.ranked || x.league === 'NFL');
+  const rest = d.games.filter(x => !big.includes(x));
+  big.forEach(x => rows.push(gameRow(x)));
+  // Business-day order: early-morning hours sort after late night.
+  const order = r => (r.sort < 0 ? -1 : (r.sort < 600 ? r.sort + 2400 : r.sort));
+  rows.sort((a, b) => order(a) - order(b));
+  const line = r => `<div class="dp-it"><span class="dp-t">${escapeHtml(r.time)}</span><span class="dp-n">${r.html}</span></div>`;
+  const restRows = rest.map(gameRow).sort((a, b) => order(a) - order(b));
+  const listHtml = (rows.length ? rows.map(line).join('') : '<p class="muted" style="font-size:12.5px; margin:6px 0;">No big games or events on the calendar.</p>')
+    + (restRows.length ? `<details class="dp-more"><summary>${restRows.length} more game${restRows.length === 1 ? '' : 's'}</summary>${restRows.map(line).join('')}</details>` : '');
+  const timeOpts = ['', ...TIME_CHOICES].map(t => `<option value="${t}">${t ? formatTime12(t) : 'All day'}</option>`).join('');
+  panel.innerHTML = `<span class="dp-x" onclick="closeAllModals()">×</span>
+    <h3 class="dp-title">${escapeHtml(title)}</h3><div class="dp-sub">${sub}</div>
+    ${hoursHtml}
+    <div class="dp-h">Games &amp; events</div>${listHtml}
+    <div class="dp-add"><select id="dpTime">${timeOpts}</select><input id="dpName" placeholder="Add an event, e.g. Band on the patio" maxlength="120"><button class="small" onclick="addDayEvent()">Add</button></div>
+    ${d.forecast != null ? `<p class="dp-foot">An estimate from past ${escapeHtml(weekday)}s; it sharpens as history builds.</p>` : ''}`;
+}
+async function addDayEvent() {
+  if (!DAY_PANEL) return;
+  const name = document.getElementById('dpName').value.trim();
+  if (!name) return;
+  try {
+    const r = await api('/api/scheduling/events', { method: 'POST', body: { locationId: DAY_PANEL.group.locationId, date: DAY_PANEL.date, startTime: document.getElementById('dpTime').value || null, name } });
+    if (!r.ok) { showMsg(r.error || 'Could not add it.', 'error'); return; }
+    openDayPanel(WEEK_FC.indexOf(DAY_PANEL.group), DAY_PANEL.date);
+  } catch (e) { showMsg(e.message, 'error'); }
+}
+async function removeDayEvent(id) {
+  if (!DAY_PANEL) return;
+  try {
+    await api(`/api/scheduling/events/${id}/delete`, { method: 'POST', body: {} });
+    openDayPanel(WEEK_FC.indexOf(DAY_PANEL.group), DAY_PANEL.date);
+  } catch (e) { showMsg(e.message, 'error'); }
 }
 
 function schedCellHtml(emp, date) {

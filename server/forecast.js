@@ -23,7 +23,7 @@ const { withServiceClient } = require('./db');
 const TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
 const HALF_LIFE_DAYS = 365;
 const MIN_DAYS = 21;               // fewer usable days than this: no forecast
-const HORIZON = 14;                // today + 13
+const HORIZON = 21;                // today + 20: managers schedule 2-3 weeks out
 const OUTLIER_MIN_RATIO = 1.8;     // never flag a day within 1.8x either way of expected
 const CLOSED_BELOW = 150;          // total under this = closed / barely open
 const CACHE_MS = 20 * 60 * 1000;
@@ -254,6 +254,23 @@ function curveAt(curve, minutesSinceStart) {
   const lo = Math.floor(k); return curve[lo] + (curve[lo + 1] - curve[lo]) * (k - lo);
 }
 
+// One day's forecast spread over its hours, from the weekday's curve.
+// Returns [{ hour: 0-23 local, label: '6p', amount }] for the hours that
+// normally see sales (each at least 1% of the day), in business-day order.
+function hourlyFor(dayFc, curve, dayStartHour) {
+  if (!curve || !(dayFc > 0)) return null;
+  const out = [];
+  for (let i = 0; i < 24; i += 1) {
+    const share = curveAt(curve, (i + 1) * 60) - curveAt(curve, i * 60);
+    const hour = (dayStartHour + i) % 24;
+    out.push({ hour, label: `${(hour % 12) || 12}${hour < 12 ? 'a' : 'p'}`, amount: Math.round(dayFc * Math.max(0, share)), share });
+  }
+  let a = 0; let b = out.length - 1;
+  while (a < b && out[a].share < 0.01) a += 1;
+  while (b > a && out[b].share < 0.01) b -= 1;
+  return out.slice(a, b + 1).map(({ hour, label, amount }) => ({ hour, label, amount }));
+}
+
 // ---------------------------------------------------------------- games (ESPN)
 function parseEspnSchedule(json, team, seasonParam, seasonType) {
   const out = [];
@@ -426,14 +443,25 @@ async function forLocation(locationId, { now = new Date(), fresh = false } = {})
     if (!fc.ready) return fc;
     // The pace curve for today's day of week.
     const { rows: snaps } = await client.query(
-      `SELECT business_date, at, food_net FROM kb_sales_snapshots WHERE location_id = $1 AND business_date >= $2 AND business_date < $3 ORDER BY at`,
+      `SELECT business_date, at, food_net, total_net FROM kb_sales_snapshots WHERE location_id = $1 AND business_date >= $2 AND business_date < $3 ORDER BY at`,
       [locationId, ymdAdd(today, -56), today]);
-    const byDay = new Map();
     // Left-out days still show how a day fills in (a surge day is busy all
     // day, not shaped differently); half days are dropped by buildCurve.
-    for (const s of snaps) { const d = toYmd(s.business_date); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push({ at: new Date(s.at), food: s.food_net == null ? null : Number(s.food_net) }); }
+    const byDayFood = new Map(); const byDayBar = new Map();
+    for (const s of snaps) {
+      const d = toYmd(s.business_date); const at = new Date(s.at);
+      const food = s.food_net == null ? null : Number(s.food_net);
+      const bar = s.total_net == null ? null : Number(s.total_net) - (food || 0);
+      if (!byDayFood.has(d)) { byDayFood.set(d, []); byDayBar.set(d, []); }
+      byDayFood.get(d).push({ at, food });
+      byDayBar.get(d).push({ at, food: bar });
+    }
     const dayStartOf = (d) => zonedToUtc(`${d}T${p2(inputs.dayStartHour)}:00:00`, TZ);
-    fc.curve = buildCurve(byDay, dayStartOf, dow(today));
+    // How a day fills in, for each weekday and side (the Scheduling page's
+    // hour-by-hour forecast); today's kitchen one drives the TV's pace line.
+    fc.curves = { food: {}, bar: {} };
+    for (let w = 0; w < 7; w += 1) { fc.curves.food[w] = buildCurve(byDayFood, dayStartOf, w); fc.curves.bar[w] = buildCurve(byDayBar, dayStartOf, w); }
+    fc.curve = fc.curves.food[dow(today)];
     // Keep what was said, to grade it later: the day's latest version per
     // bar (so 'made the day before' is the last word that day).
     for (const d of fc.days) {
@@ -467,6 +495,6 @@ async function setHistoryFrom(locationId, date) {
 }
 
 module.exports = {
-  forLocation, setDay, setHistoryFrom, refreshGames, curveAt, TEAMS,
-  _test: { buildForecast, fitSide, featureRow, holidaysOn, easter, nthWeekday, parseEspnSchedule, buildCurve, curveAt, backtest },
+  forLocation, setDay, setHistoryFrom, refreshGames, curveAt, hourlyFor, holidaysOn, HOLIDAY_LABELS, TEAMS,
+  _test: { hourlyFor, buildForecast, fitSide, featureRow, holidaysOn, easter, nthWeekday, parseEspnSchedule, buildCurve, curveAt, backtest },
 };

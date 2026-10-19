@@ -8,6 +8,7 @@ const auth = require('./auth');
 const employees = require('./employees');
 const certs = require('./certs');
 const forecast = require('./forecast');
+const slate = require('./slate');
 const tvpass = require('./tvpass');
 const timeclock = require('./timeclock');
 const servicecalls = require('./servicecalls');
@@ -4928,6 +4929,40 @@ app.get('/api/scheduling/week', auth.requireSession('light'), async (req, res) =
   res.json(await scheduling.getWeekShiftsWithDrafts(scheduleIds, req.query.weekStart, req.person.id));
 });
 
+// Sales forecast on the Scheduling page (server/slate.js): each date's
+// rounded forecast for the chosen schedules' bar and side, and one day's
+// hour-by-hour forecast with its games and events.
+app.get('/api/scheduling/forecast', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.weekStart || ''))) return res.status(400).json({ error: 'weekStart is required.' });
+  try {
+    const requested = (req.query.scheduleIds || '').split(',').filter(Boolean);
+    const manageable = await scheduling.getMyManageableScheduleIds(req.person);
+    const ids = requested.length ? requested.filter((id) => manageable.includes(id)) : manageable;
+    res.json(ids.length ? await slate.weekForecast(ids, req.query.weekStart) : []);
+  } catch (err) { console.error('[slate] week failed', err); res.status(500).json({ error: 'Could not load the forecast.' }); }
+});
+app.get('/api/scheduling/day', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const { locationId, side, date } = req.query;
+  if (!locationId || !atMyLocation(req.person, locationId)) return res.status(403).json({ error: 'Not your bar.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return res.status(400).json({ error: 'date is required.' });
+  try { res.json(await slate.dayDetail(locationId, side === 'food' ? 'food' : 'bar', date)); } catch (err) { console.error('[slate] day failed', err); res.status(500).json({ error: 'Could not load that day.' }); }
+});
+app.post('/api/scheduling/events', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const b = req.body || {};
+  if (!b.locationId || !atMyLocation(req.person, b.locationId)) return res.status(403).json({ error: 'Not your bar.' });
+  res.json(await slate.addEvent(b.locationId, b.date, b.startTime, b.name, req.person.id));
+});
+app.post('/api/scheduling/events/:id/delete', auth.requireSession('light'), async (req, res) => {
+  if (req.person.role !== 'manager' && req.person.role !== 'owner') return res.status(403).json({ error: 'Managers/owners only.' });
+  const loc = await slate.eventLocation(req.params.id);
+  if (!loc) return res.status(404).json({ error: 'Not found.' });
+  if (!atMyLocation(req.person, loc)) return res.status(403).json({ error: 'Not your bar.' });
+  res.json(await slate.removeEvent(req.params.id));
+});
+
 // Print/multi-week view — published shifts only (no draft overlay), 1-3
 // weeks starting at weekStart, scoped to schedules this manager/owner
 // actually manages (same filtering as /week above).
@@ -5558,6 +5593,12 @@ withServiceClient((client) => client.query('SELECT location_id FROM kb_settings'
 .then(async ({ rows }) => { for (const r of rows) await forecast.forLocation(r.location_id, { fresh: true }).catch((err) => console.error('[forecast] build error', err.message)); })
 .catch((err) => console.error('[forecast] hourly error', err.message));
 }, 60 * 60 * 1000);
+
+// The sports schedule for the Scheduling page's Games/Events (patch_078):
+// two minutes after boot, then every 6 hours.
+const refreshSlate = () => slate.refreshSlate().catch((err) => console.error('[slate] refresh error', err.message));
+setTimeout(refreshSlate, 2 * 60 * 1000);
+setInterval(refreshSlate, 6 * 60 * 60 * 1000);
 
 // The managers' morning summary (patch_069): each person's own hour, at
 // their bar's clock, once a day.
