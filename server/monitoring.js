@@ -893,7 +893,8 @@ async function sendDailySummaries(svc) {
             ARRAY(SELECT el.location_id FROM employee_locations el WHERE el.person_id = p.id) AS location_ids,
             ARRAY(SELECT r.location_id FROM monitoring_alert_routes r WHERE r.person_id = p.id) AS route_location_ids,
             EXISTS (SELECT 1 FROM monitoring_alert_routes r WHERE r.person_id = p.id AND r.location_id IS NULL) AS routed_everywhere,
-            EXISTS (SELECT 1 FROM employee_apps ea WHERE ea.person_id = p.id AND ea.app_key = 'monitoring' AND ea.enabled = true) AS has_app
+            EXISTS (SELECT 1 FROM employee_apps ea WHERE ea.person_id = p.id AND ea.app_key = 'monitoring' AND ea.enabled = true) AS has_app,
+            EXISTS (SELECT 1 FROM morning_summary_settings ms WHERE ms.person_id = p.id AND ms.enabled = true AND ms.channel IN ('email', 'both')) AS gets_morning_summary
      FROM people p LEFT JOIN monitoring_notify_settings mns ON mns.person_id = p.id
      WHERE p.status = 'active' AND p.email IS NOT NULL
        AND (p.role = 'owner'
@@ -918,6 +919,9 @@ async function sendDailySummaries(svc) {
   const fmt = (d) => new Date(d).toLocaleString('en-US', { timeZone: BUSINESS_TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   let sent = 0;
   for (const person of people) {
+    // The morning summary email already carries what's down and what came
+    // back (Scotto, 2026-10-19: one email, not two).
+    if (person.gets_morning_summary) continue;
     const everywhere = person.role === 'owner' || person.routed_everywhere;
     const myLocs = new Set([...(person.location_ids || []), ...(person.route_location_ids || [])].filter(Boolean).map(String));
     const wants = (a) => modeFor(person.prefs, a.category) === 'daily' && (everywhere || myLocs.has(String(a.location_id)));

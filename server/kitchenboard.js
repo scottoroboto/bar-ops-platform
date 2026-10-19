@@ -99,6 +99,7 @@ async function updateSettings(locationId, body, personId) {
       labor_goal_weekday: b.laborGoalWeekday != null ? numIn(b.laborGoalWeekday, 1, 100) : cur.labor_goal_weekday,
       labor_goal_weekend: b.laborGoalWeekend != null ? numIn(b.laborGoalWeekend, 1, 100) : cur.labor_goal_weekend,
       labor_goal_week: b.laborGoalWeek != null ? numIn(b.laborGoalWeek, 1, 100) : cur.labor_goal_week,
+      bar_labor_goal: b.barLaborGoal != null ? numIn(b.barLaborGoal, 1, 100) : cur.bar_labor_goal,
       slow_night_line: b.slowNightLine != null ? numIn(b.slowNightLine, 0, 100000) : cur.slow_night_line,
       rotate_seconds: b.rotateSeconds != null ? Math.round(numIn(b.rotateSeconds, 10, 600)) : cur.rotate_seconds,
       day_start_hour: b.dayStartHour != null ? Math.round(numIn(b.dayStartHour, 0, 12)) : cur.day_start_hour,
@@ -108,10 +109,10 @@ async function updateSettings(locationId, body, personId) {
     const { rows } = await client.query(
       `UPDATE kb_settings SET kitchen_roles = $2, food_keys = $3, food_goal_weekday = $4, food_goal_weekend = $5, labor_goal_weekday = $6,
          labor_goal_weekend = $7, labor_goal_week = $8, slow_night_line = $9, rotate_seconds = $10, day_start_hour = $11, show_names = $12,
-         managers_can_view = $14, updated_at = now(), updated_by = $13 WHERE location_id = $1 RETURNING *`,
+         managers_can_view = $14, bar_labor_goal = $15, updated_at = now(), updated_by = $13 WHERE location_id = $1 RETURNING *`,
       [locationId, next.kitchen_roles, next.food_keys, next.food_goal_weekday, next.food_goal_weekend, next.labor_goal_weekday,
         next.labor_goal_weekend, next.labor_goal_week, next.slow_night_line, next.rotate_seconds, next.day_start_hour, next.show_names, personId || null,
-        next.managers_can_view],
+        next.managers_can_view, next.bar_labor_goal],
     );
     return rows[0];
   });

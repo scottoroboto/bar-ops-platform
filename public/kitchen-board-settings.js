@@ -28,7 +28,7 @@ async function loadAll() {
   try {
     const { settings: s, devices, pulls } = await api(`/api/kitchen-board/settings/${id}`);
     for (const [k, v] of [['foodGoalWeekday', s.food_goal_weekday], ['foodGoalWeekend', s.food_goal_weekend], ['laborGoalWeekday', s.labor_goal_weekday], ['laborGoalWeekend', s.labor_goal_weekend],
-      ['laborGoalWeek', s.labor_goal_week], ['slowNightLine', s.slow_night_line], ['rotateSeconds', s.rotate_seconds], ['dayStartHour', s.day_start_hour]]) {
+      ['laborGoalWeek', s.labor_goal_week], ['barLaborGoal', s.bar_labor_goal], ['slowNightLine', s.slow_night_line], ['rotateSeconds', s.rotate_seconds], ['dayStartHour', s.day_start_hour]]) {
       document.getElementById(k).value = Number(v);
     }
     document.getElementById('kitchenRoles').value = (s.kitchen_roles || []).join(', ');
@@ -115,7 +115,7 @@ async function saveHistoryFrom() {
 
 async function saveSettings() {
   const body = {};
-  for (const k of ['foodGoalWeekday', 'foodGoalWeekend', 'laborGoalWeekday', 'laborGoalWeekend', 'laborGoalWeek', 'slowNightLine', 'rotateSeconds', 'dayStartHour']) body[k] = Number(document.getElementById(k).value);
+  for (const k of ['foodGoalWeekday', 'foodGoalWeekend', 'laborGoalWeekday', 'laborGoalWeekend', 'laborGoalWeek', 'barLaborGoal', 'slowNightLine', 'rotateSeconds', 'dayStartHour']) body[k] = Number(document.getElementById(k).value);
   body.kitchenRoles = document.getElementById('kitchenRoles').value;
   body.foodKeys = document.getElementById('foodKeys').value;
   body.showNames = document.getElementById('showNames').checked;

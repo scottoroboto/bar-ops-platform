@@ -1,21 +1,19 @@
-// Morning summary (patch_069). One email and/or text per manager per bar,
-// built at the hour they picked from data the app already holds: SpotOn
-// sales snapshots and punches (kitchen board), the Bar Ops schedule, cash
-// counts, cooler sensors, service calls, applicants, network and AV status,
-// and the My Teams games the bar's box pushes up.
+// Morning summary (patch_069, redesigned 2026-10-19). One email and/or
+// text per person covering every bar they work at, built at the hour they
+// picked from data the app already holds: SpotOn sales and punches, the
+// sales forecast, the Bar Ops schedule, cash counts, cooler sensors,
+// equipment alerts, service calls, applicants, and the ESPN slate.
 //
-// Shape of every summary: NEEDS YOU first (open service calls, applicants
-// waiting, stock, alerts: drawer shortages and internet down), then
-// Yesterday, Today, big games, the charts, critical systems. The owner
-// switches the summary on per manager and picks the sections; the manager
-// picks email / text / both and the hour (5-9am). Bar or kitchen comes
-// from the manager's home widgets (bar_* on -> bar sections, kitchen_* ->
-// kitchen), owner gets both.
+// Shape (Scotto's mockup g2): a card per bar with yesterday's sales next
+// to today's forecast in the same rows (total, Kitchen, Bar, Labor); then
+// today's games and events; then equipment and service, summarized with
+// links into the app. The owner switches the summary on per person and
+// picks the sections; the person picks email / text / both and the hour
+// (5-9am). Bar or kitchen comes from the person's home widgets (bar_* on ->
+// bar, kitchen_* -> kitchen), owner gets both.
 //
 // The text version ends with a link to the full page, which asks for that
-// manager's PIN only (the link already says who it was sent to). Charts
-// are PNGs rendered from the stored model when the email client asks for
-// them, so they show in Gmail and Apple Mail without any clicking.
+// person's PIN only (the link already says who it was sent to).
 const crypto = require('crypto');
 const path = require('path');
 const bcrypt = require('bcryptjs');
@@ -23,6 +21,8 @@ const { withServiceClient } = require('./db');
 const notify = require('./notify');
 const kitchenboard = require('./kitchenboard');
 const home = require('./home');
+const forecast = require('./forecast');
+const slate = require('./slate');
 
 let Resvg = null;
 try { ({ Resvg } = require('@resvg/resvg-js')); } catch (e) { console.warn('[summary] @resvg/resvg-js not available; charts will be skipped'); }
@@ -31,19 +31,18 @@ const DEFAULT_TZ = 'America/Chicago';
 const FONT_FILES = [path.join(__dirname, 'assets', 'DejaVuSans.ttf'), path.join(__dirname, 'assets', 'DejaVuSans-Bold.ttf')];
 const FONT = 'DejaVu Sans';
 
-// Sections the owner can switch per manager. Needs-you is always on.
+// Sections the owner can switch per person. Service calls and applicants
+// always show.
 const SECTIONS = [
-  ['sales', 'Sales, total and day/night', true],
-  ['cost', 'Liquor cost (food cost for kitchen)', false],
-  ['labor', 'Labor cost', true],
-  ['drawers', 'Drawers, deposit', true],
-  ['clock', 'Clock: late in, missed out and who fixed it', true],
-  ['projected', 'Projected sales, total and day/night', true],
-  ['shifts', 'Scheduled shifts, time and name', true],
-  ['games', 'Big games with start times', true],
-  ['coolers', 'Cooler temps, hourly chart', true],
-  ['timeline', 'Sales vs schedule timeline (games, sales, shifts)', true],
-  ['systems', 'Critical systems: internet, receivers, Sonos/Pandora', true],
+  ['sales', "Yesterday's sales", true],
+  ['labor', 'Labor cost %', true],
+  ['projected', "Today's forecast", true],
+  ['shifts', 'Scheduled hours', true],
+  ['games', 'Games and events', true],
+  ['systems', 'Equipment down, and back overnight', true],
+  ['coolers', 'Coolers out of range', true],
+  ['drawers', 'Drawer shortages', true],
+  ['clock', 'Clock flags: late in, missed out', true],
 ];
 const DEFAULT_SECTIONS = Object.fromEntries(SECTIONS.map(([k, , d]) => [k, d]));
 
@@ -414,6 +413,7 @@ function timelineSvg(t) {
   return out + '</svg>';
 }
 function chartSvg(model, name) {
+  if (!model || !model.by) return null; // summaries before the 2026-10-19 redesign only
   if (name === 'coolers-bar' && model.by.bar && model.by.bar.coolers) return coolerSvg(model.by.bar.coolers);
   if (name === 'coolers-kitchen' && model.by.kitchen && model.by.kitchen.coolers) return coolerSvg(model.by.kitchen.coolers);
   if (name === 'timeline' && model.by.kitchen && model.by.kitchen.timeline) return timelineSvg(model.by.kitchen.timeline);
@@ -426,121 +426,306 @@ function chartPng(model, name) {
   return Buffer.from(r.render().asPng());
 }
 
+// ---------------------------------------------------------------- one summary, every bar
+// Scotto, 2026-10-19 (mockup g2): one email for all of a person's bars.
+// Each bar gets a card with yesterday's sales next to today's forecast in
+// the same rows (total, Kitchen, Bar, Labor), and labor % colored against
+// the Sales Board targets (kitchen labor_goal_*, bar bar_labor_goal). Then
+// today's games and events, then equipment and service, summarized with
+// links. Anyone who gets this by email no longer gets monitoring's 6am
+// equipment email (monitoring.sendDailySummaries skips them).
+const ACCENTS = [['#d8453c', '#d8453c'], ['#f2a516', '#e39200'], ['#2563eb', '#2563eb'], ['#16a34a', '#15803d']]; // [strip, chip]
+const CAT_NAME = { network: 'Network', av: 'TVs & AV', hvac: 'HVAC', refrigeration: 'Refrigeration', freezer: 'Freezer', ice_machine: 'Ice machine', power: 'Power', other: 'Other' };
+function shortLoc(name) { const m = String(name || '').match(/(\d+)\s*$/); return m ? `T${m[1]}` : String(name || '').split(/\s+/).map((w) => w[0] || '').join('').toUpperCase().slice(0, 3); }
+function isWeekendYmd(ymd) { const d = new Date(`${ymd}T12:00:00Z`).getUTCDay(); return d === 5 || d === 6; }
+function shiftHours(list) {
+  return (list || []).reduce((a, s) => { const [sh, sm] = s.start.split(':').map(Number); const [eh, em] = s.end.split(':').map(Number); let h = (eh + em / 60) - (sh + sm / 60); if (h <= 0) h += 24; return a + h; }, 0);
+}
+function clock12(hhmm) { const [h, m] = String(hhmm).split(':').map(Number); return `${(h % 12) || 12}:${String(m || 0).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; }
+// Minutes into the bar's day (6 AM start) for a time like "7:15 PM", for sorting.
+function dayMinutes(t) { const m = String(t || '').match(/(\d+):(\d+)\s*([AP])M/i); if (!m) return -1; let h = Number(m[1]) % 12 + (m[3].toUpperCase() === 'P' ? 12 : 0); if (h < 6) h += 24; return h * 60 + Number(m[2]); }
+function round100(n) { return n == null ? null : Math.round(n / 100) * 100; }
+
+// A business day's sales: sales_daily (final once the box backfills), else
+// the day's last snapshot.
+async function daySales(svc, locId, ymd, tz, cutoff) {
+  const { rows } = await svc.query('SELECT food_net, total_net FROM sales_daily WHERE location_id = $1 AND business_date = $2 AND total_net IS NOT NULL', [locId, ymd]);
+  if (rows[0]) { const total = num(rows[0].total_net); const food = rows[0].food_net == null ? null : num(rows[0].food_net); return { total, food, bar: food == null ? null : Math.max(0, total - food) }; }
+  const s = await salesFor(svc, locId, ymd, tz, cutoff);
+  return s ? { total: s.total, food: s.food, bar: s.bar } : null;
+}
+
+// One bar's card plus what it adds to the games and equipment cards.
+async function barBlock(svc, { person, location, sides: sidesIn, settings, now }, i) {
+  const sides = [...sidesIn].sort((a, b) => (a === 'kitchen' ? -1 : b === 'kitchen' ? 1 : 0)); // Kitchen row above Bar
+  const m = await buildModel(svc, { person, location, sides, settings, now });
+  const kb = await kitchenboard.settingsFor(svc, location.id);
+  const code = shortLoc(location.name); const [strip, chip] = ACCENTS[i % ACCENTS.length];
+  const goals = { kitchen: num(isWeekendYmd(m.yday) ? kb.labor_goal_weekend : kb.labor_goal_weekday) || 30, bar: num(kb.bar_labor_goal) || 18 };
+  const keyOf = (side) => (side === 'kitchen' ? 'food' : 'bar');
+
+  // ---- yesterday
+  const ys = await daySales(svc, location.id, m.yday, m.tz, m.cutoff);
+  const lw = await daySales(svc, location.id, ymdAddDays(m.yday, -7), m.tz, m.cutoff);
+  const pick = (s, side) => (s ? s[keyOf(side)] : null);
+  const both = sides.length > 1;
+  const yest = { rows: [], total: null, lastWeek: null, labor: null };
+  if (ys) {
+    yest.total = both ? ys.total : pick(ys, sides[0]);
+    yest.lastWeek = lw ? (both ? lw.total : pick(lw, sides[0])) : null;
+    let laborAll = 0; let haveLabor = false; let goalWeighted = 0;
+    for (const side of sides) {
+      const sales = pick(ys, side); const L = m.by[side].yesterday.labor;
+      const dollars = L ? L.dollars : null;
+      if (dollars != null) { laborAll += dollars; haveLabor = true; }
+      goalWeighted += (sales || 0) * goals[side];
+      yest.rows.push({ side, label: side === 'kitchen' ? 'Kitchen' : 'Bar', sales, laborPct: dollars != null && sales > 0 ? dollars / sales * 100 : null, goal: goals[side] });
+    }
+    const salesSum = sides.reduce((a, s) => a + (pick(ys, s) || 0), 0);
+    if (haveLabor) yest.labor = { dollars: laborAll, pct: salesSum > 0 ? laborAll / salesSum * 100 : null, goal: salesSum > 0 ? goalWeighted / salesSum : goals[sides[0]] };
+  }
+
+  // ---- today
+  let fc = null;
+  try { fc = await forecast.forLocation(location.id, { now }); } catch (err) { console.error('[summary] forecast failed', location.name, err.message); }
+  const fd = fc && fc.ready ? fc.days.find((d) => d.date === m.today) : null;
+  const today = { ready: !!fd, rows: [], total: null, hours: null, why: fd ? null : (fc && fc.reason) || 'no forecast yet' };
+  let hoursAll = 0; let anyShift = false;
+  for (const side of sides) {
+    const shifts = m.by[side].today.shifts; const h = shiftHours(shifts); if (shifts.length) anyShift = true; hoursAll += h;
+    today.rows.push({ side, label: side === 'kitchen' ? 'Kitchen' : 'Bar', fc: fd ? round100(fd[keyOf(side)].fc) : null, hours: shifts.length ? h : null });
+  }
+  if (fd) today.total = today.rows.reduce((a, r) => a + (r.fc || 0), 0);
+  today.hours = anyShift ? hoursAll : null;
+
+  // ---- games and events (dayDetail: the Scheduling page's popup)
+  let detail = null;
+  try { detail = await slate.dayDetail(location.id, 'bar', m.today); } catch (err) { console.error('[summary] day detail failed', location.name, err.message); }
+
+  // ---- equipment and service
+  const zoneOk = (z) => person.role === 'owner' || !z || z === 'both' || sides.includes(z);
+  const { rows: down } = await svc.query(
+    `SELECT ms.name, ms.category, ms.zone, sa.opened_at, (ms.silenced_until IS NOT NULL AND ms.silenced_until > now()) AS silenced
+       FROM system_alerts sa JOIN monitored_systems ms ON ms.id = sa.system_id
+      WHERE ms.location_id = $1 AND sa.closed_at IS NULL AND sa.expected_on = true AND ms.active = true AND ms.kind <> 'vc_tv' ORDER BY sa.opened_at`, [location.id]);
+  const { rows: back } = await svc.query(
+    `SELECT ms.name, ms.zone, sa.opened_at, sa.closed_at FROM system_alerts sa JOIN monitored_systems ms ON ms.id = sa.system_id
+      WHERE ms.location_id = $1 AND sa.closed_at >= now() - interval '24 hours' AND sa.expected_on = true AND ms.kind <> 'vc_tv'
+        AND sa.closed_at - sa.opened_at >= interval '3 minutes' ORDER BY sa.closed_at`, [location.id]);
+  const coolers = sides.map((s) => m.by[s].coolers).filter(Boolean);
+  return {
+    card: { name: location.name, code, strip, chip, sides, yday: m.yday, today: m.today, yest, fc: today },
+    tz: m.tz, today: m.today, yday: m.yday,
+    detail,
+    down: down.filter((d) => zoneOk(d.zone)).map((d) => ({ code, name: d.name, cat: CAT_NAME[d.category] || d.category || 'Other', since: fmtTime(d.opened_at, m.tz), silenced: d.silenced })),
+    back: back.filter((d) => zoneOk(d.zone)).map((d) => ({ code, name: d.name, from: fmtTime(d.opened_at, m.tz), to: fmtTime(d.closed_at, m.tz) })),
+    coolersOver: coolers.flatMap((c) => c.over.map((o) => ({ code, ...o, now: (c.series.find((s) => s.name === o.name) || {}).state }))),
+    coolerCount: coolers.reduce((a, c) => a + c.total, 0),
+    calls: (m.needs.calls || []).map((c) => ({ code, ...c })),
+    drawers: (m.needs.drawerShort || []).map((d) => ({ code, ...d })),
+    applicants: m.needs.applicants || [],
+    clock: [...new Set(sides.flatMap((s) => m.by[s].yesterday.clock.flags.filter((f) => f.kind !== 'fixed').map((f) => `${code} ${f.text.replace(/, missed clock out: clock out time needs adjusted$/, ' missed clock out')}`)))],
+  };
+}
+
+// Games: our teams one by one, pro games grouped by start time, college
+// games only when ranked teams meet (or a top 10 plays); the rest counted.
+function pickGames(games) {
+  const out = []; const groups = new Map(); let collegeRest = 0;
+  for (const g of games) {
+    if (g.tracked) { out.push({ hour: g.hour, time: g.time, text: g.matchup, net: g.network, ours: true }); continue; }
+    const college = /college/i.test(g.league);
+    if (college) {
+      const ranks = (g.matchup.match(/#(\d+)/g) || []).map((x) => Number(x.slice(1)));
+      if (ranks.length === 2 || ranks.some((r) => r <= 10)) out.push({ hour: g.hour, time: g.time, text: g.matchup, net: g.network });
+      else collegeRest += 1;
+      continue;
+    }
+    const k = `${g.league}|${g.time}`;
+    if (!groups.has(k)) groups.set(k, { hour: g.hour, time: g.time, league: g.league, list: [] });
+    groups.get(k).list.push(g);
+  }
+  for (const gr of groups.values()) {
+    if (gr.list.length === 1) out.push({ hour: gr.hour, time: gr.time, text: `${gr.league}: ${gr.list[0].matchup}`, net: gr.list[0].network });
+    else out.push({ hour: gr.hour, time: gr.time, text: `${gr.league} · ${gr.list.length} games` });
+  }
+  out.sort((a, b) => dayMinutes(a.time) - dayMinutes(b.time) || (b.ours ? 1 : 0) - (a.ours ? 1 : 0));
+  return { list: out.slice(0, 10), more: Math.max(0, out.length - 10) + collegeRest };
+}
+
+async function buildSummary(svc, { person, locs, sides, settings, now }) {
+  const blocks = [];
+  for (let i = 0; i < locs.length; i += 1) blocks.push(await barBlock(svc, { person, location: locs[i], sides, settings, now }, i));
+  const first = blocks[0]; const S = settings.sections;
+  const M = { v: 2, personName: person.name, tz: first.tz, today: first.today, yday: first.yday, sections: S, generatedAt: now.toISOString(), bars: blocks.map((b) => b.card), multi: blocks.length > 1 };
+
+  // ---- games and events
+  const d0 = blocks.map((b) => b.detail).find(Boolean);
+  M.games = d0 ? pickGames(d0.games) : { list: [], more: 0 };
+  M.events = blocks.flatMap((b) => (b.detail ? b.detail.events.map((e) => ({ code: b.card.code, time: e.time ? clock12(e.time) : '', name: e.name })) : []));
+  M.holidays = d0 ? d0.holidays : [];
+  M.busiest = blocks.filter((b) => b.detail && b.detail.busiest).map((b) => `${b.card.code} ${b.detail.busiest}`);
+
+  // ---- equipment and service, worst first
+  const items = []; const tag = (code) => (M.multi ? `${code} ` : '');
+  if (S.systems) {
+    const down = blocks.flatMap((b) => b.down);
+    if (down.length) {
+      const groups = new Map(); for (const d of down) { const k = `${tag(d.code)}${d.cat}`; groups.set(k, (groups.get(k) || []).concat(d)); }
+      const sub = down.length <= 2 ? down.map((d) => `${tag(d.code)}${d.name}, since ${d.since}${d.silenced ? ' (silenced)' : ''}`).join(' · ')
+        : [...groups.entries()].map(([k, l]) => (l.length > 1 ? `${k} (${l.length})` : `${k}: ${l[0].name}`)).join(' · ');
+      items.push({ level: 'red', title: `${down.length} piece${down.length === 1 ? '' : 's'} of equipment down`, sub, href: '/monitoring.html' });
+    }
+  }
+  if (S.coolers) {
+    for (const b of blocks) for (const o of b.coolersOver) items.push({ level: 'red', title: `${tag(o.code)}${o.name} hit ${Math.round(o.peak)}°F`, sub: `${o.from}–${o.to}, ${o.now === 'normal' ? 'back in range' : 'still above'} ${Math.round(o.limit)}°F`, href: '/sensors.html' });
+  }
+  const calls = blocks.flatMap((b) => b.calls);
+  if (calls.length) {
+    const oldest = Math.max(...calls.map((c) => c.ageDays));
+    const sub = calls.slice(0, 3).map((c) => `${tag(c.code)}${c.what}${c.working ? ' (being worked)' : ''}`).join(' · ') + (calls.length > 3 ? ` · ${calls.length - 3} more` : '');
+    items.push({ level: 'amb', title: `${calls.length} service call${calls.length === 1 ? '' : 's'} open`, sub: `${oldest ? `Oldest ${oldest} day${oldest === 1 ? '' : 's'} · ` : ''}${sub}`, href: '/servicecalls.html' });
+  }
+  if (S.drawers) for (const b of blocks) for (const d of b.drawers) items.push({ level: 'amb', title: `${tag(d.code)}drawer $${Math.abs(d.variance).toFixed(2)} short`, sub: `${d.name} at close · ${d.who}`, href: '/cashhandling.html' });
+  const seen = new Set(); const apps = blocks.flatMap((b) => b.applicants).filter((a) => (seen.has(a.name) ? false : seen.add(a.name)));
+  if (apps.length) items.push({ level: 'amb', title: `${apps.length} applicant${apps.length === 1 ? '' : 's'} waiting`, sub: apps.slice(0, 3).map((a) => `${shortName(a.name)}${a.position ? `, ${a.position.toLowerCase()}` : ''} · ${a.waiting}`).join(' · '), href: '/employees.html' });
+  if (S.clock) {
+    const flags = blocks.flatMap((b) => (M.multi ? b.clock : b.clock.map((t) => t.replace(/^\S+ /, ''))));
+    if (flags.length) items.push({ level: 'amb', title: `${flags.length} clock flag${flags.length === 1 ? '' : 's'}`, sub: flags.slice(0, 2).join(' · ') + (flags.length > 2 ? ` · ${flags.length - 2} more` : ''), href: '/timeclock.html' });
+  }
+  M.items = items.map((it) => ({ ...it, title: it.title.charAt(0).toUpperCase() + it.title.slice(1) }));
+  const back = S.systems ? blocks.flatMap((b) => b.back) : [];
+  M.back = back.slice(0, 5).map((x) => `${tag(x.code)}${x.name} ${x.from}–${x.to}`).concat(back.length > 5 ? [`${back.length - 5} more`] : []);
+  const coolerCount = blocks.reduce((a, b) => a + b.coolerCount, 0);
+  M.coolersOk = S.coolers && coolerCount && !blocks.some((b) => b.coolersOver.length) ? coolerCount : 0;
+  return M;
+}
+
 // ---------------------------------------------------------------- email
-function sideLabel(side) { return side === 'kitchen' ? 'kitchen' : 'bar'; }
-function renderHtml(model, { base, token, test }) {
-  const S = model.sections; const h = [];
-  const H3 = (t, sub) => `<h3 style="font-family:Arial Narrow,Arial,sans-serif;font-size:20px;letter-spacing:.02em;text-transform:uppercase;color:#2a3140;margin:0 0 6px;">${esc(t)}${sub ? ` <span style="font-family:Arial,sans-serif;font-size:13px;text-transform:none;letter-spacing:0;color:#5c6577;font-weight:normal;margin-left:8px;">${esc(sub)}</span>` : ''}</h3>`;
-  const H4 = (t) => `<div style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:.08em;color:#9a5b00;margin:10px 0 3px;">${esc(t)}</div>`;
-  const row = (l, v, d, sub) => `<tr><td style="padding:3px 0;white-space:nowrap;color:${sub ? '#5c6577' : '#1b1f27'};${sub ? 'padding-left:16px;' : ''}">${l}</td><td style="padding:3px 10px;text-align:right;font-weight:${sub ? '600' : 'bold'};white-space:nowrap;">${v}</td><td style="padding:3px 0;text-align:right;color:#5c6577;font-size:13px;">${d || ''}</td></tr>`;
-  const ul = (items) => `<ul style="margin:0;padding-left:20px;">${items.map((i) => `<li style="margin:3px 0;">${i}</li>`).join('')}</ul>`;
-  const up = (a, b) => { if (a == null || !b) return ''; const d = (a - b) / b * 100; return `<span style="color:${d >= 0 ? '#1f8a4c' : '#c0392b'};">${d >= 0 ? '+' : ''}${Math.round(d)}%</span>`; };
-  const block = (inner) => `<div style="margin:0 0 18px;">${inner}</div>`;
+// Tables and inline styles only, so Gmail, Outlook and Apple Mail all
+// draw it the same; sized for a phone first (max 480px).
+const C = { bg: '#eef1f5', card: '#ffffff', ink: '#18202e', soft: '#3d4657', muted: '#677185', line: '#e8ecf2', blue: '#1d4ed8', fcBg: '#f2f6ff', green: '#15803d', greenBg: '#e3f6e9', amber: '#b45309', amberBg: '#fff1d6', red: '#dc2626', amb: '#f59e0b', orange: '#c2410c' };
+function pill(p, goal) {
+  if (p == null) return '';
+  const ok = goal == null || p <= goal;
+  return `<span style="display:inline-block;border-radius:999px;padding:0 6px;font-weight:700;font-size:12px;line-height:18px;background:${ok ? C.greenBg : C.amberBg};color:${ok ? C.green : C.amber};">${Math.round(p)}%</span>`;
+}
+function delta(a, b) {
+  if (a == null || !b) return '';
+  const d = Math.round((a - b) / b * 100);
+  return `<span style="font-size:12px;font-weight:700;margin-left:6px;letter-spacing:0;color:${d >= 0 ? C.green : C.orange};">${d >= 0 ? '▲' : '▼'}&nbsp;${Math.abs(d)}%</span>`;
+}
+function hrs(h) { return h == null ? '' : `${Math.round(h)}&nbsp;h`; }
+function rowsTable(rows) {
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;font-size:13px;">${rows.map(([n, v, x]) => `<tr><td style="padding:6px 0;border-top:1px solid ${C.line};color:${C.soft};white-space:nowrap;">${n}</td><td align="right" style="padding:6px 0 6px 4px;border-top:1px solid ${C.line};font-weight:700;white-space:nowrap;">${v}</td><td align="right" width="34" style="padding:6px 0 6px 4px;border-top:1px solid ${C.line};color:${C.muted};font-size:12px;white-space:nowrap;">${x || ''}</td></tr>`).join('')}</table>`;
+}
+const LBL = (t, color) => `<div style="font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:${color || C.muted};margin:0 0 4px;">${t}</div>`;
+const BIG = (t, color) => `<div style="font-size:22px;font-weight:800;letter-spacing:-.02em;white-space:nowrap;color:${color || C.ink};margin:0 0 4px;">${t}</div>`;
+const SEC = (t) => `<div style="font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:${C.muted};margin:0 0 6px;">${t}</div>`;
+const CHIP = (code, bg, small) => `<span style="display:inline-block;font-size:${small ? 10.5 : 12}px;font-weight:800;color:#ffffff;background:${bg};border-radius:6px;padding:1px 7px;">${esc(code)}</span>`;
+const card = (strip, inner) => `<tr><td style="background:${C.card};border-radius:14px;border-top:5px solid ${strip};padding:14px 12px;">${inner}</td></tr><tr><td height="12" style="font-size:0;line-height:0;">&nbsp;</td></tr>`;
 
-  // needs you
-  const N = model.needs; const needs = [];
-  if (N.calls && N.calls.length) needs.push(H4('Open service calls') + ul(N.calls.map((c) => `<b>${esc(c.what)}.</b> Open ${c.ageDays} day${c.ageDays === 1 ? '' : 's'}${c.working ? ', being worked' : ''}. ${c.lastNote ? `Last note${c.lastNoteDays ? ` ${c.lastNoteDays}d ago` : ''}: ${esc(c.lastNote)}` : 'No notes yet.'}`)));
-  if (N.applicants && N.applicants.length) needs.push(H4('Applicants') + ul([`<b>${N.applicants.length} waiting for review:</b> ${N.applicants.map((a) => `${esc(a.name)}${a.position ? ', ' + esc(a.position) : ''}, waiting ${a.waiting}`).join(' · ')}`]));
-  if (N.stock && N.stock.length) needs.push(H4('Stock') + ul(N.stock.map((s) => esc(s))));
-  const alerts = [];
-  for (const d of N.drawerShort || []) alerts.push(`<b>${esc(d.name)} short $${Math.abs(d.variance).toFixed(2)}</b> at close (${esc(d.who)}). Over the $${N.calls ? '' : ''}${model.by.bar && model.by.bar.yesterday.drawers ? model.by.bar.yesterday.drawers.threshold : 5} line.`);
-  for (const o of N.internetDown || []) alerts.push(o.to ? `<b>Internet was down</b> ${o.from} to ${o.to} (${o.minutes} min). Up since.` : `<b>Internet is down</b> since ${o.from} (${o.minutes} min).`);
-  if (alerts.length) needs.push(H4('Alerts') + ul(alerts));
-  h.push(`<div style="background:#fff4e5;border:1px solid #ffd59a;border-radius:10px;padding:12px 14px;margin:0 0 18px;">${H3('Needs you').replace('#2a3140', '#9a5b00')}${needs.length ? needs.join('') : '<div style="color:#5c6577;">Nothing waiting on you this morning.</div>'}</div>`);
-
-  for (const side of model.sides) {
-    const B = model.by[side]; const Y = B.yesterday; const T = B.today;
-    const rows = [];
-    if (S.sales) {
-      if (Y.sales) {
-        rows.push(row(`${side === 'kitchen' ? 'Food' : 'Bar'} sales`, money(Y.sales.total), `${up(Y.sales.total, Y.sales.lastWeek)} vs last ${weekdayShort(model.yday)} ${money(Y.sales.lastWeek)} · 4-wk ${weekdayShort(model.yday)} avg ${money(Y.sales.avg4)}`));
-        if (Y.sales.day != null) {
-          rows.push(row(`Day, open to ${hourLabel(model.cutoff)}`, money(Y.sales.day), Y.sales.avgDay != null ? `4-wk ${money(Y.sales.avgDay)}` : '', true));
-          rows.push(row(`Night, ${hourLabel(model.cutoff)} to close`, money(Y.sales.night), Y.sales.avgNight != null ? `4-wk ${money(Y.sales.avgNight)}` : '', true));
-        }
-      } else rows.push(row(`${side === 'kitchen' ? 'Food' : 'Bar'} sales`, '—', 'no SpotOn snapshot for yesterday'));
+function barCard(b, S) {
+  const Y = b.yest; const F = b.fc;
+  const left = [];
+  if (S.sales) {
+    left.push(LBL(`Yesterday · ${weekdayShort(b.yday)}`));
+    if (Y.total == null) left.push(BIG('—') + `<div style="font-size:12.5px;color:${C.muted};">No SpotOn sales for yesterday.</div>`);
+    else {
+      left.push(BIG(`${money(Y.total)}${delta(Y.total, Y.lastWeek)}`));
+      const rows = Y.rows.length > 1 ? Y.rows.map((r) => [r.label, money(r.sales), S.labor ? pill(r.laborPct, r.goal) : '']) : [];
+      if (S.labor) rows.push(['Labor', Y.labor ? money(Y.labor.dollars) : '—', Y.labor ? pill(Y.labor.pct, Y.labor.goal) : '']);
+      if (rows.length) left.push(rowsTable(rows));
     }
-    if (S.cost) rows.push(row(side === 'kitchen' ? 'Food cost' : 'Liquor cost', '—', 'no inventory count yet'));
-    if (S.labor) rows.push(Y.labor ? row(`${side === 'kitchen' ? 'Kitchen' : 'Bar'} labor`, pct(Y.labor.pct), `${money(Y.labor.dollars)}${Y.labor.lastWeekPct != null ? ` · last ${weekdayShort(model.yday)} ${pct(Y.labor.lastWeekPct)}` : ''}`) : row('Labor', '—', 'no punches for yesterday'));
-    if (S.drawers && side === 'bar') {
-      const D = Y.drawers;
-      rows.push(D ? row('Drawers', D.short.length ? `${D.short.length} short` : 'All even', `${D.list.map((d) => `${esc(d.name)} ${d.variance >= 0 ? '+' : '−'}$${Math.abs(d.variance).toFixed(2)}`).join(' · ')}${D.deposit != null ? ` · deposit ${money(D.deposit)} logged` : ' · no deposit logged'}`) : row('Drawers', '—', 'no cash-out counts yesterday'));
-    }
-    if (S.clock) {
-      const C = Y.clock;
-      rows.push(C.flags.length ? row('Clock', `${C.flags.length} flag${C.flags.length === 1 ? '' : 's'}`, C.flags.map((f) => esc(f.text)).join(' · ')) : row('Clock', C.hasPunches ? 'Clean' : '—', C.hasPunches ? (C.hasSchedule ? 'no late or missed punches' : 'no schedule to compare against') : 'no punches for yesterday'));
-    }
-    if (rows.length) h.push(block(H3(`Yesterday${model.sides.length > 1 ? `, ${sideLabel(side)}` : ''}`, fmtDate(model.yday)) + `<table style="border-collapse:collapse;width:100%;font-size:15px;">${rows.join('')}</table>`));
-
-    const todayRows = [];
-    if (S.projected) {
-      todayRows.push(T.projected ? row(`Projected ${side === 'kitchen' ? 'food' : 'bar'} sales`, money(T.projected.total), `4-wk ${weekdayShort(model.today)} avg${model.games.length ? `, ${model.games.length} game${model.games.length === 1 ? '' : 's'} tonight` : ''}`) : row('Projected sales', '—', 'no history for this weekday yet'));
-      if (T.projected && T.projected.day != null) { todayRows.push(row(`Day, open to ${hourLabel(model.cutoff)}`, money(T.projected.day), '', true)); todayRows.push(row(`Night, ${hourLabel(model.cutoff)} to close`, money(T.projected.night), '', true)); }
-    }
-    let shiftsHtml = '';
-    if (S.shifts) shiftsHtml = T.shifts.length ? `<table style="border-collapse:collapse;font-size:15px;margin-top:8px;">${T.shifts.map((s) => `<tr><td style="padding:2px 12px 2px 0;font-weight:bold;white-space:nowrap;">${fmtHm(s.start)} – ${fmtHm(s.end)}</td><td style="padding:2px 0;">${esc(s.name)}${s.position ? `, ${esc(s.position.toLowerCase())}` : ''}</td></tr>`).join('')}</table>` : `<div style="color:#5c6577;margin-top:6px;">No ${sideLabel(side)} shifts on the schedule for today.</div>`;
-    if (todayRows.length || shiftsHtml) h.push(block(H3(`Today${model.sides.length > 1 ? `, ${sideLabel(side)}` : ''}`, fmtDate(model.today)) + (todayRows.length ? `<table style="border-collapse:collapse;width:100%;font-size:15px;">${todayRows.join('')}</table>` : '') + shiftsHtml));
   }
+  const right = [];
+  if (S.projected) {
+    right.push(LBL('Today · forecast', C.blue));
+    if (!F.ready) right.push(BIG('—', C.blue) + `<div style="font-size:12.5px;color:${C.muted};">${esc(F.why)}</div>`);
+    else {
+      right.push(BIG(`~${money(F.total)}`, C.blue));
+      const rows = F.rows.length > 1 ? F.rows.map((r) => [r.label, `~${money(r.fc)}`, S.shifts ? hrs(r.hours) : '']) : [];
+      if (S.shifts) rows.push(['Labor', F.hours != null ? `${Math.round(F.hours)} hrs` : '—', F.hours != null ? 'sched' : '']);
+      if (rows.length) right.push(rowsTable(rows));
+    }
+  } else if (S.shifts) right.push(LBL('Today', C.blue) + rowsTable([['Scheduled', F.hours != null ? `${Math.round(F.hours)} hrs` : '—', '']]));
+  const head = `<div style="font-size:17px;font-weight:800;margin:0 0 10px;">${CHIP(b.code, b.chip)}&nbsp; ${esc(b.name)}${b.sides.length === 1 ? ` <span style="font-size:13px;font-weight:600;color:${C.muted};">${b.sides[0]}</span>` : ''}</div>`;
+  let body;
+  if (left.length && right.length) body = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td width="50%" valign="top" style="padding:4px 8px 0 0;">${left.join('')}</td><td width="50%" valign="top" style="background:${C.fcBg};border-radius:10px;padding:8px 8px 2px;">${right.join('')}</td></tr></table>`;
+  else body = (left.join('') || '') + (right.length ? `<div style="background:${C.fcBg};border-radius:10px;padding:8px 10px 2px;">${right.join('')}</div>` : '');
+  return card(b.strip, head + body);
+}
 
-  if (S.games) h.push(block(H3('Big games tonight') + (model.games.length ? ul(model.games.map((g) => `<b>${esc(g.time)}</b> ${esc(g.name)}${g.network ? `, ${esc(g.network)}` : ''}${g.channel ? ` · ch ${esc(g.channel)}` : ''}`)) : '<div style="color:#5c6577;">No My Teams games today.</div>')));
+function gamesCard(M, base) {
+  const rows = [];
+  const ev = (tm, html) => `<tr><td valign="top" width="74" style="padding:7px 8px 7px 0;border-top:1px solid ${C.line};color:${C.blue};font-weight:700;font-size:13.5px;white-space:nowrap;">${tm}</td><td style="padding:7px 0;border-top:1px solid ${C.line};font-size:14px;">${html}</td></tr>`;
+  const all = [
+    ...M.holidays.map((h) => ({ k: -2, html: ev('All day', `<b>${esc(h)}</b>`) })),
+    ...M.games.list.map((g) => ({ k: dayMinutes(g.time), html: ev(esc(g.time), `${g.ours ? `<b>${esc(g.text)}</b> <span style="font-size:11px;font-weight:700;color:#b4231b;background:#fde2e0;border-radius:999px;padding:1px 7px;">ours</span>` : esc(g.text)}${g.net ? ` <span style="color:${C.muted};">· ${esc(g.net)}</span>` : ''}`) })),
+    ...M.events.map((e) => ({ k: dayMinutes(e.time), html: ev(esc(e.time || 'Today'), `${M.multi ? `${CHIP(e.code, '#18202e', true)} ` : ''}${esc(e.name)}`) })),
+  ].sort((a, b) => a.k - b.k);
+  for (const x of all) rows.push(x.html);
+  const foot = [];
+  if (M.games.more) foot.push(`${M.games.more} more game${M.games.more === 1 ? '' : 's'} on the <a href="${base}/scheduling.html" style="color:${C.blue};font-weight:600;text-decoration:none;">schedule</a>`);
+  if (M.busiest.length) foot.push(`Busiest: ${M.busiest.map(esc).join(' · ')}`);
+  const table = rows.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">${rows.join('').replace('border-top:1px solid ' + C.line + ';', '').replace('border-top:1px solid ' + C.line + ';', '')}</table>` : `<div style="font-size:14px;color:${C.muted};">No games or events on the list today.</div>`;
+  return card('#2563eb', SEC("Today's games &amp; events") + table + (foot.length ? `<div style="font-size:12.5px;color:${C.muted};margin-top:6px;">${foot.join('<br>')}</div>` : ''));
+}
 
-  if (S.timeline && model.by.kitchen && model.by.kitchen.timeline) h.push(block(H3("Today's projected sales vs schedule", 'games, $ per hour, who is on') + `<img src="${base}/s/${token}/c/timeline.png" alt="Projected food sales per hour with games and kitchen shifts" style="width:100%;max-width:640px;display:block;">`));
+function equipCard(M, base) {
+  const dot = (lv) => `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${lv === 'red' ? C.red : lv === 'grn' ? '#16a34a' : C.amb};"></span>`;
+  const items = M.items.length ? M.items : [{ level: 'grn', title: 'Nothing down, nothing waiting', sub: '', href: '/monitoring.html' }];
+  const rows = items.map((it, i) => {
+    const bt = i ? `border-top:1px solid ${C.line};` : '';
+    const a = (inner, extra) => `<a href="${base}${it.href}" style="color:${C.ink};text-decoration:none;display:block;${extra || ''}">${inner}</a>`;
+    return `<tr><td valign="top" width="18" style="padding:12px 0 9px;${bt}">${dot(it.level)}</td><td style="padding:9px 6px 9px 0;${bt}font-size:14px;">${a(`<b>${esc(it.title)}</b>${it.sub ? `<span style="display:block;color:${C.muted};font-size:12.5px;margin-top:1px;">${esc(it.sub)}</span>` : ''}`)}</td><td width="12" align="right" style="padding:9px 0;${bt}color:#9aa3b2;font-size:16px;">${a('›')}</td></tr>`;
+  });
+  const foot = [];
+  if (M.back.length) foot.push(`Back overnight: ${M.back.map(esc).join(', ')}.`);
+  if (M.coolersOk) foot.push(`Coolers: all ${M.coolersOk} in range the last 24 hours.`);
+  return card('#dc2626', SEC('Equipment &amp; service') + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">${rows.join('')}</table>` + (foot.length ? `<div style="font-size:12.5px;color:${C.muted};margin-top:6px;">${foot.join('<br>')}</div>` : ''));
+}
 
-  for (const side of model.sides) {
-    const C = model.by[side].coolers;
-    if (!S.coolers) continue;
-    if (!C) { h.push(block(H3(`${side === 'kitchen' ? 'Kitchen' : 'Bar'} coolers`) + '<div style="color:#5c6577;">No cooler sensors assigned to this area yet.</div>')); continue; }
-    const legend = C.series.map((s, k) => `<span style="margin-right:14px;"><span style="display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px;background:${PALETTE[k % PALETTE.length]};"></span>${esc(s.name)}</span>`).join('') + `<span><span style="display:inline-block;width:18px;border-top:2px dashed #c0392b;vertical-align:middle;margin-right:6px;"></span>limit</span>`;
-    const overLine = C.over.length ? `<div style="color:#c0392b;font-size:13px;margin-top:4px;">${C.over.map((o) => `${esc(o.name)} was over ${o.limit}°F ${o.from} to ${o.to} (peak ${o.peak}°F)`).join(' · ')}</div>` : `<div style="color:#1f8a4c;font-size:13px;margin-top:4px;">All ${C.total} in range the whole 24 hours.</div>`;
-    h.push(block(H3(`${side === 'kitchen' ? 'Kitchen' : 'Bar'} coolers, last 24 hours`, '°F, hourly') + `<img src="${base}/s/${token}/c/coolers-${side}.png" alt="Hourly cooler temperatures" style="width:100%;max-width:640px;display:block;"><div style="font-size:13px;color:#5c6577;margin-top:6px;">${legend}</div>${overLine}`));
-  }
-
-  if (S.systems && model.systems) {
-    const Sy = model.systems; const rows = [];
-    const ok = (t) => `<span style="color:#1f8a4c;">${t}</span>`; const bad = (t) => `<span style="color:#c0392b;">${t}</span>`;
-    if (model.sides.includes('bar')) rows.push(Sy.internet ? row('Internet', Sy.internet.up ? ok('Up') : bad('Down'), `${Sy.internet.outages.length ? `down ${Sy.internet.outages.reduce((a, o) => a + o.minutes, 0)} min overnight` : 'no outages overnight'}${Sy.internet.latencyMs != null ? ` · ${Sy.internet.latencyMs} ms` : ''}${Sy.internet.down ? ` · ${Math.round(Sy.internet.down)} / ${Math.round(Sy.internet.upMbps || 0)} Mbps` : ''}${Sy.internet.stale ? ' · last check over 15 min ago' : ''}`) : row('Internet', '—', 'not monitored at this bar yet'));
-    if (model.sides.includes('bar') && Sy.receivers) rows.push(row('Receivers', Sy.receivers.up === Sy.receivers.total ? ok(`${Sy.receivers.up} of ${Sy.receivers.total}`) : bad(`${Sy.receivers.up} of ${Sy.receivers.total}`), Sy.receivers.down.length ? `${Sy.receivers.down.map(esc).join(', ')} not answering` : 'all answering'));
-    if (model.sides.includes('bar') && Sy.music) rows.push(row('Sonos/Pandora', Sy.music.up ? ok('Up') : bad('Down'), Sy.music.up ? (Sy.music.message ? esc(Sy.music.message) : '') : `down since ${Sy.music.downSince || 'overnight'}${Sy.music.message ? ` · ${esc(Sy.music.message)}` : ''}`));
-    for (const side of model.sides) { const C = model.by[side].coolers; if (C && side === 'kitchen') rows.push(row('Kitchen coolers', C.inRange === C.total ? ok('In range') : bad(`${C.inRange} of ${C.total} in range`), `${C.total} reporting`)); }
-    if (rows.length) h.push(block(H3('Critical systems', `as of ${fmtTime(model.generatedAt, model.tz)}`) + `<table style="border-collapse:collapse;width:100%;font-size:15px;">${rows.join('')}</table>`));
-  }
-
-  const title = `${esc(model.location)} ${model.sides.length > 1 ? 'bar and kitchen' : sideLabel(model.sides[0])} · ${fmtShort(model.today)}`;
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Morning summary</title></head>
-<body style="margin:0;background:#f3f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1b1f27;line-height:1.45;">
-<div style="max-width:680px;margin:0 auto;background:#ffffff;">
-  <div style="padding:14px 18px;border-bottom:1px solid #e3e6ec;"><div style="font-size:16px;font-weight:bold;">${title}${test ? ' <span style="color:#d97706;font-weight:normal;">(test)</span>' : ''}</div><div style="font-size:13px;color:#5c6577;">Bar Ops morning summary for ${esc(model.personName)} · sent ${fmtTime(model.generatedAt, model.tz)}</div></div>
-  <div style="padding:18px;">${h.join('')}</div>
-  <div style="padding:12px 18px;border-top:1px solid #e3e6ec;font-size:12px;color:#5c6577;">Bar Ops sends this at the time you picked. Change it under Systems Monitoring → My alert settings. <a href="${base}/" style="color:#2458c7;">Open Bar Ops</a></div>
-</div></body></html>`;
+function renderHtml(M, { base, token, test }) {
+  const S = M.sections; const parts = [];
+  for (const b of M.bars) if (S.sales || S.projected || S.shifts) parts.push(barCard(b, S));
+  if (S.games) parts.push(gamesCard(M, base));
+  parts.push(equipCard(M, base));
+  const where = M.bars.map((b) => b.name).join(' & ');
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"><title>Morning summary</title></head>
+<body style="margin:0;padding:0;background:${C.bg};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${C.ink};line-height:1.35;font-variant-numeric:tabular-nums;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${C.bg};"><tr><td align="center" style="padding:14px 10px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;text-align:left;">
+<tr><td style="background:#24345a;background-image:linear-gradient(135deg,#1e2a44,#2b3d66);border-radius:16px;padding:16px 16px 14px;color:#ffffff;"><div style="font-size:21px;font-weight:800;color:#ffffff;">${fmtDate(M.today)}${test ? ' <span style="font-size:13px;font-weight:600;color:#ffd38a;">test</span>' : ''}</div><div style="font-size:13px;color:#c7d2ea;margin-top:2px;">Morning summary · ${esc(where)} · ${clock12(`${partsIn(new Date(M.generatedAt), M.tz).hour}:${partsIn(new Date(M.generatedAt), M.tz).minute}`)}</div></td></tr>
+<tr><td height="12" style="font-size:0;line-height:0;">&nbsp;</td></tr>
+${parts.join('\n')}
+<tr><td align="center" style="font-size:12px;color:#8a93a3;padding-top:2px;">▲▼ vs the same day last week · forecast is a guess that gets better with time<br><a href="${base}/" style="color:${C.blue};font-weight:600;text-decoration:none;">Open Bar Ops</a></td></tr>
+</table></td></tr></table></body></html>`;
 }
 
 // ---------------------------------------------------------------- text
-function renderText(model, { base, token }) {
-  const N = model.needs; const L = [];
-  const side = model.sides.length > 1 ? 'bar+kitchen' : model.sides[0];
-  L.push(`Bar Ops ${model.location} ${side}, ${fmtShort(model.today)}`);
-  L.push(`Full summary: ${base}/s/${token}`);
-  const needs = [];
-  if (N.calls && N.calls.length) needs.push(`Svc calls ${N.calls.length}: ${N.calls.slice(0, 3).map((c) => `${c.what} ${c.ageDays}d`).join(', ')}.`);
-  if (N.applicants && N.applicants.length) needs.push(`Applicants ${N.applicants.length}: ${N.applicants.slice(0, 3).map((a) => `${shortName(a.name)}${a.position ? ' ' + a.position.toLowerCase() : ''} ${a.waiting.replace(/ days?/, 'd').replace(/ hr/, 'h').replace(' ', '')}`).join(', ')}.`);
-  const alerts = [];
-  for (const d of N.drawerShort || []) alerts.push(`${d.name} short $${Math.abs(d.variance).toFixed(2)}`);
-  for (const o of N.internetDown || []) alerts.push(o.to ? `Internet down ${o.from}-${o.to}` : `Internet down since ${o.from}`);
-  if (alerts.length) needs.push(`Alerts: ${alerts.join('. ')}.`);
-  if (needs.length) { L.push('NEEDS YOU'); L.push(...needs); }
-  for (const s of model.sides) {
-    const Y = model.by[s].yesterday; const T = model.by[s].today; const S = model.sections; const parts = [];
-    if (S.sales && Y.sales) parts.push(`${money(Y.sales.total)}${Y.sales.lastWeek ? ` (${Math.round((Y.sales.total - Y.sales.lastWeek) / Y.sales.lastWeek * 100) >= 0 ? '+' : ''}${Math.round((Y.sales.total - Y.sales.lastWeek) / Y.sales.lastWeek * 100)}%)` : ''}${Y.sales.day != null ? ` day ${money(Y.sales.day)} / night ${money(Y.sales.night)}` : ''}`);
-    if (S.labor && Y.labor && Y.labor.pct != null) parts.push(`labor ${pct(Y.labor.pct)}`);
-    if (S.clock && Y.clock.flags.length) parts.push(Y.clock.flags.map((f) => f.text).join('; '));
-    if (parts.length) L.push(`Yest${model.sides.length > 1 ? ' ' + s : ''}: ${parts.join('. ')}.`);
-    const tp = [];
-    if (S.projected && T.projected) tp.push(`proj ${money(T.projected.total)}${T.projected.day != null ? ` (day ${money(T.projected.day)} / night ${money(T.projected.night)})` : ''}`);
-    if (S.shifts && T.shifts.length) tp.push(T.shifts.map((x) => `${fmtHm(x.start)} ${shortName(x.name)}`).join(' · '));
-    if (tp.length) L.push(`Today${model.sides.length > 1 ? ' ' + s : ''}: ${tp.join('. ')}.`);
+function renderText(M, { base, token }) {
+  const S = M.sections; const L = [];
+  L.push(`Bar Ops ${fmtShort(M.today)}`);
+  for (const b of M.bars) {
+    const Y = b.yest; const F = b.fc; const parts = [];
+    if (S.sales && Y.total != null) {
+      const d = Y.lastWeek ? Math.round((Y.total - Y.lastWeek) / Y.lastWeek * 100) : null;
+      let s = `yest ${money(Y.total)}${d != null ? ` (${d >= 0 ? '+' : ''}${d}%)` : ''}`;
+      if (Y.rows.length > 1) s += ` K ${money(Y.rows.find((r) => r.side === 'kitchen').sales)} B ${money(Y.rows.find((r) => r.side === 'bar').sales)}`;
+      if (S.labor && Y.labor && Y.labor.pct != null) s += `, labor ${Math.round(Y.labor.pct)}%`;
+      parts.push(s);
+    }
+    if (S.projected && F.ready) parts.push(`today ~${money(F.total)}${S.shifts && F.hours != null ? `, ${Math.round(F.hours)} hrs sched` : ''}`);
+    if (parts.length) L.push(`${b.code}: ${parts.join('. ')}.`);
   }
-  if (model.sections.games && model.games.length) L.push(model.games.map((g) => `${g.name} ${g.time}${g.network ? ' ' + g.network : ''}`).join(', '));
+  if (S.games) {
+    const g = [...M.holidays, ...M.games.list.filter((x) => x.ours).map((x) => `${x.text} ${x.time}`), ...M.events.map((e) => `${M.multi ? e.code + ' ' : ''}${e.name}${e.time ? ' ' + e.time : ''}`)];
+    if (g.length) L.push(g.join('; '));
+  }
+  if (M.items.length) L.push(M.items.map((i) => i.title).join('. ') + '.');
+  else L.push('Nothing down, nothing waiting.');
+  L.push(`Full summary: ${base}/s/${token}`);
   L.push('Reply STOP to opt out');
   return L.join('\n');
 }
@@ -566,7 +751,8 @@ async function locationsFor(svc, person) {
   return rows;
 }
 
-// Build, store and send one person's summaries (one per bar they work at).
+// Build, store and send one person's summary: one email for every bar
+// they work at.
 async function sendFor(personId, { test = false, now = new Date() } = {}) {
   return withServiceClient(async (svc) => {
     const { rows: pr } = await svc.query('SELECT * FROM people WHERE id = $1', [personId]);
@@ -577,28 +763,25 @@ async function sendFor(personId, { test = false, now = new Date() } = {}) {
     const sides = await sidesFor(svc, person);
     const locs = await locationsFor(svc, person);
     if (!locs.length) return { ok: false, error: 'No bar on this person\'s account.' };
-    const base = baseUrl(); const results = [];
-    for (const location of locs) {
-      const model = await buildModel(svc, { person, location, sides, settings, now });
-      const token = crypto.randomBytes(18).toString('base64url');
-      const html = renderHtml(model, { base, token, test });
-      const text = renderText(model, { base, token });
-      const channel = settings.channel;
-      let emailStatus = null; let smsStatus = null;
-      if (channel === 'email' || channel === 'both') {
-        if (!person.email) emailStatus = 'no email on file';
-        else { const r = await sendHtmlEmail(svc, personId, person.email, `${test ? '[Test] ' : ''}${location.name} ${sides.length > 1 ? 'bar and kitchen' : sides[0]} summary, ${fmtShort(model.today)}`, html, text); emailStatus = r.ok ? (r.simulated ? 'simulated' : 'sent') : `failed: ${r.error}`; }
-      }
-      if (channel === 'sms' || channel === 'both') {
-        if (!person.phone) smsStatus = 'no phone on file';
-        else { const r = await notify.sendSms(svc, 'morning_summary', personId, person.phone, text); smsStatus = r.ok ? (r.simulated ? 'simulated' : 'sent') : `failed: ${r.error}`; }
-      }
-      await svc.query(
-        `INSERT INTO morning_summary_sends (person_id, location_id, for_date, send_date, token, is_test, html, text_body, model, email_status, sms_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)`,
-        [personId, location.id, model.yday, model.today, token, test, html, text, JSON.stringify(model), emailStatus, smsStatus]);
-      results.push({ location: location.name, token, emailStatus, smsStatus, url: `${base}/s/${token}` });
+    const base = baseUrl();
+    const model = await buildSummary(svc, { person, locs, sides, settings, now });
+    const token = crypto.randomBytes(18).toString('base64url');
+    const html = renderHtml(model, { base, token, test });
+    const text = renderText(model, { base, token });
+    const channel = settings.channel;
+    let emailStatus = null; let smsStatus = null;
+    if (channel === 'email' || channel === 'both') {
+      if (!person.email) emailStatus = 'no email on file';
+      else { const r = await sendHtmlEmail(svc, personId, person.email, `${test ? '[Test] ' : ''}Morning summary${locs.length === 1 ? `, ${locs[0].name}` : ''} · ${fmtShort(model.today)}`, html, text); emailStatus = r.ok ? (r.simulated ? 'simulated' : 'sent') : `failed: ${r.error}`; }
     }
-    return { ok: true, results };
+    if (channel === 'sms' || channel === 'both') {
+      if (!person.phone) smsStatus = 'no phone on file';
+      else { const r = await notify.sendSms(svc, 'morning_summary', personId, person.phone, text); smsStatus = r.ok ? (r.simulated ? 'simulated' : 'sent') : `failed: ${r.error}`; }
+    }
+    await svc.query(
+      `INSERT INTO morning_summary_sends (person_id, location_id, for_date, send_date, token, is_test, html, text_body, model, email_status, sms_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)`,
+      [personId, locs.length === 1 ? locs[0].id : null, model.yday, model.today, token, test, html, text, JSON.stringify(model), emailStatus, smsStatus]);
+    return { ok: true, results: [{ location: locs.map((l) => l.name).join(' & '), token, emailStatus, smsStatus, url: `${base}/s/${token}` }] };
   });
 }
 
@@ -705,9 +888,9 @@ async function preview(personId, { now = new Date() } = {}) {
   return withServiceClient(async (svc) => {
     const { rows: pr } = await svc.query('SELECT * FROM people WHERE id = $1', [personId]); const person = pr[0]; if (!person) return null;
     const settings = await settingsFor(personId); const sides = await sidesFor(svc, person); const locs = await locationsFor(svc, person); if (!locs.length) return null;
-    const model = await buildModel(svc, { person, location: locs[0], sides, settings, now });
+    const model = await buildSummary(svc, { person, locs, sides, settings, now });
     return { html: renderHtml(model, { base: baseUrl(), token: 'preview', test: true }), text: renderText(model, { base: baseUrl(), token: 'preview' }), model };
   });
 }
 
-module.exports = { SECTIONS, settingsFor, setSettings, sendFor, runDue, viewPage, pinPost, chartRoute, preview, buildModel, renderHtml, renderText, chartSvg, chartPng };
+module.exports = { SECTIONS, settingsFor, setSettings, sendFor, runDue, viewPage, pinPost, chartRoute, preview, buildModel, buildSummary, renderHtml, renderText, chartSvg, chartPng, _test: { pickGames, shortLoc } };
