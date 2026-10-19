@@ -427,8 +427,10 @@ async function loadSchedGrid() {
   el.innerHTML = '<p class="muted">Loading…</p>';
   try {
     WEEK_SHIFTS = await api(`/api/scheduling/week?scheduleIds=${SELECTED_SCHEDULE_IDS.join(',')}&weekStart=${WEEK_START}`);
-    // The forecast is extra: the grid shows without it.
-    try { WEEK_FC = await api(`/api/scheduling/forecast?scheduleIds=${SELECTED_SCHEDULE_IDS.join(',')}&weekStart=${WEEK_START}`); } catch (e) { WEEK_FC = []; }
+    // The forecast is extra: the grid shows without it. Hidden for now
+    // (Scotto, 2026-10-19: "we'll add it later"); flip SHOW_FORECAST back on.
+    WEEK_FC = [];
+    if (SHOW_FORECAST) try { WEEK_FC = await api(`/api/scheduling/forecast?scheduleIds=${SELECTED_SCHEDULE_IDS.join(',')}&weekStart=${WEEK_START}`); } catch (e) { WEEK_FC = []; }
     const summary = await api('/api/scheduling/my-drafts/summary');
     DRAFT_COUNT = summary.count;
     renderDraftBanner();
@@ -490,7 +492,11 @@ async function copyEmployeeWeek(personId, btn) {
 // One line per bar and side among the selected schedules ("~$3,600
 // kitchen"; with more than one bar, "T2 ~$3,600 kitchen"). Today and
 // later only. Tapping a line, or Games/Events, opens the day's popup.
+// The forecast and Games/Events link under each date (patch_078), off for now.
+const SHOW_FORECAST = false;
+
 function fcHeadHtml(date) {
+  if (!SHOW_FORECAST) return '';
   if (!WEEK_FC.length || date < todayISO()) return '';
   const multi = new Set(WEEK_FC.map(g => g.locationId)).size > 1;
   const lines = WEEK_FC.map((g, i) => (g.days && g.days[date] != null
