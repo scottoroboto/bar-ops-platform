@@ -489,13 +489,18 @@ async function barBlock(svc, { person, location, sides: sidesIn, settings, now }
   let fc = null;
   try { fc = await forecast.forLocation(location.id, { now }); } catch (err) { console.error('[summary] forecast failed', location.name, err.message); }
   const fd = fc && fc.ready ? fc.days.find((d) => d.date === m.today) : null;
-  const today = { ready: !!fd, rows: [], total: null, hours: null, why: fd ? null : (fc && fc.reason) || 'no forecast yet' };
+  // The owner's Sales Board override for today wins over the forecast.
+  const ov = await kitchenboard.overridesFor(location.id, m.today, m.today);
+  const today = { ready: false, rows: [], total: null, hours: null, why: (fc && fc.reason) || 'no forecast yet' };
   let hoursAll = 0; let anyShift = false;
   for (const side of sides) {
     const shifts = m.by[side].today.shifts; const h = shiftHours(shifts); if (shifts.length) anyShift = true; hoursAll += h;
-    today.rows.push({ side, label: side === 'kitchen' ? 'Kitchen' : 'Bar', fc: fd ? round100(fd[keyOf(side)].fc) : null, hours: shifts.length ? h : null });
+    const set = ov.get(`${side}|${m.today}`);
+    const amt = set != null ? set : fd ? round100(fd[keyOf(side)].fc) : null;
+    today.rows.push({ side, label: side === 'kitchen' ? 'Kitchen' : 'Bar', fc: amt, set: set != null, hours: shifts.length ? h : null });
   }
-  if (fd) today.total = today.rows.reduce((a, r) => a + (r.fc || 0), 0);
+  today.ready = today.rows.every((r) => r.fc != null);
+  if (today.ready) { today.total = today.rows.reduce((a, r) => a + r.fc, 0); today.allSet = today.rows.every((r) => r.set); }
   today.hours = anyShift ? hoursAll : null;
 
   // ---- games and events (dayDetail: the Scheduling page's popup)
@@ -643,8 +648,8 @@ function barCard(b, S) {
     right.push(LBL('Today · forecast', C.blue));
     if (!F.ready) right.push(BIG('—', C.blue) + `<div style="font-size:12.5px;color:${C.muted};">${esc(F.why)}</div>`);
     else {
-      right.push(BIG(`~${money(F.total)}`, C.blue));
-      const rows = F.rows.length > 1 ? F.rows.map((r) => [r.label, `~${money(r.fc)}`, S.shifts ? hrs(r.hours) : '']) : [];
+      right.push(BIG(`${F.allSet ? '' : '~'}${money(F.total)}`, C.blue));
+      const rows = F.rows.length > 1 ? F.rows.map((r) => [r.label, `${r.set ? '' : '~'}${money(r.fc)}`, S.shifts ? hrs(r.hours) : '']) : [];
       if (S.shifts) rows.push(['Labor', F.hours != null ? `${Math.round(F.hours)} hrs` : '—', F.hours != null ? 'sched' : '']);
       if (rows.length) right.push(rowsTable(rows));
     }
@@ -716,7 +721,7 @@ function renderText(M, { base, token }) {
       if (S.labor && Y.labor && Y.labor.pct != null) s += `, labor ${Math.round(Y.labor.pct)}%`;
       parts.push(s);
     }
-    if (S.projected && F.ready) parts.push(`today ~${money(F.total)}${S.shifts && F.hours != null ? `, ${Math.round(F.hours)} hrs sched` : ''}`);
+    if (S.projected && F.ready) parts.push(`today ${F.allSet ? '' : '~'}${money(F.total)}${S.shifts && F.hours != null ? `, ${Math.round(F.hours)} hrs sched` : ''}`);
     if (parts.length) L.push(`${b.code}: ${parts.join('. ')}.`);
   }
   if (S.games) {

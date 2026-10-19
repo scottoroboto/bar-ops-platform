@@ -376,14 +376,14 @@ async function employeesReviewCount(person) {
     tiles.push(tileHtml({ icon: ICONS.monitoring, label: 'Coolers', href: '/sensors.html' }));
   }
 
-  // Kitchen board (patch_055/057): the owner gets its settings; a manager
+  // Sales Board (patch_055/057/080): the owner gets its settings; a manager
   // gets the board itself, where the owner has turned that on.
   if (person.role === 'owner') {
-    tiles.push(tileHtml({ icon: ICONS.scheduling, label: 'Kitchen Board', href: '/kitchen-board-settings.html' }));
+    tiles.push(tileHtml({ icon: ICONS.scheduling, label: 'Sales Board', href: '/kitchen-board-settings.html' }));
   } else if (person.role === 'manager') {
     try {
       const kb = await api('/api/kitchen-board/access');
-      if (kb.view && kb.view.length) tiles.push(tileHtml({ icon: ICONS.scheduling, label: 'Kitchen Board', href: `/kitchen-board.html?location_id=${encodeURIComponent(kb.view[0])}` }));
+      if (kb.view && kb.view.length) tiles.push(tileHtml({ icon: ICONS.scheduling, label: 'Sales Board', href: `/kitchen-board.html?location_id=${encodeURIComponent(kb.view[0])}` }));
     } catch (e) { /* no tile */ }
   }
 

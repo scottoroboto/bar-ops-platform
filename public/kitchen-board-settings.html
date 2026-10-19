@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Kitchen Board — Settings — Bar Ops</title>
+<title>Sales Board — Settings — Bar Ops</title>
 <link rel="stylesheet" href="/styles.css">
 <style>
   .kb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
@@ -26,6 +26,25 @@
   .fc-stats div { min-width: 0; } .fc-stats .k { font-size: 12px; color: var(--muted); display: block; }
   .fc-out { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--card-border, #eee); font-size: 13.5px; }
   .fc-out .why { color: var(--muted); font-size: 12.5px; display: block; }
+  .sb-boards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .sb-bd { border: 1px solid var(--card-border); border-radius: 10px; padding: 9px 10px; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; cursor: pointer; background: none; color: var(--text); text-align: left; margin: 0; width: 100%; }
+  .sb-bd.on { border-color: var(--accent); background: rgba(79,141,253,.12); }
+  .sb-bd small { display: block; font-weight: 500; color: var(--muted); font-size: 12px; }
+  .sb-loc { font-size: 11px; font-weight: 800; color: #fff; border-radius: 5px; padding: 1px 6px; flex-shrink: 0; }
+  .sb-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .sb-row input[type=number] { width: 90px; margin: 0; }
+  .sb-row label { margin: 0; font-weight: 600; font-size: 14px; }
+  .sb-days { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .sb-days th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 4px 6px 6px 0; }
+  .sb-days td { padding: 7px 6px 7px 0; border-top: 1px solid var(--card-border, #eee); vertical-align: middle; }
+  .sb-days td.n, .sb-days th.n { text-align: right; white-space: nowrap; }
+  .sb-days input { width: 92px; margin: 0; padding: 6px 8px; font-size: 14px; text-align: right; }
+  .sb-days .why { display: block; color: var(--muted); font-size: 12px; }
+  .sb-set { color: #f2a516; font-weight: 700; }
+  .sb-set small { display: block; color: var(--muted); font-weight: 500; font-size: 11.5px; }
+  .sb-x { background: none; border: 0; color: var(--muted); font-size: 13px; padding: 0 0 0 6px; margin: 0; cursor: pointer; }
+  .sb-hint { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
+  details > summary { cursor: pointer; font-weight: 600; font-size: 14px; margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -33,64 +52,40 @@
 <div class="wrap" id="app">
   <div id="msgBox"></div>
   <div class="card">
-    <h1>Kitchen Board</h1>
-    <p class="muted">Goals and setup for the kitchen TV. Scores and hours come from SpotOn through the bar's Venue Control box every 5 minutes; scheduled shifts come from the bar's "Kitchen" schedule in Scheduling.</p>
-    <label for="kbLocation">Bar</label>
-    <select id="kbLocation" onchange="loadAll()"></select>
-    <p style="margin-top:10px;"><a class="button" id="openBoard" href="#" style="display:inline-block; text-decoration:none;">Open the board</a></p>
+    <h1>Sales Board</h1>
+    <p class="muted" style="margin:0;">One board per bar and side. Each has its own TV link, labor goal and daily targets. Sales and hours come from SpotOn through the bar's Venue Control box every 5 minutes.</p>
+    <div class="sb-boards" id="boards"></div>
+    <p style="margin:12px 0 0;"><a class="button" id="openBoard" href="#" style="display:inline-block; text-decoration:none;">Open the board</a></p>
   </div>
 
-  <div class="card" id="goalsCard">
-    <h2>Goals</h2>
-    <div class="kb-grid">
-      <div><label>Backup food target, Sun–Thu ($)</label><input id="foodGoalWeekday" type="number" min="0" step="10"></div>
-      <div><label>Backup food target, Fri–Sat ($)</label><input id="foodGoalWeekend" type="number" min="0" step="10"></div>
-      <p class="muted" style="grid-column:1/-1; font-size:12.5px; margin:6px 0 0;">The board's food target is the day's sales forecast. These two are used only on a day the forecast can't be built (not enough history yet).</p>
-      <div><label>Kitchen labor % goal, Sun–Thu</label><input id="laborGoalWeekday" type="number" min="1" max="100" step="1"></div>
-      <div><label>Kitchen labor % goal, Fri–Sat</label><input id="laborGoalWeekend" type="number" min="1" max="100" step="1"></div>
-      <div><label>Kitchen labor % goal, whole week</label><input id="laborGoalWeek" type="number" min="1" max="100" step="1"></div>
-      <div><label>Bar labor % goal</label><input id="barLaborGoal" type="number" min="1" max="100" step="1"></div>
-      <div><label>7 PM slow-night line ($, weeknights)</label><input id="slowNightLine" type="number" min="0" step="10"></div>
-      <div><label>Seconds per screen</label><input id="rotateSeconds" type="number" min="10" max="600" step="5"></div>
-      <div><label>Business day starts at (hour, 24h)</label><input id="dayStartHour" type="number" min="0" max="12" step="1"></div>
+  <div class="card">
+    <h2 id="laborTitle">Labor</h2>
+    <div class="sb-row"><label for="laborGoal">Labor % goal</label><input id="laborGoal" type="number" min="1" max="100" step="1"><span class="muted" id="laborOf">of sales</span></div>
+    <div id="kitchenOnly">
+      <label style="display:block; margin-top:12px; font-weight:600; font-size:14px;">SpotOn jobs that count as kitchen (comma-separated)</label>
+      <input id="kitchenRoles" placeholder="Cook, Kitchen Manager">
+      <div class="sb-row"><label for="slowNightLine">7 PM slow-night line, weeknights ($)</label><input id="slowNightLine" type="number" min="0" step="10"></div>
     </div>
-    <label style="display:block; margin-top:12px; font-weight:600; font-size:14px;">SpotOn job names that count as kitchen (comma-separated)</label>
-    <input id="kitchenRoles" placeholder="Cook, Kitchen Manager">
-    <label style="display:block; margin-top:12px; font-weight:600; font-size:14px;">SpotOn sales lines that count as food (comma-separated)</label>
-    <input id="foodKeys" placeholder="Food">
-    <label class="toggle-row" style="gap:8px; margin-top:12px;"><span class="label">Show names on the kitchen TV (off = roles only)</span>
+    <p class="sb-hint" id="barRolesNote" style="display:none;">Every SpotOn job not listed as kitchen counts as bar. The kitchen list is on the kitchen board.</p>
+    <button class="primary" onclick="saveLabor()">Save</button>
+  </div>
+
+  <div class="card">
+    <h2 id="targetTitle">Daily target</h2>
+    <p class="sb-hint" style="margin:0 0 8px;">The target is the forecast. Type an amount to override a day (a private party, a closed day) and press Enter. The board, Scheduling and your morning summary all use it.</p>
+    <div id="targets"><p class="muted">Loading…</p></div>
+    <p class="sb-hint"><a href="#" id="moreDays" onclick="toggleDays(); return false;">Next 2 weeks ›</a> · The forecast is a guess that gets better with time.</p>
+  </div>
+
+  <div class="card">
+    <h2 id="tvTitle">TV</h2>
+    <div class="sb-row"><label for="rotateSeconds">Seconds per screen</label><input id="rotateSeconds" type="number" min="10" max="600" step="5"></div>
+    <label class="toggle-row" style="gap:8px; margin-top:12px;"><span class="label">Show names on this bar's TVs (off = roles only)</span>
       <span class="switch"><input type="checkbox" id="showNames"><span class="slider"></span></span>
     </label>
-    <label class="toggle-row" style="gap:8px; margin-top:8px;"><span class="label">Managers here can open the board from their Dashboard (never these settings)</span>
-      <span class="switch"><input type="checkbox" id="managersCanView"><span class="slider"></span></span>
-    </label>
-    <button class="primary" onclick="saveSettings()">Save</button>
-  </div>
-
-  <div class="card" id="forecastCard">
-    <h2>Sales forecast</h2>
-    <p class="muted">What each day usually does, learned from this bar's SpotOn history: day of the week, time of year, holidays, and Alabama, FSU and Saints game days. The kitchen TV shows today's number and where today is heading.</p>
-    <div id="fcBody"><p class="muted">Loading…</p></div>
-    <h3 style="margin-top:18px;">Days left out</h3>
-    <p class="muted" style="font-size:13px;">Days that would throw the forecast off: closed, a storm, a pull that broke, a one-off surge. The app finds the obvious ones; you can leave out any other day, or put one back.</p>
-    <div id="fcOut"></div>
-    <div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; align-items:center;">
-      <input id="fcOutDate" type="date" style="margin:0; width:auto;">
-      <input id="fcOutReason" placeholder="Why, e.g. Private party" maxlength="120" style="flex:1; min-width:160px; margin:0;">
-      <button class="small secondary" style="margin:0;" onclick="leaveOutDay()">Leave this day out</button>
-    </div>
-    <h3 style="margin-top:18px;">History</h3>
-    <p class="muted" style="font-size:13px;" id="fcHistoryNote"></p>
-    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-      <label for="fcHistoryFrom" style="margin:0; font-size:14px;">Read SpotOn history back to</label>
-      <input id="fcHistoryFrom" type="date" style="margin:0; width:auto;">
-      <button class="small ghost" style="margin:0;" onclick="saveHistoryFrom()">Save</button>
-    </div>
-  </div>
-
-  <div class="card" id="devicesCard" style="display:none;">
-    <h2>Kitchen TV links</h2>
-    <p class="muted">A link that opens the board on a TV's computer with no sign-in. It only shows this bar's kitchen board. Remove a link and that screen stops working within a minute.</p>
+    <button class="primary" onclick="saveTv()">Save</button>
+    <h3 style="margin-top:18px;">TV links</h3>
+    <p class="muted" style="font-size:13px;">A link that opens this board on a TV's computer with no sign-in. Remove a link and that screen stops working within a minute.</p>
     <div id="deviceList"></div>
     <div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;">
       <input id="deviceName" placeholder="Where it is, e.g. Kitchen TV" maxlength="60" style="flex:1; min-width:160px; margin:0;">
@@ -100,9 +95,41 @@
   </div>
 
   <div class="card">
-    <h2>Recent pulls from SpotOn</h2>
-    <p class="muted">Every 5 minutes from 7:30am to 1:30am. Three failures in a row text the owner.</p>
-    <table class="kb-pulls" id="pulls"></table>
+    <h2 id="locTitle">Both boards</h2>
+    <div class="sb-row"><label for="dayStartHour">Business day starts at (hour, 24h)</label><input id="dayStartHour" type="number" min="0" max="12" step="1"></div>
+    <label style="display:block; margin-top:12px; font-weight:600; font-size:14px;">SpotOn sales lines that count as food (comma-separated)</label>
+    <input id="foodKeys" placeholder="Food">
+    <label class="toggle-row" style="gap:8px; margin-top:12px;"><span class="label">Managers here can open the boards from their Dashboard (never these settings)</span>
+      <span class="switch"><input type="checkbox" id="managersCanView"><span class="slider"></span></span>
+    </label>
+    <button class="primary" onclick="saveLocation()">Save</button>
+
+    <details id="forecastCard">
+      <summary>Forecast history and left-out days</summary>
+      <p class="muted">What each day usually does, learned from this bar's SpotOn history: day of the week, time of year, holidays, and Alabama, FSU and Saints game days.</p>
+      <div id="fcBody"><p class="muted">Loading…</p></div>
+      <h3 style="margin-top:18px;">Days left out</h3>
+      <p class="muted" style="font-size:13px;">Days that would throw the forecast off: closed, a storm, a pull that broke, a one-off surge. The app finds the obvious ones; you can leave out any other day, or put one back.</p>
+      <div id="fcOut"></div>
+      <div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+        <input id="fcOutDate" type="date" style="margin:0; width:auto;">
+        <input id="fcOutReason" placeholder="Why, e.g. Private party" maxlength="120" style="flex:1; min-width:160px; margin:0;">
+        <button class="small secondary" style="margin:0;" onclick="leaveOutDay()">Leave this day out</button>
+      </div>
+      <h3 style="margin-top:18px;">History</h3>
+      <p class="muted" style="font-size:13px;" id="fcHistoryNote"></p>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <label for="fcHistoryFrom" style="margin:0; font-size:14px;">Read SpotOn history back to</label>
+        <input id="fcHistoryFrom" type="date" style="margin:0; width:auto;">
+        <button class="small ghost" style="margin:0;" onclick="saveHistoryFrom()">Save</button>
+      </div>
+    </details>
+
+    <details>
+      <summary>Recent pulls from SpotOn</summary>
+      <p class="muted">Every 5 minutes from 7:30am to 1:30am. Three failures in a row text the owner.</p>
+      <table class="kb-pulls" id="pulls"></table>
+    </details>
   </div>
 </div>
 

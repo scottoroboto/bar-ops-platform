@@ -8,6 +8,7 @@
 // the forecast's calendar) plus what an owner or manager adds (bar_events).
 const { withServiceClient } = require('./db');
 const forecast = require('./forecast');
+const kitchenboard = require('./kitchenboard');
 
 const TZ = process.env.BUSINESS_TIMEZONE || 'America/Chicago';
 const DAYS_AHEAD = 21;
@@ -122,12 +123,16 @@ async function weekForecast(scheduleIds, weekStart) {
     let fc = null;
     try { fc = await forecast.forLocation(g.locationId); } catch (err) { console.error('[slate] forecast failed', err.message); }
     const days = {};
-    if (fc && fc.ready) {
-      for (let i = 0; i < 7; i += 1) {
-        const d = ymdAdd(weekStart, i);
-        const f = fc.days.find((x) => x.date === d);
-        if (f) days[d] = Math.round(f[g.side].fc / 100) * 100;
-      }
+    // The owner's Sales Board override for a day wins over the forecast.
+    const ov = await kitchenboard.overridesFor(g.locationId, weekStart, ymdAdd(weekStart, 6));
+    const today = fc && fc.today;
+    for (let i = 0; i < 7; i += 1) {
+      const d = ymdAdd(weekStart, i);
+      if (today && d < today) continue;
+      const set = ov.get(`${g.side === 'food' ? 'kitchen' : 'bar'}|${d}`);
+      const f = fc && fc.ready ? fc.days.find((x) => x.date === d) : null;
+      if (set != null) days[d] = set;
+      else if (f) days[d] = Math.round(f[g.side].fc / 100) * 100;
     }
     out.push({ ...g, today: fc && fc.today, days });
   }
@@ -140,7 +145,9 @@ async function dayDetail(locationId, side, date) {
   try { fc = await forecast.forLocation(locationId); } catch (err) { console.error('[slate] forecast failed', err.message); }
   const day = fc && fc.ready ? fc.days.find((x) => x.date === date) : null;
   const curve = fc && fc.curves ? fc.curves[side === 'food' ? 'food' : 'bar'][dow(date)] : null;
-  const hours = day ? forecast.hourlyFor(day[side === 'food' ? 'food' : 'bar'].fc, curve, fc.dayStartHour) : null;
+  const set = (await kitchenboard.overridesFor(locationId, date, date)).get(`${side === 'food' ? 'kitchen' : 'bar'}|${date}`);
+  const amount = set != null ? set : day ? day[side === 'food' ? 'food' : 'bar'].fc : null;
+  const hours = amount != null && curve ? forecast.hourlyFor(amount, curve, fc.dayStartHour) : null;
   return withServiceClient(async (client) => {
     const { rows: loc } = await client.query('SELECT name FROM locations WHERE id = $1', [locationId]);
     const { rows: games } = await client.query(
@@ -161,7 +168,8 @@ async function dayDetail(locationId, side, date) {
     }
     return {
       date, locationName: loc[0] ? loc[0].name : '', side,
-      forecast: day ? Math.round(day[side === 'food' ? 'food' : 'bar'].fc / 100) * 100 : null,
+      forecast: set != null ? set : day ? Math.round(day[side === 'food' ? 'food' : 'bar'].fc / 100) * 100 : null,
+      forecastSet: set != null,
       busiest, hours,
       games: games.map((g) => ({
         league: label[g.league] || g.league, time: g.time_tbd || !g.kickoff ? 'TBD' : localHM(g.kickoff), hour: g.kickoff ? Number(new Date(g.kickoff).toLocaleString('en-US', { timeZone: TZ, hour: 'numeric', hour12: false })) % 24 : null,

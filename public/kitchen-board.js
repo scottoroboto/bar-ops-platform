@@ -1,12 +1,18 @@
-// Kitchen board (patch_055). Opened by the kitchen TV with ?device=TOKEN,
-// or by the signed-in owner (location picker + Settings) or a manager
-// where the owner has turned it on for them (patch_057).
+// Sales Board (patch_055, per side since patch_080). Opened by a TV with
+// ?device=TOKEN (the link names its bar and side), or by the signed-in
+// owner (bar and side pickers + Settings) or a manager where the owner
+// has turned it on for them (patch_057). Kitchen or bar comes back in
+// VIEW.side; the field names say food for both.
 // Flips screen A (scoreboard) and B (hour by hour) on a timer, refreshes
 // the numbers every 60 seconds, shows a stale banner when the newest
 // SpotOn pull is more than 15 minutes old. No labor dollars anywhere.
 const qs = new URLSearchParams(location.search);
 const DEVICE = qs.get('device');
 let LOCATION_ID = qs.get('location_id') || null;
+let SIDE = qs.get('side') === 'bar' ? 'bar' : 'kitchen';
+const isBar = () => VIEW && VIEW.side === 'bar';
+const salesWord = () => (isBar() ? 'Bar' : 'Food');
+const staffWord = () => (isBar() ? 'staff' : 'cooks');
 let VIEW = null;
 let SCREEN = 'A';
 let flipTimer = null;
@@ -21,10 +27,11 @@ const signed = (p) => (p == null ? '' : `${p >= 0 ? '+' : '−'}${Math.abs(p)}%`
 // does, where today is heading, and why (games, holidays).
 function forecastHtml(f) {
   const x = f.forecast;
+  const set = x && x.override ? `<div class="fcline">Target set by the owner${x.override.note ? `: <b>${esc(x.override.note)}</b>` : ''}${x.forecast != null ? ` · forecast was ${money(x.forecast)}` : ''}</div>` : '';
   if (!x) return '<div class="sub" style="font-size:19px;margin-top:8px">White line = where we should be by now</div>';
   const pace = x.projected != null ? `<div class="fcline">On pace for <b class="${x.projected >= x.fc ? 'blue' : 'amber'}">${money(x.projected)}</b></div>` : '';
   const why = x.drivers.length ? `<div class="fcwhy">${x.drivers.map((d) => `<span>${esc(d.label)}${d.pct != null && d.pct !== 0 ? ` <b>${signed(d.pct)}</b>` : ''}</span>`).join('')}</div>` : '';
-  return `${pace}${why}<div class="sub" style="font-size:17px;margin-top:6px">White line = a normal ${esc(f.weekday || 'day')} by this time</div>`;
+ return `${set}${pace}${why}<div class="sub" style="font-size:17px;margin-top:6px">White line = a normal ${esc(f.weekday || 'day')} by this time</div>`;
 }
 
 function fit() {
@@ -37,7 +44,7 @@ async function load() {
   try {
     let path = '/api/kitchen-board/view';
     if (DEVICE) path += `?device=${encodeURIComponent(DEVICE)}`;
-    else if (LOCATION_ID) path += `?location_id=${encodeURIComponent(LOCATION_ID)}`;
+    else if (LOCATION_ID) path += `?location_id=${encodeURIComponent(LOCATION_ID)}&side=${SIDE}`;
     const headers = {};
     if (!DEVICE && typeof getToken === 'function' && getToken()) headers.Authorization = `Bearer ${getToken()}`;
     const res = await fetch(path, { headers });
@@ -68,9 +75,11 @@ function head(title) {
   const c = clockNow();
   const mins = VIEW.dataAsOf ? Math.round((Date.now() - new Date(VIEW.dataAsOf)) / 60000) : null;
   const stale = VIEW.stale ? `<div class="stale">⚠ ${esc(asOf())}${mins != null ? ` — SpotOn hasn't updated in ${mins} minutes.` : ' — the box hasn\'t sent anything.'} Numbers below may be behind.${VIEW.lastError ? ` (${esc(VIEW.lastError).slice(0, 80)})` : ''}</div>` : '';
-  return `<div class="top"><div class="brand">${esc(VIEW.location)} · Kitchen <span class="tag">${title}</span></div>
+  return `<div class="top"><div class="brand">${esc(VIEW.location)} · ${esc(VIEW.sideLabel || 'Kitchen')} <span class="tag">${title}</span></div>
     <div style="display:flex;gap:28px;align-items:center"><span class="asof${VIEW.stale ? ' late' : ''}">${esc(asOf())}</span><div class="clock"><div class="t">${esc(c.t)}</div><div class="d">${esc(c.d)}</div></div></div></div>${stale}`;
 }
+
+function targetWord(f) { return f.targetKind === 'override' ? 'target' : f.targetKind === 'forecast' ? 'forecast' : 'goal'; }
 
 function tilesHtml(compact) {
   const f = VIEW.food; const l = VIEW.labor; const h = VIEW.hours;
@@ -80,30 +89,30 @@ function tilesHtml(compact) {
   const over = h.over > 0.05 ? `<span class="amber">+${h.over.toFixed(1)} hrs</span>` : `${h.over.toFixed(1)} hrs`;
   if (compact) {
     return `<div class="strip">
-      <div class="tile"><div class="lbl">Food sales</div><div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> ${f.targetKind === 'forecast' ? 'forecast' : 'goal'}</div></div>
+      <div class="tile"><div class="lbl">${salesWord()} sales</div><div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> ${targetWord(f)}</div></div>
       <div class="tile"><div class="lbl">Labor % at close</div>${laborBadge}<div class="big ${l.pctProjected == null ? 'dim' : l.hit ? 'blue' : 'amber'}">${l.pctProjected == null ? '—' : l.pctProjected + '%'}</div><div class="sub">goal <b>${l.goal}%</b></div></div>
       <div class="tile"><div class="lbl">Hours</div>${hoursBadge}<div class="big ${h.over > 0.05 ? 'amber' : ''}">${h.actual.toFixed(1)}</div><div class="sub">scheduled <b>${h.scheduledSoFar.toFixed(1)}</b> · ${over}</div></div>
-      <div class="tile"><div class="lbl">Food cost</div><div class="big dim">—</div><div class="sub">Not set up yet</div></div>
+      <div class="tile"><div class="lbl">${isBar() ? 'Liquor' : 'Food'} cost</div><div class="big dim">—</div><div class="sub">Not set up yet</div></div>
     </div>`;
   }
   return `<div class="tiles">
-    <div class="tile"><div class="lbl">Food sales</div>${foodBadge}
-      <div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> ${f.targetKind === 'forecast' ? 'forecast' : 'goal'}${f.pct != null ? ` · ${f.pct}%` : ''}</div>
+    <div class="tile"><div class="lbl">${salesWord()} sales</div>${foodBadge}
+      <div class="big">${money(f.soFar)}</div><div class="sub">of <b>${money(f.goal)}</b> ${targetWord(f)}${f.pct != null ? ` · ${f.pct}%` : ''}</div>
       <div class="bar pace" style="--pace:${Math.round(Math.min(1, f.paceFrac) * 100)}%"><i style="width:${Math.min(100, f.pct || 0)}%"></i></div>
       ${forecastHtml(f)}</div>
     <div class="tile"><div class="lbl">Labor % at close</div>${laborBadge}
       <div class="big ${l.pctProjected == null ? 'dim' : l.hit ? 'blue' : 'amber'}">${l.pctProjected == null ? '—' : l.pctProjected + '%'}</div><div class="sub">goal <b>${l.goal}%</b> or less · projected</div></div>
     <div class="tile"><div class="lbl">Hours so far</div>${hoursBadge}
       <div class="big ${h.over > 0.05 ? 'amber' : ''}">${h.actual.toFixed(1)}</div><div class="sub">scheduled <b>${h.scheduledSoFar.toFixed(1)}</b> · ${over}</div></div>
-    <div class="tile"><div class="lbl">Food cost</div><span class="badge na">SOON</span><div class="big dim">—</div><div class="sub">Not set up yet</div></div>
+    <div class="tile"><div class="lbl">${isBar() ? 'Liquor' : 'Food'} cost</div><span class="badge na">SOON</span><div class="big dim">—</div><div class="sub">Not set up yet</div></div>
   </div>`;
 }
 
 function screenA() {
-  const on = VIEW.onClock.length ? VIEW.onClock.map((p) => `<tr><td class="n">${esc(p.name || 'Kitchen')}</td><td class="s">${esc(p.role || '')}</td><td class="t">${esc(p.inAt)}${p.offAt ? ` → ${esc(p.offAt)}` : ''}</td></tr>`).join('') : '<tr><td class="empty">Nobody clocked in</td></tr>';
-  const off = VIEW.offPlan.length ? VIEW.offPlan.map((p) => `<tr><td class="n">${esc(p.name || 'Kitchen')}</td><td class="s">${esc(p.note)}</td><td class="t late">+${p.extraHours.toFixed(1)} h</td></tr>`).join('') : '';
+  const on = VIEW.onClock.length ? VIEW.onClock.map((p) => `<tr><td class="n">${esc(p.name || VIEW.sideLabel || 'Kitchen')}</td><td class="s">${esc(p.role || '')}</td><td class="t">${esc(p.inAt)}${p.offAt ? ` → ${esc(p.offAt)}` : ''}</td></tr>`).join('') : '<tr><td class="empty">Nobody clocked in</td></tr>';
+  const off = VIEW.offPlan.length ? VIEW.offPlan.map((p) => `<tr><td class="n">${esc(p.name || VIEW.sideLabel || 'Kitchen')}</td><td class="s">${esc(p.note)}</td><td class="t late">+${p.extraHours.toFixed(1)} h</td></tr>`).join('') : '';
   const notIn = VIEW.scheduledNotIn.map((p) => `<tr><td class="n">${esc(p.name || 'Scheduled')}</td><td class="s">${esc(p.slot)} · due ${esc(p.startAt)}</td><td class="t late">not in</td></tr>`).join('');
-  const offBody = off || notIn ? off + notIn : `<tr><td class="empty">${VIEW.scheduleKnown ? 'Everyone on plan' : 'No kitchen schedule published for today'}</td></tr>`;
+  const offBody = off || notIn ? off + notIn : `<tr><td class="empty">${VIEW.scheduleKnown ? 'Everyone on plan' : `No ${isBar() ? 'bar' : 'kitchen'} schedule published for today`}</td></tr>`;
   const sc = VIEW.sevenCheck;
   const check = sc ? `<div class="check"><span class="k">7 PM CHECK</span><span>${money(sc.foodAt7)} by 7:00 PM — ${sc.keep ? 'above' : 'below'} the ${money(sc.line)} slow-night line.</span><span class="${sc.keep ? 'blue' : 'amber'}">${sc.keep ? 'KEEP THE SCHEDULE' : 'CUT NIGHT B EARLY'}</span></div>` : '';
   const week = VIEW.week.map((d) => `<div class="day ${d.state}"><div class="w">${d.day}</div><div class="p">${d.pct == null ? '—' : d.pct + '%'}</div><div class="r">${d.state === 'hit' ? 'HIT' : d.state === 'missed' ? 'MISSED' : d.state === 'live' ? '● LIVE' : d.state === 'future' && d.fc ? `FC ${kmoney(d.fc)}` : '&nbsp;'}</div></div>`).join('');
@@ -112,7 +121,7 @@ function screenA() {
   const perTile = (label, p) => {
     if (!p || p.pct == null) return `<div class="per"><div class="w">${label}</div><div class="p dim">—</div><div class="r">&nbsp;</div></div>`;
     const hit = p.pct <= goalW;
-    return `<div class="per ${hit ? 'hit' : 'missed'}"><div class="w">${label}</div><div class="p">${p.pct}%</div><div class="r">${hit ? 'HIT' : 'OVER'} · goal ${goalW}% · ${money(p.food)} food</div></div>`;
+    return `<div class="per ${hit ? 'hit' : 'missed'}"><div class="w">${label}</div><div class="p">${p.pct}%</div><div class="r">${hit ? 'HIT' : 'OVER'} · goal ${goalW}% · ${money(p.food)} ${salesWord().toLowerCase()}</div></div>`;
   };
   const periods = `<div class="periods">${perTile('WEEK TO DATE', per.week)}${perTile('MONTH TO DATE', per.month)}${perTile(`YEAR TO DATE${per.year && per.year.since && per.year.since.slice(5) !== '01-01' ? ' · since ' + new Date(per.year.since + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}`, per.year)}</div>`;
   return head('Scoreboard') + tilesHtml(false) + `
@@ -129,12 +138,12 @@ function screenB() {
   const n = hs.length;
   return head('Hour by hour') + tilesHtml(true) + `
     <div class="chart" style="--n:${n}">
-      <div class="cols" style="--n:${n}"><div class="rl">Food $</div>${bars}</div>
+      <div class="cols" style="--n:${n}"><div class="rl">${salesWord()} $</div>${bars}</div>
       <div class="cols" style="--n:${n};margin-top:6px"><div></div>${hs.map((h) => `<div class="hr ${h.current ? 'now' : ''}">${h.label}</div>`).join('')}</div>
-      <div class="cols" style="--n:${n};margin-top:14px"><div class="rl">Planned cooks</div>${hs.map((h) => `<div class="cell plan ${h.food == null && !h.current ? 'dim' : ''}">${h.planned}</div>`).join('')}</div>
-      <div class="cols" style="--n:${n}"><div class="rl">Actual cooks</div>${hs.map((h) => (h.actual == null ? '<div class="cell dim">·</div>' : `<div class="cell ${h.over ? 'over' : ''}">${h.actual}</div>`)).join('')}</div>
+      <div class="cols" style="--n:${n};margin-top:14px"><div class="rl">Planned ${staffWord()}</div>${hs.map((h) => `<div class="cell plan ${h.food == null && !h.current ? 'dim' : ''}">${h.planned}</div>`).join('')}</div>
+      <div class="cols" style="--n:${n}"><div class="rl">Actual ${staffWord()}</div>${hs.map((h) => (h.actual == null ? '<div class="cell dim">·</div>' : `<div class="cell ${h.over ? 'over' : ''}">${h.actual}</div>`)).join('')}</div>
     </div>
-    <div class="why">${VIEW.overNote ? `Where the hours went over: <b>${esc(VIEW.overNote)}</b>` : VIEW.scheduleKnown ? 'Cooks on vs planned, by hour.' : 'Publish today\'s kitchen schedule in Bar Ops to see planned cooks.'}</div>
+    <div class="why">${VIEW.overNote ? `Where the hours went over: <b>${esc(VIEW.overNote)}</b>` : VIEW.scheduleKnown ? `${isBar() ? 'Staff' : 'Cooks'} on vs planned, by hour.` : `Publish today's ${isBar() ? 'bar' : 'kitchen'} schedule in Bar Ops to see planned ${staffWord()}.`}</div>
     <div class="dots"><span></span><span class="on"></span></div>`;
 }
 
@@ -143,8 +152,9 @@ function toolbar() {
   const person = typeof getPerson === 'function' ? getPerson() : null;
   const locs = person ? (JSON.parse(localStorage.getItem('bp_locations') || '[]')) : [];
   const opts = locs.map((l) => `<option value="${esc(l.id)}" ${String(l.id) === String(LOCATION_ID) ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
-  const settings = person && person.role === 'owner' ? `<a href="/kitchen-board-settings.html${LOCATION_ID ? `?location_id=${encodeURIComponent(LOCATION_ID)}` : ''}">Settings</a>` : '';
-  return `<div class="toolbar">${opts ? `<select onchange="switchLocation(this.value)">${opts}</select>` : ''}${settings}<a href="/dashboard.html">Dashboard</a><button onclick="flip()">Flip</button></div>`;
+  const settings = person && person.role === 'owner' ? `<a href="/kitchen-board-settings.html${LOCATION_ID ? `?location_id=${encodeURIComponent(LOCATION_ID)}&side=${SIDE}` : ''}">Settings</a>` : '';
+  const sides = `<select onchange="switchSide(this.value)"><option value="kitchen" ${SIDE === 'kitchen' ? 'selected' : ''}>Kitchen</option><option value="bar" ${SIDE === 'bar' ? 'selected' : ''}>Bar</option></select>`;
+  return `<div class="toolbar">${opts ? `<select onchange="switchLocation(this.value)">${opts}</select>` : ''}${sides}${settings}<a href="/dashboard.html">Dashboard</a><button onclick="flip()">Flip</button></div>`;
 }
 
 function render() {
@@ -154,7 +164,8 @@ function render() {
   if (!flipTimer) flipTimer = setTimeout(() => { flipTimer = null; flip(); }, Math.max(10, VIEW.rotateSeconds || 45) * 1000);
 }
 function flip() { SCREEN = SCREEN === 'A' ? 'B' : 'A'; if (flipTimer) { clearTimeout(flipTimer); flipTimer = null; } render(); }
-function switchLocation(id) { LOCATION_ID = id; history.replaceState(null, '', `?location_id=${encodeURIComponent(id)}`); VIEW = null; load(); }
+function switchLocation(id) { LOCATION_ID = id; history.replaceState(null, '', `?location_id=${encodeURIComponent(id)}&side=${SIDE}`); VIEW = null; load(); }
+function switchSide(side) { SIDE = side === 'bar' ? 'bar' : 'kitchen'; switchLocation(LOCATION_ID); }
 
 (async () => {
   if (!DEVICE && typeof getToken === 'function' && !getToken()) { location.href = '/index.html'; return; }

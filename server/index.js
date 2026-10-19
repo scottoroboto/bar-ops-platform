@@ -5380,21 +5380,21 @@ if (req.person.role !== 'manager') return res.json({ view: [], settings: false }
 res.json({ view: await kitchenboard.managerViewLocations(locationIdsOf(req.person)), settings: false });
 });
 
-// The board itself: ?device=TOKEN (the kitchen TV) or a signed-in owner/manager.
+// The board itself: ?device=TOKEN (a TV link, which names its bar and
+// side) or a signed-in owner/manager with ?location_id=&side=kitchen|bar.
 app.get('/api/kitchen-board/view', async (req, res) => {
 try {
-let locationId = null;
-if (req.query.device) locationId = await kitchenboard.locationForDevice(String(req.query.device));
-if (!locationId) {
+const board = req.query.device ? await kitchenboard.boardForDevice(String(req.query.device)) : null;
+if (!board) {
 const header = req.headers.authorization || '';
-if (!header.startsWith('Bearer ')) return res.status(401).json({ error: req.query.device ? 'This kitchen TV link has been removed.' : 'Not signed in.' });
+if (!header.startsWith('Bearer ')) return res.status(401).json({ error: req.query.device ? 'This TV link has been removed.' : 'Not signed in.' });
 return auth.requireSession('light')(req, res, async () => {
 const loc = pickLocation(req.person, req.query.location_id);
-if (!loc || !(await kbCanView(req.person, loc))) return res.status(403).json({ error: req.person.role === 'manager' ? 'The kitchen board is not turned on for managers here.' : 'Owner only.' });
-res.json(await kitchenboard.view(loc));
+if (!loc || !(await kbCanView(req.person, loc))) return res.status(403).json({ error: req.person.role === 'manager' ? 'The sales board is not turned on for managers here.' : 'Owner only.' });
+res.json(await kitchenboard.view(loc, { side: req.query.side === 'bar' ? 'bar' : 'kitchen' }));
 });
 }
-res.json(await kitchenboard.view(locationId));
+res.json(await kitchenboard.view(board.locationId, { side: board.side }));
 } catch (err) {
 res.status(400).json({ error: err.message });
 }
@@ -5449,9 +5449,29 @@ try {
 // Device links: owner only (shown once, like bar iPads).
 app.post('/api/kitchen-board/devices/:locationId', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
-const d = await kitchenboard.createDevice(req.params.locationId, (req.body || {}).name, req.person.id);
+const d = await kitchenboard.createDevice(req.params.locationId, (req.body || {}).name, req.person.id, (req.body || {}).side);
 const base = `${req.protocol}://${req.get('host')}`;
 res.json({ ok: true, device: { id: d.id, name: d.name, created_at: d.created_at }, url: `${base}/kitchen-board.html?device=${encodeURIComponent(d.token)}` });
+});
+// Daily targets (patch_080): the forecast for the next two weeks and the
+// owner's override per day, for one board.
+app.get('/api/kitchen-board/targets/:locationId', auth.requireSession('light'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try {
+  res.json(await kitchenboard.targets(req.params.locationId, req.query.side, { days: Math.min(21, Math.max(1, Number(req.query.days) || 14)) }));
+} catch (err) {
+  console.error('[sales board] targets failed:', err);
+  res.status(500).json({ error: 'Could not load the targets.' });
+}
+});
+app.post('/api/kitchen-board/targets/:locationId', auth.requireSession('full'), async (req, res) => {
+if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+try {
+  const b = req.body || {};
+  res.json(await kitchenboard.setTarget(req.params.locationId, b.side, b.date, b.amount, b.note, req.person.id));
+} catch (err) {
+  res.status(err.status || 400).json({ error: err.message });
+}
 });
 app.post('/api/kitchen-board/devices/:id/remove', auth.requireSession('full'), async (req, res) => {
 if (req.person.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });

@@ -254,11 +254,13 @@ async function ingest(locationId, payload) {
 
 // ---- the board -----------------------------------------------------------
 
-async function kitchenShifts(client, locationId, ymd, tz) {
+// A side's shifts: schedules named "Kitchen" for the kitchen, every other
+// schedule for the bar (the same rule as Scheduling's forecast).
+async function kitchenShifts(client, locationId, ymd, tz, side = 'kitchen') {
   const { rows } = await client.query(
     `SELECT s.id, s.shift_date, s.start_time, s.end_time, p.name AS person_name, pos.name AS position_name
        FROM shifts s JOIN schedules sc ON sc.id = s.schedule_id JOIN people p ON p.id = s.person_id JOIN positions pos ON pos.id = s.position_id
-      WHERE sc.location_id = $1 AND sc.name ILIKE '%kitchen%' AND s.shift_date = $2 AND s.status = 'scheduled'`,
+      WHERE sc.location_id = $1 AND sc.name ${side === 'bar' ? 'NOT ILIKE' : 'ILIKE'} '%kitchen%' AND s.shift_date = $2 AND s.status = 'scheduled'`,
     [locationId, ymd],
   );
   return rows.map((r) => {
@@ -280,7 +282,22 @@ function fmtTime(date, tz) {
   return date ? new Date(date).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }) : null;
 }
 
-async function view(locationId, { now = new Date() } = {}) {
+// The owner's target for a day and side (patch_080), or null: the forecast.
+async function targetFor(client, locationId, side, ymd) {
+  const { rows } = await client.query(
+    `SELECT t.amount, t.note, p.name AS set_by_name FROM sales_targets t LEFT JOIN people p ON p.id = t.set_by
+      WHERE t.location_id = $1 AND t.side = $2 AND t.business_date = $3`, [locationId, side, ymd]);
+  return rows[0] ? { amount: Math.round(num(rows[0].amount)), note: rows[0].note || null, by: rows[0].set_by_name || null } : null;
+}
+
+// One Sales Board (side 'kitchen' or 'bar'). Kitchen: food sales, kitchen
+// jobs, the "Kitchen" schedule. Bar: everything else (total minus food,
+// every other job and schedule). The field names say food for both; the
+// returned side says which.
+async function view(locationId, { now = new Date(), side = 'kitchen' } = {}) {
+  const bar = side === 'bar';
+  const key = bar ? 'bar' : 'food';
+  const BH = bar ? { from: BOARD_HOURS.from, to: 27 } : BOARD_HOURS; // the bar runs to 3am
   // The sales forecast (server/forecast.js, cached); the board works without it.
   let fc = null;
   try { fc = await forecast.forLocation(locationId, { now }); } catch (err) { console.error('[kitchen] forecast failed:', err.message); }
@@ -291,22 +308,28 @@ async function view(locationId, { now = new Date() } = {}) {
     const bdate = businessDate(now, tz, s.day_start_hour);
     const dayStart = dayStartUtc(bdate, tz, s.day_start_hour);
     const weekend = isWeekend(bdate);
-    const foodGoal = num(weekend ? s.food_goal_weekend : s.food_goal_weekday);
-    const laborGoal = num(weekend ? s.labor_goal_weekend : s.labor_goal_weekday);
+    const foodGoal = bar ? 0 : num(weekend ? s.food_goal_weekend : s.food_goal_weekday);
+    const laborGoal = bar ? num(s.bar_labor_goal) : num(weekend ? s.labor_goal_weekend : s.labor_goal_weekday);
     // The settings list, plus any SpotOn job title that says kitchen
     // (Oct 2026: titles got renamed in the POS and the assistant kitchen
     // manager vanished from the board). Same rule in the SQL below.
     const roles = s.kitchen_roles.map((r) => r.toLowerCase());
     const isKitchen = (role) => roles.includes(String(role || '').toLowerCase()) || KITCHEN_ROLE_RE.test(String(role || ''));
+    const isMine = (role) => isKitchen(role) === !bar;
+    const roleCond = bar ? 'NOT (lower(role_name) = ANY($4) OR role_name ~* $5)' : '(lower(role_name) = ANY($4) OR role_name ~* $5)';
 
     const punches = (await client.query('SELECT * FROM kb_punches WHERE location_id = $1 AND business_date = $2 ORDER BY clock_in', [locationId, bdate])).rows
-      .filter((r) => isKitchen(r.role_name))
+      .filter((r) => isMine(r.role_name))
       .map((r) => ({ ...r, clock_in: new Date(r.clock_in), clock_out: r.clock_out ? new Date(r.clock_out) : null, key: nameKey(r.full_name) }));
     const snaps = (await client.query('SELECT at, food_net, total_net FROM kb_sales_snapshots WHERE location_id = $1 AND business_date = $2 ORDER BY at', [locationId, bdate])).rows
-      .map((r) => ({ at: new Date(r.at), food: r.food_net == null ? null : num(r.food_net), total: r.total_net == null ? null : num(r.total_net) }));
+      .map((r) => {
+        const food = r.food_net == null ? null : num(r.food_net); const total = r.total_net == null ? null : num(r.total_net);
+        return { at: new Date(r.at), food: bar ? (total == null ? null : Math.max(0, total - (food || 0))) : food, total };
+      });
     const lastPull = (await client.query('SELECT at, ok, error FROM kb_pulls WHERE location_id = $1 ORDER BY at DESC LIMIT 1', [locationId])).rows[0] || null;
     const lastOk = (await client.query('SELECT at FROM kb_pulls WHERE location_id = $1 AND ok ORDER BY at DESC LIMIT 1', [locationId])).rows[0] || null;
-    const shifts = await kitchenShifts(client, locationId, bdate, tz);
+    const shifts = await kitchenShifts(client, locationId, bdate, tz, side);
+    const override = await targetFor(client, locationId, side, bdate);
 
     const latestSnap = snaps.length ? snaps[snaps.length - 1] : null;
     const foodSoFar = latestSnap && latestSnap.food != null ? latestSnap.food : null;
@@ -320,7 +343,7 @@ async function view(locationId, { now = new Date() } = {}) {
     let rate = actualHours >= 0.5 ? laborSoFar / actualHours : null;
     if (rate == null) {
       const r = (await client.query(
-        `SELECT SUM(labor_total) AS l, SUM(reg_hours + ot_hours) AS h FROM kb_punches WHERE location_id = $1 AND business_date >= $2 AND business_date < $3 AND (lower(role_name) = ANY($4) OR role_name ~* $5)`,
+        `SELECT SUM(labor_total) AS l, SUM(reg_hours + ot_hours) AS h FROM kb_punches WHERE location_id = $1 AND business_date >= $2 AND business_date < $3 AND ${roleCond}`,
         [locationId, ymdAddDays(bdate, -14), bdate, roles, KITCHEN_ROLE_SQL],
       )).rows[0];
       rate = r && num(r.h) > 0 ? num(r.l) / num(r.h) : null;
@@ -330,19 +353,24 @@ async function view(locationId, { now = new Date() } = {}) {
     // Where sales "should" be by now: the share of a normal day's food
     // sales by this time (the forecast's pace curve, same weekday, last 8
     // weeks); without one, the goal spread evenly over 9am-close.
-    const openStart = zonedToUtc(`${bdate}T${String(BOARD_HOURS.from).padStart(2, '0')}:00:00`, tz);
-    const closeAt = new Date(openStart.getTime() + (BOARD_HOURS.to - BOARD_HOURS.from) * 3600000);
+    const openStart = zonedToUtc(`${bdate}T${String(BH.from).padStart(2, '0')}:00:00`, tz);
+    const closeAt = new Date(openStart.getTime() + (BH.to - BH.from) * 3600000);
     const fcToday = fc && fc.ready && fc.today === bdate ? fc.days.find((d) => d.date === bdate) : null;
-    const curve = fcToday && fc.curve ? fc.curve : null;
+    const curve = fc && fc.ready && fc.curves ? fc.curves[key][weekdayOf(bdate)] : null;
     const shareAt = (t) => (curve ? forecast.curveAt(curve, (t - dayStart) / 60000) : null);
     const curveFrac = shareAt(now);
     const paceFrac = curveFrac != null ? curveFrac : Math.min(1, Math.max(0, (now - openStart) / (closeAt - openStart)));
-    const foodForecast = fcToday ? {
-      fc: fcToday.food.fc, lo: fcToday.food.lo, hi: fcToday.food.hi, bar: fcToday.bar.fc,
-      expectedNow: curveFrac != null ? Math.round(fcToday.food.fc * curveFrac) : null,
+    // The day's amount: the owner's override (Sales Board, 2026-10-19), else
+    // the forecast. It is both the target and what a normal rest of the
+    // day adds up to.
+    const dayAmount = override ? override.amount : fcToday ? fcToday[key].fc : null;
+    const foodForecast = dayAmount != null ? {
+      fc: dayAmount, lo: fcToday && !override ? fcToday[key].lo : null, hi: fcToday && !override ? fcToday[key].hi : null,
+      forecast: fcToday ? fcToday[key].fc : null, override,
+      expectedNow: curveFrac != null ? Math.round(dayAmount * curveFrac) : null,
       // Sales so far plus the part of a normal day still to come.
-      projected: foodSoFar != null && curveFrac != null ? Math.round(foodSoFar + fcToday.food.fc * (1 - curveFrac)) : null,
-      drivers: fcToday.drivers.map((d) => ({ label: d.label, pct: d.food })),
+      projected: foodSoFar != null && curveFrac != null ? Math.round(foodSoFar + dayAmount * (1 - curveFrac)) : null,
+      drivers: fcToday ? fcToday.drivers.map((d) => ({ label: d.label, pct: d[key] })) : [],
     } : null;
     // The day's target (Scotto, 2026-10-17: the second mockup): the
     // forecast when there is one; the weekday/weekend goal from settings
@@ -375,7 +403,7 @@ async function view(locationId, { now = new Date() } = {}) {
     // 7pm check (weeknights).
     const seven = zonedToUtc(`${bdate}T19:00:00`, tz);
     let sevenCheck = null;
-    if (!weekend && now >= seven) {
+    if (!bar && !weekend && now >= seven) {
       const at7 = [...snaps].reverse().find((x) => x.at <= seven && x.food != null);
       if (at7) sevenCheck = { foodAt7: Math.round(at7.food), line: num(s.slow_night_line), keep: at7.food >= num(s.slow_night_line) };
     }
@@ -385,16 +413,16 @@ async function view(locationId, { now = new Date() } = {}) {
     const snapAt = (t) => { const x = [...snaps].reverse().find((q) => q.at <= t && q.food != null); return x ? x.food : null; };
     const remainingHours = Math.max(0, (closeAt - now) / 3600000);
     const perHourExpected = remainingHours > 0 ? Math.max(0, target - (foodSoFar || 0)) / remainingHours : 0;
-    for (let h = BOARD_HOURS.from; h < BOARD_HOURS.to; h += 1) {
-      const start = new Date(openStart.getTime() + (h - BOARD_HOURS.from) * 3600000);
+    for (let h = BH.from; h < BH.to; h += 1) {
+      const start = new Date(openStart.getTime() + (h - BH.from) * 3600000);
       const end = new Date(start.getTime() + 3600000);
       const mid = new Date(start.getTime() + 1800000);
       const past = end <= now; const current = start <= now && now < end;
       const a = snapAt(start); const b = snapAt(current ? now : end);
-      const food = past || current ? (a != null && b != null ? Math.max(0, b - a) : (b != null && h === BOARD_HOURS.from ? b : null)) : null;
+      const food = past || current ? (a != null && b != null ? Math.max(0, b - a) : (b != null && h === BH.from ? b : null)) : null;
       const planned = shifts.filter((sh) => sh.start <= mid && sh.end > mid).length;
       const actual = past || current ? punches.filter((r) => r.clock_in <= mid && (r.clock_out || now) > mid).length : null;
-      const expected = past || current ? null : curve ? Math.round(fcToday.food.fc * Math.max(0, shareAt(end) - shareAt(start))) : Math.round(perHourExpected);
+      const expected = past || current ? null : curve && dayAmount != null ? Math.round(dayAmount * Math.max(0, shareAt(end) - shareAt(start))) : Math.round(perHourExpected);
       hours.push({ hour: h % 24, label: `${((h % 12) || 12)}${h % 24 < 12 ? 'a' : 'p'}`, food: food == null ? null : Math.round(food), expected, planned, actual, current, over: actual != null && actual > planned });
     }
     const overHours = hours.filter((x) => x.over);
@@ -409,23 +437,27 @@ async function view(locationId, { now = new Date() } = {}) {
     const satOffset = (dow + 1) % 7; // days since Saturday
     const weekStart = ymdAddDays(bdate, -satOffset);
     const week = [];
+    const salesExpr = bar ? 'total_net - COALESCE(food_net, 0)' : 'food_net';
+    const salesCol = bar ? 'total_net' : 'food_net';
     const weekRows = (await client.query(
-      `SELECT business_date, SUM(labor_total) AS labor FROM kb_punches WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND (lower(role_name) = ANY($4) OR role_name ~* $5) GROUP BY business_date`,
+      `SELECT business_date, SUM(labor_total) AS labor FROM kb_punches WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND ${roleCond} GROUP BY business_date`,
       [locationId, weekStart, ymdAddDays(weekStart, 6), roles, KITCHEN_ROLE_SQL],
     )).rows;
     const weekFood = (await client.query(
-      'SELECT business_date, food_net FROM sales_daily WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL',
+      `SELECT business_date, ${salesExpr} AS food_net FROM sales_daily WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND ${salesCol} IS NOT NULL`,
       [locationId, weekStart, ymdAddDays(weekStart, 6)],
     )).rows;
+    const weekSet = (await client.query('SELECT business_date, amount FROM sales_targets WHERE location_id = $1 AND side = $2 AND business_date >= $3 AND business_date <= $4',
+      [locationId, side, weekStart, ymdAddDays(weekStart, 6)])).rows;
     for (let i = 0; i < 7; i += 1) {
       const d = ymdAddDays(weekStart, i);
       const labor = num((weekRows.find((r) => toYmd(r.business_date) === d) || {}).labor);
       const foodRow = weekFood.find((r) => toYmd(r.business_date) === d);
       const food = foodRow ? num(foodRow.food_net) : null;
-      const goal = num(isWeekend(d) ? s.labor_goal_weekend : s.labor_goal_weekday);
+      const goal = bar ? num(s.bar_labor_goal) : num(isWeekend(d) ? s.labor_goal_weekend : s.labor_goal_weekday);
       const label = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][weekdayOf(d)];
       if (d === bdate) week.push({ day: label, pct: laborPctProjected, goal, state: 'live' });
-      else if (d > bdate) { const f = fc && fc.ready ? fc.days.find((x) => x.date === d) : null; week.push({ day: label, pct: null, goal, state: 'future', fc: f ? f.food.fc : null }); }
+      else if (d > bdate) { const f = fc && fc.ready ? fc.days.find((x) => x.date === d) : null; const o = weekSet.find((r) => toYmd(r.business_date) === d); week.push({ day: label, pct: null, goal, state: 'future', fc: o ? num(o.amount) : f ? f[key].fc : null }); }
       else week.push({ day: label, pct: food ? Math.round((labor / food) * 100) : null, goal, state: food ? (labor / food * 100 <= goal ? 'hit' : 'missed') : 'nodata' });
     }
 
@@ -433,15 +465,15 @@ async function view(locationId, { now = new Date() } = {}) {
     // sales (sales_daily, kept for good), today's so-far included. Only as
     // far back as the board has history.
     const periods = {};
-    const firstDay = (await client.query('SELECT MIN(business_date) AS d FROM sales_daily WHERE location_id = $1 AND food_net IS NOT NULL', [locationId])).rows[0];
+    const firstDay = (await client.query(`SELECT MIN(business_date) AS d FROM sales_daily WHERE location_id = $1 AND ${salesCol} IS NOT NULL`, [locationId])).rows[0];
     const since = firstDay && firstDay.d ? toYmd(firstDay.d) : bdate;
     for (const [key, from] of [['week', weekStart], ['month', `${bdate.slice(0, 7)}-01`], ['year', `${bdate.slice(0, 4)}-01-01`]]) {
       const start = from > since ? from : since;
       const r = (await client.query(
-        `WITH food AS (SELECT business_date, food_net FROM sales_daily
-                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND food_net IS NOT NULL),
+        `WITH food AS (SELECT business_date, ${salesExpr} AS food_net FROM sales_daily
+                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND ${salesCol} IS NOT NULL),
               labor AS (SELECT business_date, SUM(labor_total) AS labor FROM kb_punches
-                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND (lower(role_name) = ANY($4) OR role_name ~* $5) GROUP BY business_date)
+                        WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3 AND ${roleCond} GROUP BY business_date)
          SELECT COALESCE(SUM(food.food_net), 0) AS food, COALESCE(SUM(labor.labor), 0) AS labor, COUNT(food.business_date) AS days
            FROM food LEFT JOIN labor ON labor.business_date = food.business_date`,
         [locationId, start, bdate, roles, KITCHEN_ROLE_SQL],
@@ -452,13 +484,13 @@ async function view(locationId, { now = new Date() } = {}) {
 
     const lastOkAt = lastOk ? new Date(lastOk.at) : null;
     return {
-      location: loc ? loc.name : '', timezone: tz, businessDate: bdate, now: now.toISOString(),
+      location: loc ? loc.name : '', side, sideLabel: bar ? 'Bar' : 'Kitchen', timezone: tz, businessDate: bdate, now: now.toISOString(),
       dataAsOf: lastOkAt ? lastOkAt.toISOString() : null,
       stale: !lastOkAt || now - lastOkAt > STALE_AFTER_MS,
       lastError: lastPull && !lastPull.ok ? lastPull.error : null,
       rotateSeconds: s.rotate_seconds,
-      food: { soFar: foodSoFar == null ? null : Math.round(foodSoFar), goal: Math.round(target), targetKind: foodForecast ? 'forecast' : 'goal', pct: foodSoFar != null && target > 0 ? Math.round((foodSoFar / target) * 100) : null, paceFrac: Math.round(paceFrac * 100) / 100, onPace: foodSoFar != null && target > 0 ? foodSoFar / target >= paceFrac - 0.05 : null, forecast: foodForecast, weekday: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][weekdayOf(bdate)] },
-      labor: { pctProjected: laborPctProjected, pctSoFar: laborPctSoFar, goal: laborGoal, hit: laborPctProjected == null ? null : laborPctProjected <= laborGoal, weekGoal: num(s.labor_goal_week) },
+      food: { soFar: foodSoFar == null ? null : Math.round(foodSoFar), goal: Math.round(target), targetKind: override ? 'override' : foodForecast ? 'forecast' : 'goal', pct: foodSoFar != null && target > 0 ? Math.round((foodSoFar / target) * 100) : null, paceFrac: Math.round(paceFrac * 100) / 100, onPace: foodSoFar != null && target > 0 ? foodSoFar / target >= paceFrac - 0.05 : null, forecast: foodForecast, weekday: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][weekdayOf(bdate)] },
+      labor: { pctProjected: laborPctProjected, pctSoFar: laborPctSoFar, goal: laborGoal, hit: laborPctProjected == null ? null : laborPctProjected <= laborGoal, weekGoal: bar ? num(s.bar_labor_goal) : num(s.labor_goal_week) },
       hours: { actual: round1(actualHours), scheduledSoFar: round1(schedSoFar), scheduledTotal: round1(schedTotal), over: round1(actualHours - schedSoFar) },
       foodCost: null, // not set up yet (purchases / food inventory): shows "—"
       onClock, offPlan, scheduledNotIn, sevenCheck, hoursByHour: hours, overNote, week, periods,
@@ -470,26 +502,87 @@ async function view(locationId, { now = new Date() } = {}) {
 // ---- device links (the kitchen TV) ------------------------------------------
 function hashToken(t) { return crypto.createHash('sha256').update(t).digest('hex'); }
 
-async function createDevice(locationId, name, personId) {
+async function createDevice(locationId, name, personId, side = 'kitchen') {
   const token = crypto.randomBytes(32).toString('base64url');
+  const sd = side === 'bar' ? 'bar' : 'kitchen';
   const row = await withServiceClient(async (client) => (await client.query(
-    'INSERT INTO kb_devices (location_id, name, token_hash, created_by) VALUES ($1, $2, $3, $4) RETURNING id, name, created_at',
-    [locationId, String(name || 'Kitchen TV').trim().slice(0, 60), hashToken(token), personId || null],
+    'INSERT INTO kb_devices (location_id, name, token_hash, created_by, side) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, created_at, side',
+    [locationId, String(name || (sd === 'bar' ? 'Bar TV' : 'Kitchen TV')).trim().slice(0, 60), hashToken(token), personId || null, sd],
   )).rows[0]);
   return { ...row, token };
 }
 async function listDevices(locationId) {
-  return withServiceClient(async (client) => (await client.query('SELECT id, name, created_at FROM kb_devices WHERE location_id = $1 AND revoked_at IS NULL ORDER BY created_at', [locationId])).rows);
+  return withServiceClient(async (client) => (await client.query('SELECT id, name, created_at, side FROM kb_devices WHERE location_id = $1 AND revoked_at IS NULL ORDER BY created_at', [locationId])).rows);
 }
 async function revokeDevice(id, personId) {
   return withServiceClient(async (client) => (await client.query('UPDATE kb_devices SET revoked_at = now(), revoked_by = $2 WHERE id = $1 AND revoked_at IS NULL RETURNING id', [id, personId || null])).rows[0] || null);
 }
-async function locationForDevice(token) {
+// A TV link opens one board: { locationId, side }, or null once removed.
+async function boardForDevice(token) {
   if (!token) return null;
   return withServiceClient(async (client) => {
-    const { rows } = await client.query('SELECT location_id FROM kb_devices WHERE token_hash = $1 AND revoked_at IS NULL', [hashToken(String(token))]);
-    return rows[0] ? rows[0].location_id : null;
+    const { rows } = await client.query('SELECT location_id, side FROM kb_devices WHERE token_hash = $1 AND revoked_at IS NULL', [hashToken(String(token))]);
+    return rows[0] ? { locationId: rows[0].location_id, side: rows[0].side || 'kitchen' } : null;
   });
+}
+
+// ---- daily targets (patch_080) ---------------------------------------------
+// The next `days` days for one board: the forecast and the owner's
+// override, if any.
+async function targets(locationId, side, { days = 14, now = new Date() } = {}) {
+  const sd = side === 'bar' ? 'bar' : 'kitchen'; const key = sd === 'bar' ? 'bar' : 'food';
+  let fc = null;
+  try { fc = await forecast.forLocation(locationId, { now }); } catch (err) { console.error('[sales board] forecast failed:', err.message); }
+  return withServiceClient(async (client) => {
+    const tz = await siteTz(client, locationId);
+    const s = await settingsFor(client, locationId);
+    const today = businessDate(now, tz, s.day_start_hour);
+    const { rows } = await client.query(
+      `SELECT t.business_date, t.amount, t.note, p.name AS set_by_name FROM sales_targets t LEFT JOIN people p ON p.id = t.set_by
+        WHERE t.location_id = $1 AND t.side = $2 AND t.business_date >= $3 ORDER BY t.business_date`, [locationId, sd, today]);
+    const out = [];
+    for (let i = 0; i < days; i += 1) {
+      const d = ymdAddDays(today, i);
+      const f = fc && fc.ready ? fc.days.find((x) => x.date === d) : null;
+      const o = rows.find((r) => toYmd(r.business_date) === d);
+      out.push({
+        date: d, forecast: f ? f[key].fc : null,
+        drivers: f ? f.drivers.filter((x) => x.kind === 'game' || x.kind === 'holiday').map((x) => x.label) : [],
+        override: o ? { amount: Math.round(num(o.amount)), note: o.note || null, by: o.set_by_name || null } : null,
+      });
+    }
+    // Overrides set further out than the list shows.
+    const later = rows.filter((r) => toYmd(r.business_date) > ymdAddDays(today, days - 1)).map((r) => ({ date: toYmd(r.business_date), amount: Math.round(num(r.amount)), note: r.note || null }));
+    return { side: sd, today, days: out, later, forecastReady: !!(fc && fc.ready) };
+  });
+}
+
+// amount null clears the override (back to the forecast).
+async function setTarget(locationId, side, date, amount, note, personId) {
+  const sd = side === 'bar' ? 'bar' : side === 'kitchen' ? 'kitchen' : null;
+  if (!sd) throw Object.assign(new Error('Pick the bar or kitchen board.'), { status: 400 });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) throw Object.assign(new Error('Pick a date.'), { status: 400 });
+  return withServiceClient(async (client) => {
+    if (amount == null || amount === '') {
+      await client.query('DELETE FROM sales_targets WHERE location_id = $1 AND side = $2 AND business_date = $3', [locationId, sd, date]);
+      return { ok: true, cleared: true };
+    }
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n < 0 || n > 1000000) throw Object.assign(new Error('Enter a dollar amount.'), { status: 400 });
+    await client.query(
+      `INSERT INTO sales_targets (location_id, side, business_date, amount, note, set_by) VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (location_id, side, business_date) DO UPDATE SET amount = EXCLUDED.amount, note = EXCLUDED.note, set_by = EXCLUDED.set_by, set_at = now()`,
+      [locationId, sd, date, Math.round(n), String(note || '').trim().slice(0, 80) || null, personId || null]);
+    return { ok: true };
+  });
+}
+
+// Overrides for a bar over a date range, for Scheduling and the morning
+// summary: Map "kitchen|2026-10-24" -> amount.
+async function overridesFor(locationId, from, to) {
+  const { rows } = await withServiceClient((client) => client.query(
+    'SELECT side, business_date, amount FROM sales_targets WHERE location_id = $1 AND business_date >= $2 AND business_date <= $3', [locationId, from, to]));
+  return new Map(rows.map((r) => [`${r.side}|${toYmd(r.business_date)}`, Math.round(num(r.amount))]));
 }
 
 // Business dates the box need not read again: a final (after-close) read,
@@ -518,4 +611,5 @@ async function recentPulls(locationId, limit = 12) {
 }
 
 module.exports = {
-  boxSettings, ingest, view, settingsFor, updateSettings, managerViewLocations, createDevice, listDevices, revokeDevice, locationForDevice, recentPulls, haveDates, foodFromSales, businessDate };
+  boxSettings, ingest, view, settingsFor, updateSettings, managerViewLocations, createDevice, listDevices, revokeDevice, boardForDevice, recentPulls, haveDates, foodFromSales, businessDate,
+  targets, setTarget, overridesFor };

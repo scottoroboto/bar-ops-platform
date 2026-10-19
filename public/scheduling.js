@@ -525,7 +525,7 @@ function renderDayPanel() {
   const weekday = isoToDate(date).toLocaleDateString([], { weekday: 'long' });
   const title = isoToDate(date).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
   const sideWord = g.side === 'food' ? 'kitchen' : 'bar';
-  const sub = [`${escapeHtml(shortLoc(d.locationName))} ${sideWord}`, d.forecast != null ? `forecast ~$${Number(d.forecast).toLocaleString()}` : 'no forecast for this day', d.busiest ? `busiest ${d.busiest}` : ''].filter(Boolean).join(' · ');
+  const sub = [`${escapeHtml(shortLoc(d.locationName))} ${sideWord}`, d.forecast != null ? (d.forecastSet ? `target $${Number(d.forecast).toLocaleString()}, set by the owner` : `forecast ~$${Number(d.forecast).toLocaleString()}`) : 'no forecast for this day', d.busiest ? `busiest ${d.busiest}` : ''].filter(Boolean).join(' · ');
   // Hour bars, with a marker where one of our teams' games starts.
   let hoursHtml = '';
   if (d.hours && d.hours.length) {
