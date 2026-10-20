@@ -1,0 +1,46 @@
+{
+  "board_id": "home-1",
+  "http_port": 8090,
+  "data_dir": "data",
+
+  "cloud": {
+    "url": "",
+    "token": ""
+  },
+
+  "cameras": [
+    {
+      "id": "cam-a",
+      "device": "/dev/v4l/by-id/usb-XXXX-video-index0",
+      "width": 1280, "height": 720, "fps": 15,
+      "rotate": 0,
+      "controls": { "exposure_time_absolute": 156, "gain": 0, "white_balance_temperature": 4600 }
+    },
+    {
+      "id": "cam-b",
+      "device": "/dev/v4l/by-id/usb-YYYY-video-index0",
+      "width": 1280, "height": 720, "fps": 15,
+      "rotate": 0,
+      "controls": { "exposure_time_absolute": 156, "gain": 0, "white_balance_temperature": 4600 }
+    },
+    {
+      "id": "cam-c",
+      "device": "/dev/v4l/by-id/usb-ZZZZ-video-index0",
+      "width": 1280, "height": 720, "fps": 15,
+      "rotate": 0,
+      "controls": { "exposure_time_absolute": 156, "gain": 0, "white_balance_temperature": 4600 }
+    }
+  ],
+
+  "detector": {
+    "diff_thresh": 18,
+    "min_change_px": 120,
+    "settle_frames": 4,
+    "min_dart_area": 150,
+    "max_dart_area": 9000,
+    "tip_end": "bottom"
+  },
+
+  "fuser": { "window_s": 0.8, "agree_mm": 10.0, "min_cameras": 2 },
+  "loop_hz": 15
+}

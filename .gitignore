@@ -1,3 +1,8 @@
 node_modules/
 .env
 project-status.md
+
+# board node runtime data (calibration, harness frames)
+boards/data/
+boards/config.json
+__pycache__/
