@@ -24,7 +24,7 @@
       </div>
     </div>
     <label for="name">Full name</label>
-    <input id="name">
+    <input id="name" placeholder="First and last name" onblur="this.value = properName(this.value)">
     <label for="email">Email</label>
     <input id="email" type="email">
     <label for="phone">Phone</label>
@@ -54,11 +54,17 @@
   }
 
   async function saveProfile() {
-    const name = document.getElementById('name').value.trim();
+    const name = properName(document.getElementById('name').value);
+    document.getElementById('name').value = name;
     const email = document.getElementById('email').value.trim();
     const phone = document.getElementById('phone').value.trim();
     const address = document.getElementById('address').value.trim();
+    // Name, email and phone are all required (Scotto, 2026-10-20).
+    const me = getPerson();
     if (!name) { showMsg('Name is required.', 'error'); return; }
+    if ((!me || me.role !== 'owner') && name.split(' ').length < 2) { showMsg('Please enter your first and last name.', 'error'); return; }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showMsg('Please enter a valid email address.', 'error'); return; }
+    if (phone.replace(/\D/g, '').length < 10) { showMsg('Please enter a phone number with area code.', 'error'); return; }
     try {
       const result = await api('/api/me/profile', { method: 'POST', body: { name, email, phone, address } });
       const person = getPerson();

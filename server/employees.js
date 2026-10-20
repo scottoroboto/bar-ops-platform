@@ -99,7 +99,28 @@ async function findDuplicate(client, { email, phone, excludeId = null, statuses 
   return rows[0] || null;
 }
 
+// Names as typed -> "First Last" (Scotto, 2026-10-20): spaces tidied,
+// each word a capital then lower case. A word typed all caps or all
+// lower case is fixed ("RUSSELL GANDY", "Dex wallace"); a word that
+// already mixes cases on purpose is left alone ("McKain", "KatieLee").
+// Hyphens and apostrophes start a new part ("Mary-Jane", "O'Brien").
+function properName(raw) {
+  return String(raw || '').replace(/\s+/g, ' ').trim().split(' ').map((word) => {
+    const mixed = /^[A-Z]/.test(word) && /[a-z]/.test(word) && /[A-Z]/.test(word.slice(1)) && word !== word.toUpperCase();
+    if (mixed) return word;
+    // Capital after a hyphen, and after an apostrophe only as the second
+    // character (O'Brien, D'Angelo; not Owen's).
+    return word.toLowerCase().replace(/(^|-)([a-z])/g, (m, sep, ch) => sep + ch.toUpperCase())
+      .replace(/^([a-z])(['’])([a-z])/i, (m, a, ap, b) => a.toUpperCase() + ap + b.toUpperCase());
+  }).join(' ');
+}
+// First and last name both needed.
+function nameProblem(name) {
+  return String(name || '').trim().split(/\s+/).filter(Boolean).length < 2 ? 'Please enter your first and last name.' : null;
+}
+
 async function createPendingEmployee({ name, email, phone, position, requestedLocationId, jotformSubmissionId, photoFile }) {
+  name = properName(name);
   return withServiceClient(async (client) => {
     const dup = await findDuplicate(client, { email, phone });
     if (dup) {
@@ -237,6 +258,7 @@ async function getOwnPhotoUrl({ personId }) {
 // sensitive (tax/banking/SSN) never lives here — that stays in Jotform;
 // the app just points people at the hire-pack form to update it.
 async function updateOwnProfile({ personId, name, email, phone, address }) {
+  name = properName(name);
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
       `UPDATE people SET name = $1, email = $2, phone = $3, address = $4, updated_at = now()
@@ -867,7 +889,7 @@ async function decidePayRateRequest({ requestId, approve, decidedBy, note }) {
 }
 
 module.exports = {
-  notifyNewApplicant,
+  notifyNewApplicant, properName, nameProblem,
   purgePerson,
   createPendingEmployee, setPersonLocations, getPhotoUrl, setOwnPhoto, removeOwnPhoto, getOwnPhotoUrl, updateOwnProfile, listPending, managerReview, activateEmployee, resendCredentials, setAppAccess,
   listAllWithAccess, discardPending, sendOnboardingInvite, ownerUpdateEmployee, ownerUpdateRole,

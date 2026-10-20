@@ -402,3 +402,15 @@ function renderTopnav(activeLabel) {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan); else scan();
   if (typeof MutationObserver !== 'undefined') new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
 })();
+
+// Names as typed -> "First Last" (same rule as server/employees.js
+// properName): all-caps or all-lower words fixed, deliberate mixed case
+// (McKain) kept, capital after a hyphen and in O'Brien.
+function properName(raw) {
+  return String(raw || '').replace(/\s+/g, ' ').trim().split(' ').map((word) => {
+    const mixed = /^[A-Z]/.test(word) && /[a-z]/.test(word) && /[A-Z]/.test(word.slice(1)) && word !== word.toUpperCase();
+    if (mixed) return word;
+    return word.toLowerCase().replace(/(^|-)([a-z])/g, (m, sep, ch) => sep + ch.toUpperCase())
+      .replace(/^([a-z])(['’])([a-z])/i, (m, a, ap, b) => a.toUpperCase() + ap + b.toUpperCase());
+  }).join(' ');
+}

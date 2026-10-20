@@ -3021,6 +3021,7 @@ const requestedLocationId = (req.body.requestedLocationId || '').trim() || null;
 // All required (Scotto, 2026-09-21). apply.html says the same up front;
 // this is the backstop for anything that skips the form.
 if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+if (employees.nameProblem(name)) return res.status(400).json({ ok: false, error: employees.nameProblem(name) });
 if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ ok: false, error: 'A valid email is required.' });
 if (!phone || phone.replace(/\D/g, '').length < 10) return res.status(400).json({ ok: false, error: 'A phone number with area code is required.' });
 if (!position) return res.status(400).json({ ok: false, error: 'Position applied for is required.' });
@@ -3081,6 +3082,12 @@ res.json(await employees.removeOwnPhoto({ personId: req.person.id }));
 app.post('/api/me/profile', auth.requireSession('light'), async (req, res) => {
 const name = (req.body.name || '').trim();
 if (!name) return res.status(400).json({ ok: false, error: 'Name is required.' });
+// First and last name, email and phone are all required (Scotto,
+// 2026-10-20): managers need a way to reach everyone.
+if (req.person.role !== 'owner' && employees.nameProblem(name)) return res.status(400).json({ ok: false, error: employees.nameProblem(name) });
+const em = String(req.body.email || '').trim(); const ph = String(req.body.phone || '').trim();
+if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return res.status(400).json({ ok: false, error: 'A valid email is required.' });
+if (ph.replace(/\D/g, '').length < 10) return res.status(400).json({ ok: false, error: 'A phone number with area code is required.' });
 const person = await employees.updateOwnProfile({ personId: req.person.id, name, email: req.body.email, phone: req.body.phone, address: req.body.address });
 res.json({ ok: true, person });
 });

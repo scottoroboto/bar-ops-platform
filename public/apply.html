@@ -18,8 +18,8 @@
 
   <div class="card" id="formCard">
     <p class="muted" style="margin-top:0;">All fields are required, except the photo.</p>
-    <label for="name">Full name</label>
-    <input id="name" autocomplete="name" placeholder="Jane Doe" required>
+    <label for="name">First and last name</label>
+    <input id="name" autocomplete="name" placeholder="First and last name" required onblur="this.value = properName(this.value)">
     <label for="email">Email</label>
     <input id="email" type="email" autocomplete="email" placeholder="jane@example.com" required>
     <label for="phone">Phone</label>
@@ -111,7 +111,8 @@
   }
 
   async function submitApplication() {
-    const name = document.getElementById('name').value.trim();
+    const name = properName(document.getElementById('name').value);
+    document.getElementById('name').value = name;
     const email = document.getElementById('email').value.trim();
     const phone = document.getElementById('phone').value.trim();
     const position = document.getElementById('position').value;
@@ -120,6 +121,7 @@
     // application just means a manager has to chase the person down.
     // The server enforces the same list; this is the friendlier message.
     if (!name) { showMsg('Please enter your name.', 'error'); return; }
+    if (name.split(' ').length < 2) { showMsg('Please enter your first and last name.', 'error'); return; }
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showMsg('Please enter a valid email address.', 'error'); return; }
     if (!phone || phone.replace(/\D/g, '').length < 10) { showMsg('Please enter a phone number with area code.', 'error'); return; }
     if (!position) { showMsg('Please choose the position you\'re applying for.', 'error'); return; }
