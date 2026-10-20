@@ -23,6 +23,7 @@ const kitchenboard = require('./kitchenboard');
 const sensors = require('./sensors');
 const home = require('./home');
 const summary = require('./summary');
+const latealerts = require('./latealerts');
 const alertlink = require('./alertlink');
 const access = require('./access');
 const notify = require('./notify');
@@ -5084,6 +5085,16 @@ app.get('/api/scheduling/my-shifts', auth.requireSession('light'), async (req, r
   if (!req.query.weekStart) return res.status(400).json({ error: 'weekStart is required.' });
   res.json(await scheduling.getMyAllShiftsForWeek(req.person.id, req.query.weekStart));
 });
+// Late clock-in alerts (patch_081): a scheduling manager's own setting.
+app.get('/api/scheduling/late-alerts', auth.requireSession('light'), async (req, res) => {
+  if (!['owner', 'manager'].includes(req.person.role)) return res.status(403).json({ error: 'Managers only.' });
+  res.json(await latealerts.settingsFor(req.person.id));
+});
+app.post('/api/scheduling/late-alerts', auth.requireSession('light'), async (req, res) => {
+  if (!['owner', 'manager'].includes(req.person.role)) return res.status(403).json({ error: 'Managers only.' });
+  const r = await latealerts.setSettings(req.person.id, req.body || {});
+  res.status(r.ok ? 200 : 400).json(r);
+});
 // Who's working: the whole published week of a schedule I work on.
 app.get('/api/scheduling/team-week', auth.requireSession('light'), async (req, res) => {
   if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
@@ -5641,6 +5652,12 @@ withServiceClient((client) => client.query('SELECT location_id FROM kb_settings'
 const refreshSlate = () => slate.refreshSlate().catch((err) => console.error('[slate] refresh error', err.message));
 setTimeout(refreshSlate, 2 * 60 * 1000);
 setInterval(refreshSlate, 6 * 60 * 60 * 1000);
+
+// Late clock-in alerts (patch_081): every minute.
+setInterval(() => {
+latealerts.runDue().then((n) => { if (n) console.log(`[late] ${n} late alert(s) sent`); })
+.catch((err) => console.error('[late] run error', err));
+}, 60 * 1000);
 
 // The managers' morning summary (patch_069): each person's own hour, at
 // their bar's clock, once a day.

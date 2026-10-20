@@ -361,10 +361,44 @@ async function renderScheduler() {
       <div id="draftBanner" class="draft-banner no-drafts" style="margin-top:10px;"></div>
       <div id="schedGrid" style="margin-top:14px; overflow-x:auto;"><p class="muted">Loading…</p></div>
     </div>
+    <div class="card" id="lateAlertsCard"></div>
     `;
 
   renderSchedPicker();
   loadSchedGrid();
+  loadLateAlerts();
+}
+
+// Late clock-in alerts (patch_081): this manager's own toggle, how late
+// (5-30 min) and how (text / email / both). One alert per shift.
+let LATE = null;
+async function loadLateAlerts() {
+  const el = document.getElementById('lateAlertsCard');
+  if (!el) return;
+  try { LATE = await api('/api/scheduling/late-alerts'); } catch (e) { el.style.display = 'none'; return; }
+  renderLateAlerts();
+}
+function renderLateAlerts(msg, kind) {
+  const el = document.getElementById('lateAlertsCard');
+  const L = LATE;
+  el.innerHTML = `
+    <label class="toggle-row" style="gap:8px; margin:0;"><span class="label"><b>Late alerts</b><br><span class="muted" style="font-size:12px;">Tell me right away when someone on a schedule I manage hasn't clocked in.</span></span>
+      <span class="switch"><input type="checkbox" id="lateOn" ${L.enabled ? 'checked' : ''} onchange="saveLateAlerts({ enabled: this.checked })"><span class="slider"></span></span></label>
+    <div style="display:${L.enabled ? 'flex' : 'none'}; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-top:10px;">
+      <div><label for="lateMin">When they're</label><select id="lateMin" style="margin:0; width:auto;" onchange="saveLateAlerts({ minutes: Number(this.value) })">${[5, 10, 15, 20, 25, 30].map(m => `<option value="${m}" ${m === L.minutes ? 'selected' : ''}>${m} min late</option>`).join('')}</select></div>
+      <div><label for="lateCh">Send by</label><select id="lateCh" style="margin:0; width:auto;" onchange="saveLateAlerts({ channel: this.value })">${[['sms', 'Text'], ['email', 'Email'], ['both', 'Text and email']].map(([v, l]) => `<option value="${v}" ${v === L.channel ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    </div>
+    ${L.enabled ? '<p class="muted" style="font-size:11.5px; margin:8px 0 0;">Checks SpotOn clock-ins (read every 5 minutes) and the Bar Ops time clock. One alert per shift, with their phone number.</p>' : ''}
+    ${msg ? `<p class="msg ${kind || 'success'}" style="margin:8px 0 0;">${escapeHtml(msg)}</p>` : ''}`;
+}
+async function saveLateAlerts(change) {
+  try {
+    const r = await withStepUp(() => api('/api/scheduling/late-alerts', { method: 'POST', body: { ...LATE, ...change } }));
+    LATE = r.settings;
+    renderLateAlerts(LATE.enabled ? `On: ${LATE.minutes} minutes late, by ${LATE.channel === 'sms' ? 'text' : LATE.channel === 'email' ? 'email' : 'text and email'}.` : 'Late alerts off.');
+  } catch (e) {
+    renderLateAlerts(e.message, 'error');
+  }
 }
 
 // ---- Schedule picker: a "N schedules selected" button that opens a
