@@ -1,0 +1,15 @@
+{
+  "board_id": "home-1",
+  "http_port": 8090,
+  "data_dir": "data",
+  "cameras": [
+    { "id": "cube",  "device": "/dev/v4l/by-id/PUT-THE-WHITE-CAMERA-HERE-video-index0",
+      "width": 1280, "height": 720, "fps": 15,
+      "controls": { "exposure_time_absolute": 156, "focus_absolute": 0 } },
+    { "id": "logi",  "device": "/dev/v4l/by-id/PUT-THE-LOGITECH-HERE-video-index0",
+      "width": 1280, "height": 720, "fps": 15,
+      "controls": { "exposure_time_absolute": 156, "focus_absolute": 0 } }
+  ],
+  "fuser": { "window_s": 1.0, "agree_mm": 10.0, "min_cameras": 2 },
+  "loop_hz": 15
+}

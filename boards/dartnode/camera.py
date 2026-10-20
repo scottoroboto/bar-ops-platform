@@ -87,6 +87,9 @@ class UsbCamera(FrameSource):
             'auto_exposure': 1, 'exposure_auto': 1,
             'white_balance_automatic': 0, 'white_balance_temperature_auto': 0,
             'gain_automatic': 0,
+            # webcams hunt focus when a dart lands, which reads as motion
+            'focus_automatic_continuous': 0, 'focus_auto': 0,
+            'backlight_compensation': 0,
         }
         wanted.update(self.controls)  # e.g. exposure_time_absolute, gain, white_balance_temperature
         for name, value in wanted.items():
