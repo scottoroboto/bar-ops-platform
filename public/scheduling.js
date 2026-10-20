@@ -137,13 +137,9 @@ async function renderMine() {
       <div id="myUpcoming"><p class="muted">Loading…</p></div>
     </div>
     <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h2 style="margin:0;">Week of <span id="myWeekLabel"></span></h2>
-        <div class="stack-actions" style="margin:0; gap:6px;">
-          <button class="small ghost" onclick="shiftMyWeek(-7)">‹ Prev</button>
-          <button class="small ghost" onclick="shiftMyWeek(7)">Next ›</button>
-          <button class="small secondary" onclick="previewMyWeek()" title="See this week as a page, then share, download or print it">Share / Print</button>
-        </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;" id="myWeekLabel"></h2>
+        ${weekNavHtml({ prev: 'shiftMyWeek(-7)', now: 'goToCurrentMyWeek()', next: 'shiftMyWeek(7)', print: 'previewMyWeek()', printLabel: 'Share / Print', printTitle: 'See this week as a page, then share, download or print it' })}
       </div>
       <div id="myWeek" style="margin-top:10px;"><p class="muted">Loading…</p></div>
     </div>
@@ -200,6 +196,7 @@ async function loadMyUpcoming() {
 }
 
 function shiftMyWeek(days) { WEEK_START = addDaysISO(WEEK_START, days); loadMyWeek(); loadTeamWeek(); }
+function goToCurrentMyWeek() { WEEK_START = startOfWeekISO(todayISO()); loadMyWeek(); loadTeamWeek(); }
 
 // Who's working (2026-10-20): every published shift that week
 // on a schedule this person works on. Follows the Prev/Next above.
@@ -231,7 +228,7 @@ async function loadTeamWeek(scheduleId) {
 }
 
 async function loadMyWeek() {
-  document.getElementById('myWeekLabel').textContent = dayLabel(WEEK_START) + ' – ' + dayLabel(addDaysISO(WEEK_START, 6));
+  document.getElementById('myWeekLabel').textContent = weekRangeLabel(WEEK_START);
   const el = document.getElementById('myWeek');
   try {
     const shifts = await api('/api/scheduling/my-shifts?weekStart=' + WEEK_START);
@@ -350,13 +347,8 @@ async function renderScheduler() {
     </div>
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-        <h2 style="margin:0;">Week of <span id="schedWeekLabel"></span></h2>
-        <div class="stack-actions" style="margin:0; gap:6px;">
-          <button class="small ghost" onclick="shiftSchedWeek(-7)">‹ Prev</button>
-          <button class="small ghost" onclick="goToCurrentSchedWeek()">Today</button>
-          <button class="small ghost" onclick="shiftSchedWeek(7)">Next ›</button>
-          <button class="small ghost" onclick="openPrintModal()">Print</button>
-        </div>
+        <h2 style="margin:0;" id="schedWeekLabel"></h2>
+        ${weekNavHtml({ prev: 'shiftSchedWeek(-7)', now: 'goToCurrentSchedWeek()', next: 'shiftSchedWeek(7)', print: 'openPrintModal()' })}
       </div>
       <div id="draftBanner" class="draft-banner no-drafts" style="margin-top:10px;"></div>
       <div id="schedGrid" style="margin-top:14px; overflow-x:auto;"><p class="muted">Loading…</p></div>
@@ -483,6 +475,27 @@ function renderDraftBanner() {
     el.innerHTML = `<div>No drafts pending.</div>`;
   }
 }
+// Week controls (Scotto, 2026-10-20, mockup A): one joined ‹ This week ›
+// control plus a Print button with an icon; the heading is the short
+// range, e.g. "Oct 17 – 23, 2026" or "Oct 31 – Nov 6, 2026".
+const ICON_PREV = '<svg class="wk-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>';
+const ICON_NEXT = '<svg class="wk-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>';
+const ICON_PRINT = '<svg class="wk-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="7"/></svg>';
+const ICON_COPY = '<svg class="wk-ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+function weekRangeLabel(startIso) {
+  const a = new Date(startIso + 'T12:00:00'); const b = new Date(addDaysISO(startIso, 6) + 'T12:00:00');
+  const m = (d) => d.toLocaleDateString('en-US', { month: 'short' });
+  const y = b.getFullYear();
+  return m(a) === m(b) ? `${m(a)} ${a.getDate()} – ${b.getDate()}, ${y}` : `${m(a)} ${a.getDate()} – ${m(b)} ${b.getDate()}, ${y}`;
+}
+function weekNavHtml({ prev, now, next, printLabel, print, printTitle }) {
+  return `<div class="wk-nav"><div class="wk-seg" role="group" aria-label="Change week">
+      <button type="button" onclick="${prev}" aria-label="Previous week" title="Previous week">${ICON_PREV}</button>
+      <button type="button" class="wk-now" onclick="${now}" title="Go to this week">This week</button>
+      <button type="button" onclick="${next}" aria-label="Next week" title="Next week">${ICON_NEXT}</button>
+    </div><button type="button" class="wk-btn" onclick="${print}" title="${printTitle || 'Print'}">${ICON_PRINT}<span>${printLabel || 'Print'}</span></button></div>`;
+}
+
 function shiftSchedWeek(days) {
   WEEK_START = addDaysISO(WEEK_START, days);
   loadSchedGrid();
@@ -493,7 +506,7 @@ function goToCurrentSchedWeek() {
 }
 
 async function loadSchedGrid() {
-  document.getElementById('schedWeekLabel').textContent = dayLabel(WEEK_START) + ' – ' + dayLabel(addDaysISO(WEEK_START, 6));
+  document.getElementById('schedWeekLabel').textContent = weekRangeLabel(WEEK_START);
   const el = document.getElementById('schedGrid');
   if (!SELECTED_SCHEDULE_IDS.length) { el.innerHTML = '<p class="muted">Pick at least one schedule above.</p>'; return; }
   el.innerHTML = '<p class="muted">Loading…</p>';
@@ -509,7 +522,7 @@ async function loadSchedGrid() {
 
     const { roster, others, locationCount } = schedRoster();
     const dates = weekDatesFrom(WEEK_START);
-    const rowHtml = (emp) => `<tr><td>${escapeHtml(emp.name)}${emp.position ? `<div class="muted" style="font-size:11px;">${escapeHtml(emp.position)}</div>` : ''}</td>${dates.map(date => schedCellHtml(emp, date)).join('')}<td style="vertical-align:top; white-space:nowrap;"><button class="small ghost" style="margin:0;" title="Copy this week's shifts for ${escapeHtml(emp.name)} onto next week, as drafts" onclick="copyEmployeeWeek('${emp.id}', this)">Copy → next wk</button></td></tr>`;
+    const rowHtml = (emp) => `<tr><td>${escapeHtml(emp.name)}${emp.position ? `<div class="muted" style="font-size:11px;">${escapeHtml(emp.position)}</div>` : ''}</td>${dates.map(date => schedCellHtml(emp, date)).join('')}<td style="vertical-align:top; white-space:nowrap;"><button type="button" class="wk-copy" title="Copy this week's shifts for ${escapeHtml(emp.name)} onto next week, as drafts" onclick="copyEmployeeWeek('${emp.id}', this)">${ICON_COPY}<span>Copy to next week</span></button></td></tr>`;
     const switchHtml = SHOW_ALL_STAFF
       ? `Showing everyone at ${locationCount === 1 ? 'this bar' : 'these bars'} (${roster.length + others.length}). <a href="#" onclick="event.preventDefault(); setShowAllStaff(false)">Show only who can work these schedules</a>`
       : `Showing the ${roster.length} who can work ${SELECTED_SCHEDULE_IDS.length === 1 ? 'this schedule' : 'these schedules'}. <a href="#" onclick="event.preventDefault(); setShowAllStaff(true)">Show everyone at ${locationCount === 1 ? 'this bar' : 'these bars'}</a>`;
@@ -556,7 +569,7 @@ async function copyEmployeeWeek(personId, btn) {
     loadSchedGrid();
   } catch (e) {
     showMsg(e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = 'Copy → next wk'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = `${ICON_COPY}<span>Copy to next week</span>`; }
   }
 }
 
