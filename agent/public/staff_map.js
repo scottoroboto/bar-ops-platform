@@ -9,10 +9,9 @@ let TVS = [];
 let LAYOUT = null;
 let refreshTimer = null;
 let CAN_EDIT = false;
-// Per-iPad: the bar's iPad sits with the front doors away from the
-// bartender, so the map can be turned 180° (positions mirrored, text
-// kept upright). Remembered on this device only.
-let FLIP = (function () { try { return localStorage.getItem('vc_map_flip') === '1'; } catch (e) { return false; } }());
+// Flip (turn the map 180°) is gone (Scotto, 2026-10-20): the T1 map is
+// drawn the way his floor plan faces, and that's the only way it shows.
+try { localStorage.removeItem('vc_map_flip'); } catch (e) { /* private mode */ }
 // Edit mode (owner/manager): drag TVs and labels, add a TV, link a dot to
 // a TV in the inventory, delete, then Save to the cloud.
 let EDIT = null; // { layout (working copy), sel: n|null, dirty }
@@ -138,14 +137,11 @@ async function loadTvs() {
 async function loadLayout() {
   try { const r = await api('/api/map'); LAYOUT = r.layout || null; CAN_EDIT = !!r.canEdit; } catch (e) { LAYOUT = null; }
 }
-// Mirror for the flipped view: a point, or a box's far corner becomes its near one.
-function fx(x, w) { return FLIP ? 100 - x - (w || 0) : x; }
-function fy(y, h) { return FLIP ? 100 - y - (h || 0) : y; }
-function toggleFlip() {
-  FLIP = !FLIP;
-  try { localStorage.setItem('vc_map_flip', FLIP ? '1' : '0'); } catch (e) { /* private mode */ }
-  renderMap();
-}
+// Positions are percent of the map, as stored.
+function fx(x) { return x; }
+function fy(y) { return y; }
+// The map's width over height: a drawn plan's own shape, else 10:7.
+function mapAspect(L) { return L && L.plan && L.plan.w && L.plan.h ? L.plan.w / L.plan.h : 10 / 7; }
 // The games strip calls these by name (it was written for the Sources tab).
 function renderSources() { renderMap(); }
 
@@ -253,6 +249,7 @@ function renderMap() {
     return;
   }
   const L = EDIT ? EDIT.layout : LAYOUT;
+  const plan = L.plan ? planSvg(L.plan) : '';
   const items = (L.items || []).map((it) => {
     const cls = `map-item ${it.type}${it.outer ? ' outer' : ''}${it.type === 'door' && (it.w || 0) === 0 ? ' v' : ''}${EDIT && it.type === 'label' ? ' draggable' : ''}`;
     const style = `left:${fx(it.x, it.w)}%;top:${fy(it.y, it.h)}%;width:${it.w || 0}%;height:${it.h || 0}%`;
@@ -279,9 +276,16 @@ function renderMap() {
     let attrs;
     if (EDIT) { if (EDIT.sel === d.n) cls.push('sel'); attrs = `data-n="${Number(d.n)}"`; }
     else attrs = t ? `data-tv="${t.id}" data-slot="${slot == null ? '' : slot}" onclick="openTvSheet(${Number(t.id)})"` : `onclick="gamesToast('TV ${Number(d.n)} isn’t set up in Venue Control yet.', true)"`;
+    // A TV on a drawn plan hangs on its wall: a bar the way it's mounted
+    // and its number beside it (the "B" map, 2026-10-20).
+    if (d.o) {
+      cls.push('wall', `o-${d.o}`, `s-${d.s || 'b'}`);
+      return `<button type="button" class="${cls.join(' ')}" style="left:${fx(d.x)}%;top:${fy(d.y)}%;--c:${slotColor(slot)}" title="${escapeHtml(title)}" ${attrs}><i class="bar"></i><span class="n">${cls.includes('dead') ? '✕' : Number(d.n)}</span></button>`;
+    }
     return `<button type="button" class="${cls.join(' ')}" style="left:${fx(d.x)}%;top:${fy(d.y)}%;--c:${slotColor(slot)}" title="${escapeHtml(title)}" ${attrs}><span class="n">${Number(d.n)}</span><span class="src">${escapeHtml(EDIT && !t ? 'no TV' : text)}</span></button>`;
   }).join('');
-  box.innerHTML = items + dots;
+  box.innerHTML = plan + items + dots;
+  box.style.aspectRatio = String(mapAspect(L));
   box.classList.toggle('editing', !!EDIT);
   renderMapBar();
   fitMap();
@@ -298,6 +302,14 @@ function renderMap() {
   }).join('');
 }
 
+// A drawn floor plan: walls, inner lines, solid areas and labels, in the
+// plan's own units, stretched to the map box.
+function planSvg(P) {
+  const paths = (list, cls) => (list || []).map((d) => `<path class="${cls}" d="${escapeHtml(d)}"/>`).join('');
+  const labels = (P.labels || []).map((l) => `<text class="${l.big ? 'big' : 'small'}" x="${Number(l.x)}" y="${Number(l.y)}"${l.rot ? ` transform="rotate(${Number(l.rot)} ${Number(l.x)} ${Number(l.y)})"` : ''}>${escapeHtml(l.t)}</text>`).join('');
+  return `<svg class="map-plan" viewBox="0 0 ${Number(P.w)} ${Number(P.h)}" preserveAspectRatio="none" aria-hidden="true">${paths(P.fills, 'fill')}${paths(P.lines, 'line')}${paths(P.walls, 'wall')}${labels}</svg>`;
+}
+
 // Size the map so the strip, the map and the receiver rail all fit on the
 // screen with nothing to scroll (an iPad in landscape at the bar).
 function fitMap() {
@@ -309,13 +321,14 @@ function fitMap() {
   const avail = Math.max(240, window.innerHeight - top - 22);
   const side = window.innerWidth > 760; // rail beside the map, else under it
   const railW = side ? 236 : 0;
-  const width = Math.min(row.clientWidth - railW, Math.round(avail * 10 / 7));
+  const aspect = mapAspect(EDIT ? EDIT.layout : LAYOUT);
+  const width = Math.min(row.clientWidth - railW, Math.round(avail * aspect));
   box.style.width = `${width}px`;
-  if (rail) rail.style.maxHeight = side ? `${Math.round(width * 7 / 10)}px` : '';
+  if (rail) rail.style.maxHeight = side ? `${Math.round(width / aspect)}px` : '';
 }
 window.addEventListener('resize', () => fitMap());
 
-// The row above the map: Flip for everyone, Edit for owner/manager.
+// The row above the map: Channel guide for everyone, Edit for owner/manager.
 function renderMapBar() {
   const bar = document.getElementById('mapBar');
   if (!bar) return;
@@ -325,7 +338,6 @@ function renderMapBar() {
       <span class="map-bar-note">Editing: drag a TV or a label. Tap a TV to renumber, link or remove it.</span>
       <button type="button" class="map-bar-btn" onclick="editAddTv()">+ TV</button>
       ${sel ? `<button type="button" class="map-bar-btn" onclick="openEditTvSheet(${sel.n})">TV ${sel.n}…</button>` : ''}
-      <button type="button" class="map-bar-btn" onclick="toggleFlip()">${FLIP ? 'Unflip' : 'Flip'}</button>
       <span class="map-bar-gap"></span>
       <button type="button" class="map-bar-btn" onclick="editCancel()">Cancel</button>
       <button type="button" class="map-bar-btn go" onclick="editSave()" ${EDIT.dirty ? '' : 'disabled'}>Save map</button>`;
@@ -334,7 +346,6 @@ function renderMapBar() {
       <span class="map-bar-note">Hold a game, then drop it on a TV. Tap a TV to pick what it shows.${CAN_EDIT ? '' : ` <i>${escapeHtml(whoLine())} · Edit map needs the owner or a manager (open TV Staff from the Bar Ops app).</i>`}</span>
       <span class="map-bar-gap"></span>
       <button type="button" class="map-bar-btn" onclick="openChannelGuide()" title="What's on every DirecTV channel right now, and put one on a receiver">Channel guide</button>
-      <button type="button" class="map-bar-btn" onclick="toggleFlip()">${FLIP ? 'Unflip' : 'Flip'}</button>
       ${CAN_EDIT && LAYOUT ? '<button type="button" class="map-bar-btn" onclick="editStart()">Edit map</button>' : ''}`;
   }
 }
@@ -372,7 +383,7 @@ function editAddTv() {
   if (!EDIT) return;
   const used = new Set(EDIT.layout.tvs.map((t) => t.n));
   let n = 1; while (used.has(n)) n++;
-  EDIT.layout.tvs.push({ n, x: 50, y: 50 });
+  EDIT.layout.tvs.push(EDIT.layout.plan ? { n, x: 50, y: 50, o: 'h', s: 'b' } : { n, x: 50, y: 50 });
   EDIT.sel = n;
   editTouch();
   renderMap();
@@ -398,6 +409,9 @@ function openEditTvSheet(n) {
       <div class="gs-label">Which TV is this</div>
       <div class="map-edit-row"><select id="mapEditLink"><option value="">By number (TV ${d.n})</option>${opts}</select></div>
       <p class="muted" style="margin:6px 0 0">${linked ? `Now: ${escapeHtml(tvName(linked))}` : `No TV named “TV ${d.n}” in Venue Control yet.`}</p>
+      ${d.o ? `<div class="gs-label">How it hangs</div>
+      <div class="map-edit-row"><select id="mapEditO"><option value="h" ${d.o === 'h' ? 'selected' : ''}>Left–right</option><option value="v" ${d.o === 'v' ? 'selected' : ''}>Up–down</option><option value="d" ${d.o === 'd' ? 'selected' : ''}>Angled</option></select>
+        <select id="mapEditS"><option value="t" ${d.s === 't' ? 'selected' : ''}>Number above</option><option value="b" ${(d.s || 'b') === 'b' ? 'selected' : ''}>Number below</option><option value="l" ${d.s === 'l' ? 'selected' : ''}>Number left</option><option value="r" ${d.s === 'r' ? 'selected' : ''}>Number right</option></select></div>` : ''}
       <div class="mu-sheet-btns">
         <button type="button" class="mu-sheet-cancel" onclick="editRemoveTv(${d.n})">Remove dot</button>
         <button type="button" class="mu-sheet-go" onclick="editApplyTv(${d.n})">Done</button>
@@ -413,6 +427,9 @@ function editApplyTv(n) {
   if (num !== d.n && EDIT.layout.tvs.some((t) => t !== d && t.n === num)) { gamesToast(`TV ${num} is already on the map.`, true); return; }
   d.n = num;
   if (link) d.tvId = Number(link); else delete d.tvId;
+  const o = (document.getElementById('mapEditO') || {}).value; const sd = (document.getElementById('mapEditS') || {}).value;
+  if (d.o && o) d.o = o;
+  if (d.o && sd) d.s = sd;
   EDIT.sel = num;
   editTouch();
   closeMapSheet();
@@ -427,15 +444,13 @@ function editRemoveTv(n) {
   renderMap();
 }
 
-// Dragging in edit mode: TV dots and labels. Positions are stored
-// unflipped, so a flipped view converts the finger back.
+// Dragging in edit mode: TV dots and labels.
 const MDRAG = { on: false, kind: null, id: null, moved: false, x0: 0, y0: 0 };
 function mapPct(ev) {
   const box = document.getElementById('mapBox');
   const r = box.getBoundingClientRect();
   let x = ((ev.clientX - r.left) / r.width) * 100;
   let y = ((ev.clientY - r.top) / r.height) * 100;
-  if (FLIP) { x = 100 - x; y = 100 - y; }
   return { x: Math.max(0, Math.min(100, x)), y: Math.max(0, Math.min(100, y)) };
 }
 function initMapEditing() {

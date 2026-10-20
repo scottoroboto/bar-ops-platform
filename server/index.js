@@ -1198,8 +1198,33 @@ const seen = new Set();
 const tvs = layout.tvs.slice(0, 200).map((t) => ({
   n: Number.isInteger(t.n) && t.n > 0 && t.n < 1000 ? t.n : null, x: num(t.x, 0, 100) ?? 50, y: num(t.y, 0, 100) ?? 50,
   ...(Number.isInteger(t.tvId) ? { tvId: t.tvId } : {}),
+  // Drawn plans (2026-10-20): how the TV hangs (h along a wall left-right,
+  // v up-down, d angled) and which side its number sits on.
+  ...(['h', 'v', 'd'].includes(t.o) ? { o: t.o } : {}),
+  ...(['t', 'b', 'l', 'r'].includes(t.s) ? { s: t.s } : {}),
 })).filter((t) => t.n && !seen.has(t.n) && seen.add(t.n));
-const clean = { items, tvs };
+// A drawn floor plan (T1, from Scotto's drawing): wall lines, solid areas
+// and labels in the plan's own units. Paths are SVG path data only.
+let plan = null;
+const p0 = layout.plan;
+if (p0 && typeof p0 === 'object') {
+  const pw = num(p0.w, 100, 4000); const ph = num(p0.h, 100, 4000);
+  const pathOk = (d) => typeof d === 'string' && d.length <= 4000 && /^[MLHVZACQSmlhvzacqs0-9 .,-]+$/.test(d);
+  const list = (arr, max, fn) => (Array.isArray(arr) ? arr.slice(0, max).map(fn).filter(Boolean) : []);
+  if (pw && ph) {
+    plan = {
+      w: pw, h: ph,
+      walls: list(p0.walls, 60, (d) => (pathOk(d) ? d : null)),
+      lines: list(p0.lines, 60, (d) => (pathOk(d) ? d : null)),
+      fills: list(p0.fills, 30, (d) => (pathOk(d) ? d : null)),
+      labels: list(p0.labels, 40, (l) => (l && typeof l.t === 'string' ? {
+        t: l.t.slice(0, 30), x: num(l.x, 0, 4000) ?? 0, y: num(l.y, 0, 4000) ?? 0,
+        ...(l.big ? { big: true } : {}), ...(num(l.rot, -180, 180) ? { rot: num(l.rot, -180, 180) } : {}),
+      } : null)),
+    };
+  }
+}
+const clean = { items, tvs, ...(plan ? { plan } : {}) };
 if (JSON.stringify(clean).length > 64 * 1024) return res.status(400).json({ error: 'That map is too big.' });
 await withServiceClient((client) => client.query('UPDATE vc_sites SET map_layout = $1, updated_at = now() WHERE id = $2', [JSON.stringify(clean), req.vcSite.site_id]));
 res.json({ ok: true, layout: clean });
