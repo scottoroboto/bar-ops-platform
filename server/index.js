@@ -5084,6 +5084,12 @@ app.get('/api/scheduling/my-shifts', auth.requireSession('light'), async (req, r
   if (!req.query.weekStart) return res.status(400).json({ error: 'weekStart is required.' });
   res.json(await scheduling.getMyAllShiftsForWeek(req.person.id, req.query.weekStart));
 });
+// Who's working: the whole published week of a schedule I work on.
+app.get('/api/scheduling/team-week', auth.requireSession('light'), async (req, res) => {
+  if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
+  if (!req.query.weekStart) return res.status(400).json({ error: 'weekStart is required.' });
+  res.json(await scheduling.getTeamWeek(req.person.id, req.query.weekStart, req.query.scheduleId));
+});
 app.get('/api/scheduling/my-shifts/upcoming', auth.requireSession('light'), async (req, res) => {
   if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
   res.json(await scheduling.getEmployeeUpcomingShifts(req.person.id));

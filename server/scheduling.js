@@ -963,6 +963,32 @@ async function getMyAllShiftsForWeek(personId, weekStartISO) {
   });
 }
 
+// Who's working (Scotto, 2026-10-20: a bartender asked to see every
+// bartender at her bar, so she knows who to call when someone's late or
+// she needs to leave early). The whole published week for a schedule
+// this employee works on: any schedule she has a shift on within 60
+// days either side of today. Names and times only; drafts never show.
+async function getTeamWeek(personId, weekStartISO, scheduleId) {
+  const dates = weekDateRange(weekStartISO);
+  return withServiceClient(async (client) => {
+    const { rows: mine } = await client.query(
+      `SELECT s.id, s.name, l.name AS location_name, count(*)::int AS n
+         FROM shifts sh JOIN schedules s ON s.id = sh.schedule_id JOIN locations l ON l.id = s.location_id
+        WHERE sh.person_id = $1 AND sh.status != 'cancelled' AND s.active = true
+          AND sh.shift_date BETWEEN (CURRENT_DATE - 60) AND (CURRENT_DATE + 60)
+        GROUP BY s.id, s.name, l.name ORDER BY n DESC, l.name, s.name`, [personId]);
+    const schedules = mine.map(({ id, name, location_name }) => ({ id, name, location_name }));
+    const pick = schedules.find((x) => String(x.id) === String(scheduleId)) || schedules[0] || null;
+    if (!pick) return { schedules, scheduleId: null, shifts: [] };
+    const { rows } = await client.query(
+      `SELECT sh.shift_date, sh.start_time, sh.end_time, p.name AS person_name, pos.name AS position_name, (sh.person_id = $3) AS is_me
+         FROM shifts sh JOIN people p ON p.id = sh.person_id JOIN positions pos ON pos.id = sh.position_id
+        WHERE sh.schedule_id = $1 AND sh.status != 'cancelled' AND sh.shift_date = ANY($2)
+        ORDER BY sh.shift_date, sh.start_time, p.name`, [pick.id, dates, personId]);
+    return { schedules, scheduleId: pick.id, shifts: rows.map((r) => ({ ...r, shift_date: toDateStr(r.shift_date) })) };
+  });
+}
+
 async function getEmployeeUpcomingShifts(personId) {
   return withServiceClient(async (client) => {
     const { rows } = await client.query(
@@ -990,6 +1016,6 @@ module.exports = {
   getPendingTimeOffCountForManager, getTimeOffRequestsICanApprove, getAllTimeOffRequestsIManage,
   decideTimeOffRequest, submitTimeOffRequest, getMyTimeOffRequests,
   getMyAvailability, saveMyAvailabilityRow, deleteMyAvailabilityRow,
-  getMyAllShiftsForWeek, getEmployeeUpcomingShifts,
+  getMyAllShiftsForWeek, getEmployeeUpcomingShifts, getTeamWeek,
   weekDateRange, formatTime12hr,
 };
