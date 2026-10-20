@@ -3,7 +3,9 @@ detection, fusion, scoring, the web UI -- can be exercised and tested
 without a single camera plugged in.
 
 The virtual cameras copy the Omni's geometry: on the rim about 440 mm
-from the centre, a little above the board surface, looking at the bull.
+from the centre, ~210 mm above the board face (phone photos from the pod
+positions show the board at roughly 25-30 degrees of elevation), looking
+at the bull.
 Darts are rendered as real 3-D objects (tip on the board, shaft standing
 out of it, flight on the end) and projected through the same camera
 model, so the "tip is the lowest point" assumption gets a genuine test
@@ -28,7 +30,7 @@ RED = (40, 40, 200)
 GREEN = (60, 150, 60)
 
 
-def camera_pose(angle_cw_deg: float, radius_mm: float = 440.0, height_mm: float = 120.0,
+def camera_pose(angle_cw_deg: float, radius_mm: float = 440.0, height_mm: float = 210.0,
                 size: tuple[int, int] = (1280, 720), fov_h_deg: float = 68.0,
                 look_at=(0.0, 0.0, 0.0)):
     """K, R, t for a camera on the rim at `angle_cw_deg` (clockwise from
