@@ -149,6 +149,7 @@ class DartDetector:
             self._prev = g
             return None
         roi = self._get_roi(g.shape)
+        g = self._match_brightness(g, roi)
         moving = int(np.count_nonzero((cv2.absdiff(g, self._prev) > self.cfg.motion_thresh) & roi))
         self._prev = g
         changed = int(np.count_nonzero((cv2.absdiff(g, self.ref) > self.cfg.diff_thresh) & roi))
@@ -202,6 +203,24 @@ class DartDetector:
         g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
         k = self.cfg.blur
         return cv2.GaussianBlur(g, (k, k), 0) if k > 1 else g
+
+    def _match_brightness(self, g: np.ndarray, roi: np.ndarray) -> np.ndarray:
+        """Dimmers, daylight through the door, a TV flicker: the whole
+        scene brightens or darkens and nothing has actually changed.
+        Scale the frame so its median over the board matches the
+        reference's before any comparison. A dart or a hand barely
+        moves the median; a lighting change moves nothing else."""
+        if self.ref is None:
+            return g
+        m_ref = float(np.median(self.ref[roi]))
+        m_g = float(np.median(g[roi]))
+        if m_g < 1.0:
+            return g
+        gain = m_ref / m_g
+        if abs(gain - 1.0) < 0.02:
+            return g
+        gain = min(max(gain, 0.6), 1.6)
+        return np.clip(g.astype(np.float32) * gain, 0, 255).astype(np.uint8)
 
     def _get_roi(self, shape) -> np.ndarray:
         if self._roi is not None and self._roi.shape == shape:
