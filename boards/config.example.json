@@ -37,7 +37,7 @@
     "min_change_px": 120,
     "settle_frames": 4,
     "min_dart_area": 150,
-    "max_dart_area": 9000,
+    "max_dart_area": 60000,
     "tip_end": "bottom"
   },
 

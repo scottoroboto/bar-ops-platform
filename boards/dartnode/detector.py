@@ -51,7 +51,7 @@ class DetectorConfig:
     settle_px: int = 60         # moving pixels below this = still
     settle_frames: int = 4      # consecutive still frames before analysing
     min_dart_area: int = 150    # blob size limits for "one dart", in pixels
-    max_dart_area: int = 9000
+    max_dart_area: int = 60000  # generous: a dart close to the camera is big; a hand/arm is bigger
     min_aspect: float = 1.3     # a dart is elongated; a round shadow is not
     tip_band_px: int = 3        # rows at the tip end averaged for the tip point
     stack_gap_px: int = 12      # blobs within this many px of the dart's axis are one dart

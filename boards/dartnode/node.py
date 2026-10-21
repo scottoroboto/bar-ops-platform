@@ -134,6 +134,11 @@ class Node:
                                 {c: det.last_mask for c, det in self.detectors.items()})
         elif ev.kind == KIND_TAKEOUT:
             log.info('TAKEOUT')
+        else:
+            # rejected scenes are the interesting ones while tuning: keep the frames
+            log.info('BLOCKED %s', '; '.join(f"{c['camera_id']}: {c['note']}" for c in d['cameras']))
+            self.harness.record(eid, d, dict(self._last_frames),
+                                {c: det.last_mask for c, det in self.detectors.items()})
         self.publisher.publish(d)
 
     # -- control from the UI --------------------------------------------
