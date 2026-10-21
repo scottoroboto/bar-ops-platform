@@ -410,14 +410,27 @@ function swapId(text, oldId, newId) {
 // system (T1's Connect was set up fresh after the Oct 2026 power cut)
 // carries the old number, and the Sonos then plays a single track and
 // stops. Cached for ten minutes.
-let pandoraSn = { value: null, at: 0 };
+let pandoraSn = { value: null, at: 0, read: false };
+// The account number in a learned station's URI: the fallback when the
+// player's accounts page can't be read right now.
+function learnedSn() {
+  const m = pandoraTpl && pandoraTpl.uri ? /[?&]sn=(\d+)/.exec(pandoraTpl.uri) : null;
+  return m ? m[1] : null;
+}
+// { sn, known }: known = the accounts page was actually read, so a null sn
+// really means "no Pandora account on this system". A slow or failed read
+// (T1's Connect is old and sometimes slow) is NOT "no account" -- that
+// used to block every Pandora station with the "Add Pandora in the Sonos
+// app" message (Oct 21, 2026). Only a good read is kept for ten minutes.
 async function pandoraAccountSn(ip) {
-  if (Date.now() - pandoraSn.at < 10 * 60 * 1000) return pandoraSn.value;
+  if (pandoraSn.read && Date.now() - pandoraSn.at < 10 * 60 * 1000) return { sn: pandoraSn.value, known: true };
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), SOAP_TIMEOUT_MS);
+  const t = setTimeout(() => controller.abort(), Math.max(SOAP_TIMEOUT_MS, 8000));
   try {
     const res = await fetch(`http://${ip}:${config.SONOS_PORT}/status/accounts`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`accounts page ${res.status}`);
     const xml = await res.text();
+    if (!/<Accounts?\b/.test(xml)) throw new Error('accounts page had no account list');
     const re = /<Account\b([^>]*)>/g;
     let m; let value = null;
     while ((m = re.exec(xml))) {
@@ -426,13 +439,16 @@ async function pandoraAccountSn(ip) {
       const sn = (/SerialNum="(\d+)"/.exec(a) || [])[1];
       if (sn) { value = sn; break; }
     }
-    pandoraSn = { value, at: Date.now() };
+    pandoraSn = { value, at: Date.now(), read: true };
+    if (!value) console.warn(`[sonos] ${ip} lists no Pandora account (type 236) on /status/accounts`);
+    return { sn: value, known: true };
   } catch (err) {
-    pandoraSn = { value: pandoraSn.value, at: Date.now() - 9 * 60 * 1000 }; // try again in a minute
+    console.warn(`[sonos] couldn't read ${ip}'s accounts (${err.name === 'AbortError' ? 'timed out' : err.message}); using the learned account number`);
+    // Keep the last good number if there is one; don't cache the failure.
+    return { sn: pandoraSn.read && pandoraSn.value ? pandoraSn.value : learnedSn(), known: false };
   } finally {
     clearTimeout(t);
   }
-  return pandoraSn.value;
 }
 
 function withSn(uri, sn) {
@@ -465,8 +481,8 @@ function pandoraDidl({ stationId, name, art }) {
 async function playPandoraStation({ stationId, name, art }) {
   const p = await ensurePlayer();
   if (!p) throw new Error('No Sonos found on this network.');
-  const sn = await pandoraAccountSn(p.ip);
-  if (sn === null && pandoraSn.at) throw new Error('This Sonos system has no Pandora account yet. Add Pandora in the Sonos app (Settings → Services & Voice), then try again.');
+  const { sn, known } = await pandoraAccountSn(p.ip);
+  if (known && sn === null) throw new Error('The Sonos doesn’t list a Pandora account right now. In the Sonos app check Settings → Services & Voice → Pandora (sign in again if it asks), then try again.');
   const uri = pandoraUri(stationId, sn);
   const didl = pandoraDidl({ stationId, name, art });
   try {
