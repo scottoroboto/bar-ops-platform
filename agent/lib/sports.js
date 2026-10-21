@@ -38,9 +38,23 @@ const LEAGUES = [
   { key: 'cfb', label: 'NCAAF', path: 'football/college-football', q: 'groups=80&limit=300' },
   { key: 'cbb', label: 'NCAAM', path: 'basketball/mens-college-basketball', q: 'limit=300' },
   { key: 'wnba', label: 'WNBA', path: 'basketball/wnba' },
-  { key: 'mls', label: 'MLS', path: 'soccer/usa.1' },
-  { key: 'epl', label: 'Premier League', path: 'soccer/eng.1' },
+  // Soccer (Oct 21, 2026: a bartender found no soccer on a Champions
+  // League night). Every soccer league shares one "Soccer" tab on the
+  // strip; each card still says which league it is.
+  { key: 'mls', label: 'MLS', path: 'soccer/usa.1', tab: 'soccer' },
+  { key: 'epl', label: 'Premier League', path: 'soccer/eng.1', tab: 'soccer' },
+  { key: 'ucl', label: 'Champions League', path: 'soccer/uefa.champions', tab: 'soccer' },
+  { key: 'uel', label: 'Europa League', path: 'soccer/uefa.europa', tab: 'soccer' },
+  { key: 'ligamx', label: 'Liga MX', path: 'soccer/mex.1', tab: 'soccer' },
+  { key: 'laliga', label: 'La Liga', path: 'soccer/esp.1', tab: 'soccer' },
+  { key: 'bund', label: 'Bundesliga', path: 'soccer/ger.1', tab: 'soccer' },
+  { key: 'seriea', label: 'Serie A', path: 'soccer/ita.1', tab: 'soccer' },
+  { key: 'nwsl', label: 'NWSL', path: 'soccer/usa.nwsl', tab: 'soccer' },
+  { key: 'ccc', label: 'Concacaf Champions Cup', path: 'soccer/concacaf.champions', tab: 'soccer' },
+  { key: 'intl', label: 'International', path: 'soccer/fifa.friendly', tab: 'soccer' },
 ];
+const TAB_LABELS = { soccer: 'Soccer' };
+const tabOf = (key) => { const l = LEAGUES.find((x) => x.key === key); return (l && l.tab) || key; };
 
 // DirecTV channel numbers. Locals are the Mobile-Pensacola market; the owner
 // can change any of these from the Sources page.
@@ -623,7 +637,7 @@ function buildView() {
     const best = options.find((o) => o.kind === 'tv' && !o.showing) || null;
     const blocked = !best ? options.find((o) => o.kind === 'tv' && o.showing) || null : null;
     return {
-      id: g.id, league: g.league, start: g.start, localDate: localDate(g.start, tz), state: g.state, detail: g.detail,
+      id: g.id, league: g.league, tab: tabOf(g.league), start: g.start, localDate: localDate(g.start, tz), state: g.state, detail: g.detail,
       postponed: g.postponed, name: g.name, note: g.note, away: clientTeam(g.away), home: clientTeam(g.home),
       options, channel: best ? { major: best.major, minor: best.minor, name: best.name, confirmed: !!best.confirmed, from: best.from } : null,
       blocked: blocked ? { major: blocked.major, minor: blocked.minor, name: blocked.name, showing: blocked.showing } : null,
@@ -636,6 +650,10 @@ function buildView() {
     today: localDate(Date.now(), tz),
     yesterday: addDays(localDate(Date.now(), tz), -1),
     leagues: LEAGUES.filter((l) => present.has(l.key)).map((l) => ({ key: l.key, label: l.label })),
+    // The strip's league buttons: one per league, except every soccer
+    // league shares "Soccer".
+    tabs: LEAGUES.filter((l) => present.has(l.key)).map((l) => (l.tab ? { key: l.tab, label: TAB_LABELS[l.tab] || l.tab } : { key: l.key, label: l.label }))
+      .filter((t, i, a) => a.findIndex((x) => x.key === t.key) === i),
     myTeams: [...mine],
     games,
     plans,

@@ -108,7 +108,7 @@ function visibleGames() {
   if (!GAMES) return [];
   let list = GAMES.games;
   if (GM.league === 'mine') list = list.filter((g) => g.myTeam);
-  else if (GM.league !== 'all') list = list.filter((g) => g.league === GM.league);
+  else if (GM.league !== 'all') list = list.filter((g) => (g.tab || g.league) === GM.league);
   const order = { in: 0, pre: 1, post: 2 };
   if (GM.day === 'today') {
     list = list.filter((g) => g.localDate === GAMES.today || g.state === 'in');
@@ -159,7 +159,7 @@ function renderGames() {
   const tabs = document.getElementById('gamesTabs');
   const row = document.getElementById('gamesRow');
   if (!GAMES) return;
-  const leagues = [{ key: 'all', label: 'All' }, ...(GAMES.myTeams.length ? [{ key: 'mine', label: '★ My Teams' }] : []), ...GAMES.leagues];
+  const leagues = [{ key: 'all', label: 'All' }, ...(GAMES.myTeams.length ? [{ key: 'mine', label: '★ My Teams' }] : []), ...(GAMES.tabs || GAMES.leagues)];
   if (!leagues.some((l) => l.key === GM.league)) GM.league = 'all';
   tabs.innerHTML = `
     <div class="gm-leagues">${leagues.map((l) => `<button type="button" class="${GM.league === l.key ? 'active' : ''}" onclick="gamesLeague('${l.key}')">${escapeHtml(l.label)}</button>`).join('')}</div>
@@ -172,7 +172,8 @@ function renderGames() {
   if (!GM.open) { row.innerHTML = ''; return; }
   const list = visibleGames();
   if (!list.length) {
-    const what = GM.league === 'all' ? '' : GM.league === 'mine' ? 'My Teams ' : `${leagueLabel(GM.league)} `;
+    const tab = (GAMES.tabs || []).find((t) => t.key === GM.league);
+    const what = GM.league === 'all' ? '' : GM.league === 'mine' ? 'My Teams ' : `${tab ? tab.label : leagueLabel(GM.league)} `;
     const when = GM.day === 'today' ? 'today' : GM.day === 'upcoming' ? 'in the next week' : 'finished since yesterday';
     const err = GAMES.status && GAMES.status.error && !GAMES.games.length ? ` Scores aren’t loading: ${escapeHtml(GAMES.status.error)}` : '';
     row.innerHTML = `<p class="muted gm-empty">No ${what}games ${when}.${err}</p>`;
