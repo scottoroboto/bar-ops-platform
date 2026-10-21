@@ -117,18 +117,16 @@ def test_manual_next_and_fix():
 
 def test_fix_turns_bust_into_live_turn():
     g = game.X01(['A'], start=61)
-    g.on_event(dart('T20'))   # 1
-    g.on_event(dart('S1'))    # 0, not a double: bust per the camera
+    g.on_event(dart('T20'))   # leaves 1: a bust under double-out
     assert g.phase == 'remove' and g.players[0].last_turn_bust
-    g.correct(1, 'MISS')      # actually missed the board
-    assert g.phase == 'throwing' and g.players[0].remaining == 1 or g.players[0].last_turn_bust
-    # remaining 1 under double-out is itself a bust, so the turn stays over
-    g2 = game.X01(['A'], start=62)
-    g2.on_event(dart('T20'))  # 2
-    g2.on_event(dart('S2'))   # 0 not double -> bust
-    assert g2.phase == 'remove'
-    g2.correct(1, 'D1')       # it was the double after all
-    assert g2.phase == 'won' and g2.winner == 0
+    g.correct(1, 'T19')       # it was actually a T19: 4 left, turn is live again
+    assert g.phase == 'throwing' and g.players[0].remaining == 4
+    assert g.state()['darts_left'] == 2 and g.state()['checkout'] == ['D2']
+    g.on_event(dart('D2'))
+    assert g.phase == 'won' and g.winner == 0
+    # and a win can be taken away
+    g.correct(1, 'S2')
+    assert g.phase == 'throwing' and g.winner is None and g.players[0].remaining == 2
 
 
 def test_state_shape():

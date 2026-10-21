@@ -358,19 +358,26 @@ class X01:
         d.source = 'manual'
         self._log('corrected', was=old, now=d.label)
         self.replay()
-        # a correction can turn a bust into a live turn or the reverse
-        if self.phase == PHASE_WON and self.winner is None:
-            self.phase = PHASE_REMOVE
-            self.finished = None
-        if self.phase != PHASE_WON and self.winner is not None:
+        # the phase follows the corrected history: a bust can become a
+        # live turn, a live turn a win, and the reverse
+        if self.winner is not None:
             self.phase = PHASE_WON
-            self.finished = time.time()
-            self.message = f'{self.players[self.winner].name} wins!'
-        elif self.phase == PHASE_THROWING:
-            self._after_dart() if self.turn else None
-        elif self.phase == PHASE_REMOVE:
+            self.finished = self.finished or time.time()
+            self.message = f'{self.players[self.winner].name} wins! Remove darts.'
+        elif self.turn:
             p = self.players[self.current]
-            self.message = ('Bust. ' if p.last_turn_bust else '') + f'Remove darts — next: {self._next_name()}'
+            counted = len([x for x in self.turn if not x.ignored])
+            if p.last_turn_bust or counted >= MAX_DARTS:
+                self.phase = PHASE_REMOVE
+                self.message = ('Bust. ' if p.last_turn_bust else '') + f'Remove darts — next: {self._next_name()}'
+            else:
+                self.phase = PHASE_THROWING
+                self.message = ''
+            self.finished = None
+        elif self.phase == PHASE_WON:
+            self.phase = PHASE_THROWING
+            self.finished = None
+            self.message = ''
         self.flash = f'Fixed: {old} → {d.label}'
         return True
 
