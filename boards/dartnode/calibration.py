@@ -34,6 +34,7 @@ class Calibration:
     H: np.ndarray | None = None
     H_inv: np.ndarray | None = None
     reprojection_mm: float | None = None   # RMS over the clicked points
+    residuals: dict[str, float] = field(default_factory=dict)  # per clicked point, mm
     image_size: tuple[int, int] | None = None  # (w, h) the clicks were made at
     # camera pose, from solve_pose()
     fx: float | None = None
@@ -63,7 +64,9 @@ class Calibration:
         self.H = H
         self.H_inv = np.linalg.inv(H)
         proj = self.image_to_board_many(src)
-        self.reprojection_mm = float(np.sqrt(np.mean(np.sum((proj - dst) ** 2, axis=1))))
+        errs = np.sqrt(np.sum((proj - dst) ** 2, axis=1))
+        self.residuals = {i: float(e) for i, e in zip(ids, errs)}
+        self.reprojection_mm = float(np.sqrt(np.mean(errs ** 2)))
         self.R = self.C = None
         if self.image_size:
             self.solve_pose()
@@ -164,6 +167,7 @@ class Calibration:
             'clicks': {k: [float(v[0]), float(v[1])] for k, v in self.clicks.items()},
             'H': self.H.tolist() if self.H is not None else None,
             'reprojection_mm': self.reprojection_mm,
+            'residuals': {k: round(v, 2) for k, v in self.residuals.items()},
             'image_size': list(self.image_size) if self.image_size else None,
             # informational; recomputed on load
             'fx': getattr(self, 'fx', None),

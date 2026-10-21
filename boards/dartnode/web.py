@@ -90,7 +90,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;b
 .seg{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:6px}
 #canvasWrap{position:relative}#calCanvas{width:100%;display:block;border-radius:6px;background:#000;cursor:crosshair;touch-action:none}
 .targets{max-height:60vh;overflow:auto}.targets div{padding:5px 8px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between}
-.targets div.cur{background:#223044}.targets div.done{color:var(--ok)}
+.targets div.cur{background:#223044}.targets div.done{color:var(--ok)}.targets div.bad{color:var(--bad)}
 .log{max-height:40vh;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px}
 """
 
@@ -150,12 +150,13 @@ CAL_HTML = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
 <div class="card"><div class="row" style="margin-bottom:8px"><b>Points</b><span class="sp"></span><button id="btnBack">&larr; Back</button><button id="btnUndo">Undo tap</button><button id="btnSkip">Skip &rarr;</button></div><div class="targets" id="targets"></div></div>
 </main>
 <script>
-const cam=@@CAM_JSON@@,$=id=>document.getElementById(id);let targets=[],clicks={},cur=0,img=new Image(),overlay=false;
+const cam=@@CAM_JSON@@,$=id=>document.getElementById(id);let targets=[],clicks={},cur=0,img=new Image(),overlay=false,resid={};
 async function j(u,o){const r=await fetch(u,o);return r.json()}
 const cv=$('calCanvas'),ctx=cv.getContext('2d');
 function load(){img.onload=()=>{cv.width=img.naturalWidth;cv.height=img.naturalHeight;draw()};img.src='/snap/'+encodeURIComponent(cam)+'.jpg?overlay='+(overlay?1:0)+'&t='+Date.now()}
 function draw(){ctx.drawImage(img,0,0);for(const [id,p] of Object.entries(clicks)){const t=targets.find(x=>x.id===id);ctx.strokeStyle=id===targets[cur]?.id?'#4ea1ff':'#ffa000';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(p[0]-8,p[1]);ctx.lineTo(p[0]+8,p[1]);ctx.moveTo(p[0],p[1]-8);ctx.lineTo(p[0],p[1]+8);ctx.stroke();ctx.fillStyle='#fff';ctx.font='12px sans-serif';ctx.fillText(t?t.short:id,p[0]+6,p[1]-6)}}
-function list(){$('targets').innerHTML=targets.map((t,i)=>`<div class="${i===cur?'cur':''} ${clicks[t.id]?'done':''}" data-i="${i}"><span>${t.name}</span><span>${clicks[t.id]?'✓':''}</span></div>`).join('');
+function badLimit(){const v=Object.values(resid).sort((a,b)=>a-b);if(!v.length)return 1e9;const med=v[Math.floor(v.length/2)];return Math.max(4,3*med)}
+function list(){const lim=badLimit();$('targets').innerHTML=targets.map((t,i)=>{const r=resid[t.id];const bad=r!==undefined&&r>lim;return `<div class="${i===cur?'cur':''} ${clicks[t.id]?(bad?'bad':'done'):''}" data-i="${i}"><span>${t.name}</span><span>${r!==undefined?r.toFixed(1)+' mm ':''}${clicks[t.id]?(bad?'✗ re-tap':'✓'):''}</span></div>`}).join('');
 document.querySelectorAll('#targets div').forEach(d=>d.onclick=()=>{cur=+d.dataset.i;list();draw()});const c=document.querySelector('#targets .cur');if(c)c.scrollIntoView({block:'nearest'})}
 cv.addEventListener('pointerdown',e=>{const r=cv.getBoundingClientRect();const x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;
 const t=targets[cur];if(!t)return;clicks[t.id]=[x,y];history.push(t.id);cur=Math.min(cur+1,targets.length-1);list();draw();if(Object.keys(clicks).length>=4)solve(false)});
@@ -165,9 +166,11 @@ let history=[];
 $('btnUndo').onclick=()=>{const id=history.pop();if(!id)return;delete clicks[id];cur=targets.findIndex(t=>t.id===id);list();draw();if(Object.keys(clicks).length>=4)solve(false)};$('btnSnap').onclick=load;
 $('btnClear').onclick=()=>{if(confirm('Clear all clicks for this camera?')){clicks={};cur=0;overlay=false;list();load()}};
 async function solve(save){const r=await j('/api/calibration/'+encodeURIComponent(cam),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clicks,save,image_size:[cv.width,cv.height]})});
-$('result').innerHTML=r.ready?`<span style="color:var(--ok)">Solved${save?' and saved':''}.</span> fit error <b>${r.reprojection_mm.toFixed(2)} mm</b> over ${r.clicks} points`+(r.posed?` · lens fx ${r.fx.toFixed(0)} px · camera at (${r.camera_mm.map(Math.round).join(', ')}) mm`:' · <span style="color:var(--warn)">pose not solved</span>'):'Need at least 4 points.';overlay=r.ready;load()}
+resid=r.residuals||{};list();
+const lim=badLimit(),nbad=Object.values(resid).filter(v=>v>lim).length;
+$('result').innerHTML=r.ready?`<span style="color:var(--ok)">Solved${save?' and saved':''}.</span> fit error <b>${r.reprojection_mm.toFixed(2)} mm</b> over ${r.clicks} points`+(nbad?` · <span style="color:var(--bad)">${nbad} point${nbad>1?'s':''} marked ✗ in the list look wrong — tap each one, then re-tap it on the picture (or Undo/Clear)</span>`:'')+(r.posed?` · lens fx ${r.fx.toFixed(0)} px · camera at (${r.camera_mm.map(Math.round).join(', ')}) mm`:' · <span style="color:var(--warn)">pose not solved</span>'):'Need at least 4 points.';overlay=r.ready;load()}
 $('btnSolve').onclick=()=>solve(true);
-(async()=>{targets=await j('/api/targets');const c=await j('/api/calibration/'+encodeURIComponent(cam));clicks=c.clicks||{};overlay=!!c.ready;list();load()})();
+(async()=>{targets=await j('/api/targets');const c=await j('/api/calibration/'+encodeURIComponent(cam));clicks=c.clicks||{};resid=c.residuals||{};overlay=!!c.ready;list();load()})();
 </script></body></html>"""
 
 
@@ -275,6 +278,7 @@ def make_handler(node: Node):
                     node.set_calibration(cal)
                 return self._json({'ready': ready, 'clicks': len(cal.clicks),
                                    'reprojection_mm': cal.reprojection_mm, 'posed': cal.has_pose,
+                                   'residuals': cal.residuals,
                                    'fx': cal.fx, 'camera_mm': cal.C.tolist() if cal.has_pose else None})
             if parts == ['harness', 'summary']:
                 return self._json(node.harness.summary())
