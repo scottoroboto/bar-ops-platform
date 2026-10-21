@@ -149,6 +149,7 @@ class Node:
             if frame is not None:
                 det.reset(frame, empty=True)
         self.fuser.dart_index = 0
+        self.fuser.in_board = []
         self.fuser._pending.clear()
 
     def set_calibration(self, cal: calib.Calibration) -> None:

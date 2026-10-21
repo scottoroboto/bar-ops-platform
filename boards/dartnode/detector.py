@@ -53,6 +53,7 @@ class DetectorConfig:
     min_dart_area: int = 150    # blob size limits for "one dart", in pixels
     max_dart_area: int = 60000  # generous: a dart close to the camera is big; a hand/arm is bigger
     min_aspect: float = 1.3     # a dart is elongated; a round shadow is not
+    max_dart_width_px: int = 60 # thicker than this is an arm, not a barrel
     tip_band_px: int = 3        # rows at the tip end averaged for the tip point
     stack_gap_px: int = 12      # blobs within this many px of the dart's axis are one dart
     tip_end: str = 'bottom'     # 'bottom' | 'top' | 'left' | 'right'
@@ -248,10 +249,13 @@ class DartDetector:
         ys, xs = np.nonzero(comp)
         bbox = (int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
 
-        if area > cfg.max_dart_area or (others > cfg.min_dart_area and others > area * 0.5):
-            # a hand, an arm, or two things at once: leave the reference alone
+        # Judge the CANDIDATE on its own merits. Other change in the frame
+        # (the thrower's reflection in a glossy surround, their shadow, an
+        # earlier dart's flight twitching) is normal at a real board and
+        # must not veto a perfectly good dart.
+        if area > cfg.max_dart_area:
             return Observation(self.camera_id, t, KIND_BLOCKED, area=changed, bbox=bbox,
-                               note='too much changed')
+                               note='too big for a dart')
         if area < cfg.min_dart_area:
             return Observation(self.camera_id, t, KIND_BLOCKED, area=changed, bbox=bbox,
                                note='too small for a dart')
@@ -262,6 +266,9 @@ class DartDetector:
         if aspect < cfg.min_aspect:
             return Observation(self.camera_id, t, KIND_BLOCKED, area=area, bbox=bbox,
                                note=f'not dart-shaped (aspect {aspect:.1f})')
+        if min(rw, rh) > cfg.max_dart_width_px:
+            return Observation(self.camera_id, t, KIND_BLOCKED, area=area, bbox=bbox,
+                               note=f'too thick for a dart ({min(rw, rh):.0f} px): an arm?')
 
         px, py = self._tip(xs, ys)
         vx, vy, x0, y0 = (float(v) for v in cv2.fitLine(
@@ -271,10 +278,14 @@ class DartDetector:
         if self.cal is not None:
             bx, by = self.cal.image_to_board(px, py)
             mmpp = self.cal.mm_per_px(px, py)
+            if math.hypot(bx, by) > cfg.roi_mm:
+                return Observation(self.camera_id, t, KIND_BLOCKED, area=area, bbox=bbox,
+                                   note=f'tip off the board ({math.hypot(bx, by):.0f} mm out)')
+        note = f'noisy: {others} px of other change' if others > area * 0.5 else ''
         self.ref = g
         self.darts_seen += 1
         return Observation(self.camera_id, t, KIND_DART, px=px, py=py, x=bx, y=by,
-                           area=area, bbox=bbox, mm_per_px=mmpp, axis=(x0, y0, vx, vy))
+                           area=area, bbox=bbox, mm_per_px=mmpp, axis=(x0, y0, vx, vy), note=note)
 
     def _stack(self, labels: np.ndarray, stats: np.ndarray, centroids: np.ndarray) -> tuple[list[int], int]:
         """One dart rarely comes out as one blob: a dark shaft vanishes
@@ -386,6 +397,13 @@ class Fuser:
         self._pending: list[Observation] = []
         self._opened = 0.0
         self.dart_index = 0
+        # darts standing in the board this turn (fused mm). A dart keeps
+        # settling into the sisal for seconds after it looks still, and
+        # that sag reads as a new dart-shaped change with the same tip:
+        # anything landing within dup_mm of one of these is that dart
+        # resettling, not a new one.
+        self.dup_mm = 5.0
+        self.in_board: list[tuple[float, float]] = []
 
     def set_calibration(self, cal: Calibration) -> None:
         self.cals[cal.camera_id] = cal
@@ -478,6 +496,7 @@ class Fuser:
         if kinds.count(KIND_TAKEOUT) >= max(1, (n_cams + 1) // 2) or \
                 (KIND_TAKEOUT in kinds and KIND_DART not in kinds):
             self.dart_index = 0
+            self.in_board = []
             return BoardEvent(KIND_TAKEOUT, t, confidence=kinds.count(KIND_TAKEOUT) / n_cams,
                               cameras=[o.to_dict() for o in obs])
 
@@ -496,6 +515,11 @@ class Fuser:
         else:
             fused, used, spread = self._fuse_2d(darts)
             method = '2d'
+        if any(math.hypot(fused[0] - x, fused[1] - y) <= self.dup_mm for x, y in self.in_board):
+            log.info('dart at (%.0f, %.0f) is one already in the board resettling; ignored',
+                     fused[0], fused[1])
+            return None
+        self.in_board.append((float(fused[0]), float(fused[1])))
         hit = board.score_at(float(fused[0]), float(fused[1]))
         self.dart_index += 1
         cams = []
