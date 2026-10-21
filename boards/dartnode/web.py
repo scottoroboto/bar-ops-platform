@@ -147,7 +147,7 @@ CAL_HTML = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
 <div class="card"><div id="canvasWrap"><canvas id="calCanvas"></canvas></div>
 <p class="mut">Tap the point named on the right as precisely as you can — zoom the page if you need to. The green rings appear once there are 4 points; they should sit exactly on the real wires. 8–12 points spread around the board is plenty. Points you can't see from this camera: just skip.</p>
 <div id="result" class="mut"></div></div>
-<div class="card"><div class="row" style="margin-bottom:8px"><b>Points</b><span class="sp"></span><button id="btnSkip">Skip &rarr;</button></div><div class="targets" id="targets"></div></div>
+<div class="card"><div class="row" style="margin-bottom:8px"><b>Points</b><span class="sp"></span><button id="btnBack">&larr; Back</button><button id="btnUndo">Undo tap</button><button id="btnSkip">Skip &rarr;</button></div><div class="targets" id="targets"></div></div>
 </main>
 <script>
 const cam=@@CAM_JSON@@,$=id=>document.getElementById(id);let targets=[],clicks={},cur=0,img=new Image(),overlay=false;
@@ -158,8 +158,11 @@ function draw(){ctx.drawImage(img,0,0);for(const [id,p] of Object.entries(clicks
 function list(){$('targets').innerHTML=targets.map((t,i)=>`<div class="${i===cur?'cur':''} ${clicks[t.id]?'done':''}" data-i="${i}"><span>${t.name}</span><span>${clicks[t.id]?'✓':''}</span></div>`).join('');
 document.querySelectorAll('#targets div').forEach(d=>d.onclick=()=>{cur=+d.dataset.i;list();draw()});const c=document.querySelector('#targets .cur');if(c)c.scrollIntoView({block:'nearest'})}
 cv.addEventListener('pointerdown',e=>{const r=cv.getBoundingClientRect();const x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;
-const t=targets[cur];if(!t)return;clicks[t.id]=[x,y];cur=Math.min(cur+1,targets.length-1);list();draw();if(Object.keys(clicks).length>=4)solve(false)});
-$('btnSkip').onclick=()=>{cur=(cur+1)%targets.length;list();draw()};$('btnSnap').onclick=load;
+const t=targets[cur];if(!t)return;clicks[t.id]=[x,y];history.push(t.id);cur=Math.min(cur+1,targets.length-1);list();draw();if(Object.keys(clicks).length>=4)solve(false)});
+$('btnSkip').onclick=()=>{cur=(cur+1)%targets.length;list();draw()};
+$('btnBack').onclick=()=>{cur=(cur-1+targets.length)%targets.length;list();draw()};
+let history=[];
+$('btnUndo').onclick=()=>{const id=history.pop();if(!id)return;delete clicks[id];cur=targets.findIndex(t=>t.id===id);list();draw();if(Object.keys(clicks).length>=4)solve(false)};$('btnSnap').onclick=load;
 $('btnClear').onclick=()=>{if(confirm('Clear all clicks for this camera?')){clicks={};cur=0;overlay=false;list();load()}};
 async function solve(save){const r=await j('/api/calibration/'+encodeURIComponent(cam),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clicks,save,image_size:[cv.width,cv.height]})});
 $('result').innerHTML=r.ready?`<span style="color:var(--ok)">Solved${save?' and saved':''}.</span> fit error <b>${r.reprojection_mm.toFixed(2)} mm</b> over ${r.clicks} points`+(r.posed?` · lens fx ${r.fx.toFixed(0)} px · camera at (${r.camera_mm.map(Math.round).join(', ')}) mm`:' · <span style="color:var(--warn)">pose not solved</span>'):'Need at least 4 points.';overlay=r.ready;load()}
