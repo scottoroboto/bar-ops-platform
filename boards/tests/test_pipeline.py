@@ -82,7 +82,7 @@ def throw_session(n_throws=60, seed=3, jitter_px=0.7):
                 # a camera that rejected the last dart has nothing to
                 # compare against and may stay silent; the others carry it
                 if obs is not None:
-                    assert obs.kind == detector.KIND_TAKEOUT, obs
+                    assert obs.kind in (detector.KIND_TAKEOUT, detector.KIND_REMOVED), obs
                     ev = fuser.add(obs)
                     if ev:
                         events.append(ev)
@@ -137,11 +137,42 @@ def test_blocked_hand_does_not_move_reference():
     assert det.state == 'idle'
 
 
+
+def test_pulling_one_dart_is_not_a_new_dart():
+    """Pulling a dart changes exactly the pixels it stood on -- a
+    dart-shaped change. It must read as a removal, even when the
+    'empty board' reference is wrong (taken with the dart in)."""
+    cams = synth.default_rig()
+    dets = [detector.DartDetector(c.id, _calibrated(c, 0.5)) for c in cams]
+    fuser = detector.Fuser([c.id for c in cams], cals={d.camera_id: d.cal for d in dets})
+    for c, d in zip(cams, dets):
+        d.reset(c.render([]), empty=True)
+    dart = synth.Dart(*board.polar_to_xy(103, 0))     # T20
+    evs = [fuser.add(o) for c, d in zip(cams, dets) if (o := _settle(d, c.render([dart]), 1.0))]
+    evs = [e for e in evs if e]
+    assert len(evs) == 1 and evs[0].kind == detector.KIND_DART and evs[0].hit.label == 'T20'
+    # someone taps "board is empty" with the dart still in: poisoned reference
+    for c, d in zip(cams, dets):
+        d.reset(c.render([dart]), empty=True)
+    fuser.in_board = [(evs[0].x, evs[0].y)]
+    # now pull it
+    evs = [fuser.add(o) for c, d in zip(cams, dets) if (o := _settle(d, c.render([]), 5.0))]
+    evs = [e for e in evs if e]
+    assert len(evs) == 1 and evs[0].kind == detector.KIND_TAKEOUT, evs
+    assert fuser.in_board == [] and fuser.dart_index == 0
+    # and the next dart scores normally
+    dart2 = synth.Dart(*board.polar_to_xy(166, 180))  # D3
+    evs = [fuser.add(o) for c, d in zip(cams, dets) if (o := _settle(d, c.render([dart2]), 9.0))]
+    evs = [e for e in evs if e]
+    assert len(evs) == 1 and evs[0].kind == detector.KIND_DART and evs[0].hit.label == 'D3', evs
+
+
 if __name__ == '__main__':
     test_scoring_rings()
     test_homography_roundtrip()
     test_pose_recovery()
     test_blocked_hand_does_not_move_reference()
+    test_pulling_one_dart_is_not_a_new_dart()
     res = throw_session()
     right = sum(1 for truth, ev, _ in res if ev.hit.label == truth.label)
     errs = sorted(e for _, _, e in res)

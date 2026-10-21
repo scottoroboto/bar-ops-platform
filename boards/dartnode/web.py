@@ -125,7 +125,7 @@ if(s.publisher.enabled)$('up').textContent+=' · cloud sent '+s.publisher.sent+(
 async function events(){const ev=await j('/api/events?since='+since);for(const e of ev){since=e.id;const d=new Date(e.t*1000).toLocaleTimeString();let line;
 if(e.kind==='dart'){line=`${d}  DART ${e.dart_index}: <b>${e.label||'?'}</b>  (${(e.x||0).toFixed(0)}, ${(e.y||0).toFixed(0)}) conf ${e.confidence} spread ${e.spread_mm} mm ${e.method}`;lastDart=e;$('last').textContent=e.label||'?';
 $('lastMeta').textContent=`dart ${e.dart_index} · ${e.method} · conf ${e.confidence} · spread ${e.spread_mm} mm · #${e.id}`;$('verdict').style.display='block'}
-else if(e.kind==='takeout'){line=`${d}  TAKEOUT`;$('verdict').style.display='none'}else{line=`${d}  ${e.kind} ${e.cameras.map(c=>c.camera_id+':'+c.kind+(c.note?'('+c.note+')':'')).join(' ')}`}
+else if(e.kind==='takeout'){line=`${d}  TAKEOUT`;$('verdict').style.display='none'}else if(e.kind==='removed'){line=`${d}  removed one dart, ${e.dart_index} left`}else{line=`${d}  ${e.kind} ${e.cameras.map(c=>c.camera_id+':'+c.kind+(c.note?'('+c.note+')':'')).join(' ')}`}
 const div=document.createElement('div');div.innerHTML=line;$('log').prepend(div)}
 try{const t=await j('/api/sim/truth');if(t.truth)$('simTruth').innerHTML='<div class="mut">Simulator truth</div><div>'+t.truth.join(' · ')+'</div>'}catch(e){}}
 async function hsum(){const h=await j('/api/harness/summary');$('hsum').innerHTML=h.n?`<b>${h.correct}/${h.n}</b> right (${(h.rate*100).toFixed(1)}%)`:'no verdicts yet'}

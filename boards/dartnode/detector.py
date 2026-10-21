@@ -39,6 +39,7 @@ log = logging.getLogger(__name__)
 KIND_DART = 'dart'
 KIND_TAKEOUT = 'takeout'
 KIND_BLOCKED = 'blocked'
+KIND_REMOVED = 'removed'    # one dart pulled (the last one pulled becomes a takeout)
 
 
 @dataclass
@@ -54,6 +55,8 @@ class DetectorConfig:
     max_dart_area: int = 60000  # generous: a dart close to the camera is big; a hand/arm is bigger
     min_aspect: float = 1.3     # a dart is elongated; a round shadow is not
     max_dart_width_px: int = 60 # thicker than this is an arm, not a barrel
+    remove_median_px: int = 31  # median filter wider than a barrel, for added-vs-removed
+    remove_ratio: float = 1.15  # "before" must out-detail "after" by this to count as removed
     tip_band_px: int = 3        # rows at the tip end averaged for the tip point
     stack_gap_px: int = 12      # blobs within this many px of the dart's axis are one dart
     tip_end: str = 'bottom'     # 'bottom' | 'top' | 'left' | 'right'
@@ -112,6 +115,7 @@ class DartDetector:
         self.last_mask: np.ndarray | None = None  # for the debug view
         self.last_obs: Observation | None = None
         self.darts_seen = 0
+        self._dart_areas: list[int] = []   # pixel size of each dart seen this turn
 
     # -- public ---------------------------------------------------------
     def set_calibration(self, cal: Calibration | None) -> None:
@@ -126,6 +130,7 @@ class DartDetector:
         if empty:
             self.empty_ref = g
             self.darts_seen = 0
+            self._dart_areas = []
         self._prev = g
         self._analysed = None
         self._rejected_at = None
@@ -238,6 +243,7 @@ class DartDetector:
                 self.ref = g
                 self.empty_ref = g      # refresh against slow lighting drift
                 self.darts_seen = 0
+                self._dart_areas = []
                 return Observation(self.camera_id, t, KIND_TAKEOUT, area=changed)
 
         n, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
@@ -281,11 +287,53 @@ class DartDetector:
             if math.hypot(bx, by) > cfg.roi_mm:
                 return Observation(self.camera_id, t, KIND_BLOCKED, area=area, bbox=bbox,
                                    note=f'tip off the board ({math.hypot(bx, by):.0f} mm out)')
+
+        # Added or removed? Pulling a dart changes exactly the pixels it
+        # stood on, which is just as dart-shaped as it arriving. Whichever
+        # frame has the thin object in it is the one with the dart.
+        before, after = self._thinness(self.ref, comp, bbox), self._thinness(g, comp, bbox)
+        if before > after * cfg.remove_ratio:
+            self.ref = g
+            # far more change than any one dart made = they all came out at once
+            typical = float(np.median(self._dart_areas)) if self._dart_areas else float(area)
+            if self.darts_seen >= 2 and changed >= 1.7 * typical:
+                self.empty_ref = g
+                self.darts_seen = 0
+                self._dart_areas = []
+                return Observation(self.camera_id, t, KIND_TAKEOUT, area=changed,
+                                   note=f'all pulled; thin {before:.1f} -> {after:.1f}')
+            self.darts_seen = max(0, self.darts_seen - 1)
+            if self._dart_areas:
+                self._dart_areas.pop()
+            if self.darts_seen == 0:
+                self.empty_ref = g      # that was the last one: this IS the empty board
+            return Observation(self.camera_id, t, KIND_REMOVED, px=px, py=py, x=bx, y=by,
+                               area=area, bbox=bbox, mm_per_px=mmpp,
+                               note=f'thin {before:.1f} -> {after:.1f}')
         note = f'noisy: {others} px of other change' if others > area * 0.5 else ''
+        if after < before * cfg.remove_ratio:
+            note = (note + '; ' if note else '') + f'add/remove unclear ({before:.1f} vs {after:.1f})'
         self.ref = g
         self.darts_seen += 1
+        self._dart_areas.append(area)
         return Observation(self.camera_id, t, KIND_DART, px=px, py=py, x=bx, y=by,
                            area=area, bbox=bbox, mm_per_px=mmpp, axis=(x0, y0, vx, vy), note=note)
+
+    def _thinness(self, img: np.ndarray, comp: np.ndarray, bbox) -> float:
+        """How much fine detail sits inside the changed region: a dart is
+        thin, so a wide median filter wipes it out and leaves a big
+        difference; the board underneath (broad segments, thin wires)
+        leaves much less. Computed on a crop around the region only."""
+        x, y, w, h = bbox
+        pad = 12
+        y0, y1 = max(0, y - pad), min(img.shape[0], y + h + pad)
+        x0, x1 = max(0, x - pad), min(img.shape[1], x + w + pad)
+        crop = img[y0:y1, x0:x1]
+        m = comp[y0:y1, x0:x1]
+        if crop.size == 0 or not m.any():
+            return 0.0
+        med = cv2.medianBlur(crop, self.cfg.remove_median_px)
+        return float(np.mean(np.abs(crop.astype(np.int16) - med.astype(np.int16))[m]))
 
     def _stack(self, labels: np.ndarray, stats: np.ndarray, centroids: np.ndarray) -> tuple[list[int], int]:
         """One dart rarely comes out as one blob: a dark shaft vanishes
@@ -499,6 +547,25 @@ class Fuser:
             self.in_board = []
             return BoardEvent(KIND_TAKEOUT, t, confidence=kinds.count(KIND_TAKEOUT) / n_cams,
                               cameras=[o.to_dict() for o in obs])
+
+        removed = [o for o in obs if o.kind == KIND_REMOVED]
+        if removed and KIND_DART not in kinds:
+            # drop the nearest dart we know of; the last one out is a takeout
+            pos = [(o.x, o.y) for o in removed if o.x is not None]
+            if self.in_board:
+                if pos:
+                    rx, ry = np.mean(np.array(pos), axis=0)
+                    k = int(np.argmin([math.hypot(x - rx, y - ry) for x, y in self.in_board]))
+                else:
+                    k = len(self.in_board) - 1
+                self.in_board.pop(k)
+            if not self.in_board:
+                self.dart_index = 0
+                return BoardEvent(KIND_TAKEOUT, t, confidence=len(removed) / n_cams,
+                                  cameras=[o.to_dict() for o in obs])
+            self.dart_index = max(0, self.dart_index - 1)
+            return BoardEvent(KIND_REMOVED, t, dart_index=self.dart_index,
+                              confidence=len(removed) / n_cams, cameras=[o.to_dict() for o in obs])
 
         darts = [o for o in obs if o.kind == KIND_DART and o.x is not None]
         if not darts:

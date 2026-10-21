@@ -134,6 +134,8 @@ class Node:
                                 {c: det.last_mask for c, det in self.detectors.items()})
         elif ev.kind == KIND_TAKEOUT:
             log.info('TAKEOUT')
+        elif ev.kind == 'removed':
+            log.info('REMOVED one dart, %d left', ev.dart_index)
         else:
             # rejected scenes are the interesting ones while tuning: keep the frames
             log.info('BLOCKED %s', '; '.join(f"{c['camera_id']}: {c['note']}" for c in d['cameras']))
@@ -144,6 +146,7 @@ class Node:
     # -- control from the UI --------------------------------------------
     def reset_empty(self) -> None:
         """The board has no darts in it right now: take new references."""
+        log.info('RESET: board marked empty from the UI')
         for cid, det in self.detectors.items():
             frame, _ = self.sources[cid].latest()
             if frame is not None:
