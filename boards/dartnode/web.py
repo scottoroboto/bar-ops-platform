@@ -80,7 +80,7 @@ header{display:flex;gap:14px;align-items:center;padding:10px 16px;border-bottom:
 header h1{font-size:17px;margin:0}header a{color:var(--acc);text-decoration:none}.sp{flex:1}
 main{padding:14px;display:grid;gap:14px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
 .cams{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:12px}.cams img{width:100%;border-radius:6px;background:#000;display:block}
-.cam h3{margin:0 0 6px;font-size:14px;display:flex;gap:8px;align-items:center}.badge{font-size:11px;padding:2px 7px;border-radius:99px;background:#223044;color:var(--mut)}
+.cam h3{margin:0 0 6px;font-size:14px;display:flex;gap:8px;align-items:center}.cam h3 a,.cam h3 a:visited{color:#04111f;background:var(--acc);padding:5px 12px;border-radius:8px;text-decoration:none;font-weight:600}.badge{font-size:11px;padding:2px 7px;border-radius:99px;background:#223044;color:var(--mut)}
 .badge.ok{background:#17382b;color:var(--ok)}.badge.bad{background:#3d1f1f;color:var(--bad)}.badge.warn{background:#3b3220;color:var(--warn)}
 button{background:#223044;color:var(--fg);border:1px solid #2f4058;border-radius:8px;padding:8px 12px;font:inherit;cursor:pointer}button:hover{background:#2a3b52}
 button.primary{background:var(--acc);border-color:var(--acc);color:#04111f;font-weight:600}button.danger{border-color:#6b2f2f;color:var(--bad)}
