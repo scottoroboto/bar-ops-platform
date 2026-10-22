@@ -135,6 +135,8 @@ body.staff {
 .staff button.hold-danger {
   position: relative;
   overflow: hidden;
+  touch-action: none; /* a held finger never turns into a scroll, which cancels the hold */
+  -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
   background: var(--off-bg);
   border-color: #8a4436;
   color: #FFD9D2;

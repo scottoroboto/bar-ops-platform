@@ -437,3 +437,6 @@ document.addEventListener('pointerdown', (e) => {
   if (btn) { e.preventDefault(); e.stopPropagation(); holdStart(btn); }
 });
 ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => document.addEventListener(ev, () => holdCancel()));
+// A long press on a touchscreen (the bar Chromebook) is a right-click: Chrome's
+// menu popped up mid-hold and cancelled it (Scotto, 2026-10-22).
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('.hold-danger')) e.preventDefault(); });

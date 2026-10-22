@@ -828,6 +828,9 @@ document.addEventListener('pointerdown', (e) => {
 ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => {
   document.addEventListener(ev, () => holdCancel());
 });
+// A long press on a touchscreen (the bar Chromebook) is a right-click: Chrome's
+// menu popped up mid-hold and cancelled it (Scotto, 2026-10-22).
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('.hold-danger')) e.preventDefault(); });
 
 // =======================================================================
 // TV Remote (screens/06-staff-remote-tv.html) -- takes over the entire
