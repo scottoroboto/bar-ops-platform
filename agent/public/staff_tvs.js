@@ -170,7 +170,9 @@ function renderAttention() {
   if (!box) return;
   if (!ATTENTION.length) { box.innerHTML = ''; return; }
   box.innerHTML = `<div class="card attention-card">
-    <div class="attention-title">${ATTENTION.length === 1 ? 'A TV isn\'t responding' : `${ATTENTION.length} TVs aren\'t responding`} — please check</div>
+    <div class="attention-title"><span>${ATTENTION.length === 1 ? 'A TV isn\'t responding' : `${ATTENTION.length} TVs aren\'t responding`} — please check</span>
+      ${ATTENTION.length > 1 ? (ATTENTION_BUSY.__all ? `<span class="muted">Clearing ${ATTENTION_BUSY.__all}…</span>` : `<button class="small" onclick="attentionClearMenu('__all')">Clear all…</button>`) : ''}</div>
+    ${ATTENTION_MENU === '__all' && !ATTENTION_BUSY.__all ? `<div class="attention-menu"><span class="muted">Quiet all ${ATTENTION.length} TVs for:</span> ${CLEAR_CHOICES.map(([d, l]) => `<button class="small" onclick="attentionClearAll('${d}')">${l}</button>`).join('')}</div>` : ''}
     ${ATTENTION.map((a) => {
       const busy = ATTENTION_BUSY[a.systemId];
       const menuOpen = ATTENTION_MENU === a.systemId;
@@ -217,6 +219,25 @@ async function attentionClear(systemId, duration) {
   } finally {
     delete ATTENTION_BUSY[systemId]; renderAttention();
   }
+}
+
+// Clear all (Scotto, 2026-10-22: a dozen TVs that won't wake meant a
+// dozen Clear taps). One at a time through the same per-TV route.
+async function attentionClearAll(duration) {
+  const ids = ATTENTION.map((a) => a.systemId);
+  ATTENTION_MENU = null;
+  let done = 0;
+  let failed = 0;
+  for (const id of ids) {
+    ATTENTION_BUSY.__all = `${done + 1} of ${ids.length}`; renderAttention();
+    try {
+      const r = await api(`/api/attention/${id}/clear`, { method: 'POST', body: JSON.stringify({ duration }) });
+      if (r.attention) ATTENTION = r.attention;
+    } catch (e) { failed += 1; }
+    done += 1;
+  }
+  delete ATTENTION_BUSY.__all; renderAttention();
+  if (failed) flashAttention(`${failed} of ${ids.length} couldn't be cleared. Try again in a moment.`);
 }
 
 async function attentionServiceCall(systemId) {
