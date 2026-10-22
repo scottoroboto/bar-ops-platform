@@ -191,8 +191,11 @@ function routineCard(r) {
       <div class="lt-t on"><div class="k">On</div><div class="v">${escapeHtml(on.big)}</div><div class="r">${escapeHtml(on.small || ' ')}</div></div>
       <div class="lt-t off"><div class="k">Off</div><div class="v">${escapeHtml(off.big)}</div><div class="r">${escapeHtml(off.small || ' ')}</div></div>
     </div>
-    <div class="next"><span>${next}</span><span class="sp"></span>
-      ${r.enabled && r.count ? `<button class="lt-mini on" data-act="run-on" data-id="${r.id}">Run ON</button><button class="lt-mini off hold-danger" data-hold-action="run-off" data-id="${r.id}"><span class="hold-fill"></span><span class="hold-label">Run OFF</span></button>` : ''}</div>
+    <div class="next"><span>${next}</span></div>
+    ${r.count ? `<div class="lt-run">
+      <button class="lt-mini on" data-act="run-on" data-id="${r.id}">ON</button>
+      <button class="lt-mini off hold-danger" data-hold-action="run-off" data-id="${r.id}"><span class="hold-fill"></span><span class="hold-label">OFF <span class="hold-chip">HOLD</span></span></button>
+    </div>` : ''}
   </div>`;
 }
 
@@ -298,7 +301,7 @@ function renderSheet() {
   document.getElementById('ltSheet').innerHTML = `
   <div class="lt-scrim" data-act="scrim"><div class="lt-sheet" data-act="sheet">
     <div class="h"><span class="t">${escapeHtml(p.name)}</span>${p.tag ? `<span class="lt-chip">${escapeHtml(p.tag)}</span>` : ''}<span class="lt-chip">${escapeHtml(p.group)}</span>${chip}</div>
-    <div class="now">${following} A tap on ON or OFF holds until the next scheduled time.</div>
+    <div class="now">${following} A tap on ON or OFF, here or on a routine, holds until the next scheduled time.</div>
     <div class="lt-big">
       <button class="on" data-act="sheet-on">TURN ON</button>
       <button class="off" data-act="sheet-off">TURN OFF</button>

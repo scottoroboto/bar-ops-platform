@@ -1207,6 +1207,10 @@ body.staff {
 .lt-t.off { background: rgba(255,59,87,0.06); border: 1px solid #5A2230; } .lt-t.off .k { color: #FF8A9A; }
 .lt-rt .next { white-space: nowrap; display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--muted-strong); }
 .lt-rt .next b { color: #FFD66B; }
+/* A routine's own ON / OFF (Scotto, 2026-10-22: pool tables on before 10:45). */
+.lt-rt .next span { overflow: hidden; text-overflow: ellipsis; }
+.lt-run { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.staff .lt-run button.lt-mini { width: 100%; height: 40px; font-size: 13px; }
 .staff button.lt-mini { position: relative; overflow: hidden; border-radius: 8px; padding: 0 12px; height: 32px; min-height: 0; width: auto; margin: 0; font-size: 12px; font-weight: 800; letter-spacing: .04em; white-space: nowrap; background: transparent; border: 1px solid var(--border-strong); color: var(--muted-strong); font-family: inherit; box-shadow: none; }
 .staff button.lt-mini.on { color: var(--neon-green); border-color: #1E7A45; }
 .staff button.lt-mini.off { color: #FFB3BC; border-color: #7A2430; }
