@@ -146,9 +146,9 @@ async function renderMine() {
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
         <h2 style="margin:0;">Who's working</h2>
-        <select id="teamSchedule" style="display:none; width:auto; margin:0;" onchange="loadTeamWeek(this.value)"></select>
+        <select id="teamLocation" style="display:none; width:auto; margin:0;" onchange="loadTeamWeek(this.value)"></select>
       </div>
-      <p class="muted" style="margin:4px 0 0; font-size:12px;">Everyone on your schedule this week, so you know who to call if someone's running late or you need to leave early.</p>
+      <p class="muted" style="margin:4px 0 0; font-size:12px;">Everyone working at your bar this week, Bar and Kitchen, so you know who should be there and who to call if someone's running late.</p>
       <div id="teamWeek" style="margin-top:10px;"><p class="muted">Loading…</p></div>
     </div>
     <div class="card">
@@ -198,28 +198,35 @@ async function loadMyUpcoming() {
 function shiftMyWeek(days) { WEEK_START = addDaysISO(WEEK_START, days); loadMyWeek(); loadTeamWeek(); }
 function goToCurrentMyWeek() { WEEK_START = startOfWeekISO(todayISO()); loadMyWeek(); loadTeamWeek(); }
 
-// Who's working (2026-10-20): every published shift that week
-// on a schedule this person works on. Follows the Prev/Next above.
-let TEAM_SCHEDULE_ID = null;
-async function loadTeamWeek(scheduleId) {
-  if (scheduleId) TEAM_SCHEDULE_ID = scheduleId;
+// Who's working (2026-10-20; whole bar, Bar and Kitchen, 2026-10-22):
+// every published shift that week at a bar this person works at.
+// Follows the Prev/Next above.
+let TEAM_LOCATION_ID = null;
+async function loadTeamWeek(locationId) {
+  if (locationId) TEAM_LOCATION_ID = locationId;
   const el = document.getElementById('teamWeek');
   if (!el) return;
   try {
-    const r = await api(`/api/scheduling/team-week?weekStart=${WEEK_START}${TEAM_SCHEDULE_ID ? `&scheduleId=${encodeURIComponent(TEAM_SCHEDULE_ID)}` : ''}`);
-    TEAM_SCHEDULE_ID = r.scheduleId;
-    const sel = document.getElementById('teamSchedule');
-    sel.style.display = r.schedules.length > 1 ? '' : 'none';
-    sel.innerHTML = r.schedules.map(x => `<option value="${x.id}" ${String(x.id) === String(r.scheduleId) ? 'selected' : ''}>${escapeHtml(shortLoc(x.location_name))} ${escapeHtml(x.name)}</option>`).join('');
-    if (!r.schedules.length) { el.innerHTML = '<p class="muted">Once you\'re on a schedule, everyone working it shows here.</p>'; return; }
-    const one = r.schedules.find(x => String(x.id) === String(r.scheduleId));
-    const head = r.schedules.length === 1 && one ? `<p class="muted" style="margin:0 0 6px; font-size:12px;"><span class="loc-tag">${escapeHtml(shortLoc(one.location_name))}</span> ${escapeHtml(one.name)}</p>` : '';
+    const r = await api(`/api/scheduling/team-week?weekStart=${WEEK_START}${TEAM_LOCATION_ID ? `&locationId=${encodeURIComponent(TEAM_LOCATION_ID)}` : ''}`);
+    TEAM_LOCATION_ID = r.locationId;
+    const sel = document.getElementById('teamLocation');
+    sel.style.display = r.locations.length > 1 ? '' : 'none';
+    sel.innerHTML = r.locations.map(x => `<option value="${x.id}" ${String(x.id) === String(r.locationId) ? 'selected' : ''}>${escapeHtml(x.name)}</option>`).join('');
+    if (!r.locations.length) { el.innerHTML = '<p class="muted">Once you\'re on a schedule, everyone working at your bar shows here.</p>'; return; }
+    const bar = r.locations.find(x => String(x.id) === String(r.locationId));
+    const head = r.locations.length === 1 && bar ? `<p class="muted" style="margin:0 0 6px; font-size:12px;"><span class="loc-tag">${escapeHtml(shortLoc(bar.name))}</span> Bar and Kitchen</p>` : '';
+    // "T1 — Kitchen" -> "Kitchen": the bar is already picked above.
+    const side = (sc) => String(sc.name).replace(/^.*?[—–-]\s*/, '') || sc.name;
+    const hm = (t) => { const [h, m] = String(t).split(':').map(Number); return `${(h % 12) || 12}${m ? ':' + String(m).padStart(2, '0') : ''}${h < 12 ? 'a' : 'p'}`; };
+    const person = (x) => `<div><div${x.is_me ? ' style="color:var(--accent, #2e6ff2);"' : ''}><b>${escapeHtml(x.person_name)}</b>${x.is_me ? ' (you)' : ''}</div><div class="muted" style="font-size:12.5px;">${hm(x.start_time)}–${hm(x.end_time)}${x.position_name ? ' · ' + escapeHtml(x.position_name) : ''}</div></div>`;
     el.innerHTML = head + weekDatesFrom(WEEK_START).map(date => {
       const day = r.shifts.filter(x => x.shift_date === date);
-      const hm = (t) => { const [h, m] = String(t).split(':').map(Number); return `${(h % 12) || 12}${m ? ':' + String(m).padStart(2, '0') : ''}${h < 12 ? 'a' : 'p'}`; };
+      const groups = r.schedules.map(sc => ({ sc, list: day.filter(x => String(x.schedule_id) === String(sc.id)) })).filter(g => g.list.length);
+      const body = !groups.length ? '<span class="muted">Nobody scheduled</span>'
+        : groups.map(g => `<div style="display:grid; gap:6px;">${r.schedules.length > 1 ? `<div class="muted" style="font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;">${escapeHtml(side(g.sc))}</div>` : ''}${g.list.map(person).join('')}</div>`).join('');
       return `<div class="list-row" style="align-items:flex-start; gap:10px;">
         <div style="width:84px; flex-shrink:0;"><b>${dayLabel(date).replace(/,.*/, '')}</b><div class="muted" style="font-size:12px;">${dayLabel(date).replace(/^[^,]*,\s*/, '')}</div></div>
-        <div style="flex:1; min-width:0; display:grid; gap:6px;">${day.length ? day.map(x => `<div><div${x.is_me ? ' style="color:var(--accent, #2e6ff2);"' : ''}><b>${escapeHtml(x.person_name)}</b>${x.is_me ? ' (you)' : ''}</div><div class="muted" style="font-size:12.5px;">${hm(x.start_time)}–${hm(x.end_time)}${x.position_name ? ' · ' + escapeHtml(x.position_name) : ''}</div></div>`).join('') : '<span class="muted">Nobody scheduled</span>'}</div>
+        <div style="flex:1; min-width:0; display:grid; gap:10px;">${body}</div>
       </div>`;
     }).join('');
   } catch (e) {

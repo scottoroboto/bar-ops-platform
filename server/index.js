@@ -5131,7 +5131,7 @@ app.post('/api/scheduling/late-alerts', auth.requireSession('light'), async (req
 app.get('/api/scheduling/team-week', auth.requireSession('light'), async (req, res) => {
   if (!(await requireSelfServiceSchedulingAccess(req, res))) return;
   if (!req.query.weekStart) return res.status(400).json({ error: 'weekStart is required.' });
-  res.json(await scheduling.getTeamWeek(req.person.id, req.query.weekStart, req.query.scheduleId));
+  res.json(await scheduling.getTeamWeek(req.person.id, req.query.weekStart, req.query.locationId));
 });
 app.get('/api/scheduling/my-shifts/upcoming', auth.requireSession('light'), async (req, res) => {
   if (!(await requireSelfServiceSchedulingAccess(req, res))) return;

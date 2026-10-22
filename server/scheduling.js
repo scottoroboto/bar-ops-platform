@@ -965,27 +965,34 @@ async function getMyAllShiftsForWeek(personId, weekStartISO) {
 
 // Who's working (Scotto, 2026-10-20: a bartender asked to see every
 // bartender at her bar, so she knows who to call when someone's late or
-// she needs to leave early). The whole published week for a schedule
-// this employee works on: any schedule she has a shift on within 60
-// days either side of today. Names and times only; drafts never show.
-async function getTeamWeek(personId, weekStartISO, scheduleId) {
+// she needs to leave early; 2026-10-22: the whole bar, Bar and Kitchen
+// both, so a bartender can see which cook should be there and vice
+// versa). The published week for every active schedule at a bar this
+// employee works at: a bar where she has a shift within 60 days either
+// side of today, or a schedule there she's set up for. Names and times
+// only; drafts (shift_drafts) never show.
+async function getTeamWeek(personId, weekStartISO, locationId) {
   const dates = weekDateRange(weekStartISO);
   return withServiceClient(async (client) => {
-    const { rows: mine } = await client.query(
-      `SELECT s.id, s.name, l.name AS location_name, count(*)::int AS n
-         FROM shifts sh JOIN schedules s ON s.id = sh.schedule_id JOIN locations l ON l.id = s.location_id
-        WHERE sh.person_id = $1 AND sh.status != 'cancelled' AND s.active = true
-          AND sh.shift_date BETWEEN (CURRENT_DATE - 60) AND (CURRENT_DATE + 60)
-        GROUP BY s.id, s.name, l.name ORDER BY n DESC, l.name, s.name`, [personId]);
-    const schedules = mine.map(({ id, name, location_name }) => ({ id, name, location_name }));
-    const pick = schedules.find((x) => String(x.id) === String(scheduleId)) || schedules[0] || null;
-    if (!pick) return { schedules, scheduleId: null, shifts: [] };
+    const { rows: bars } = await client.query(
+      `SELECT l.id, l.name, count(sh.id)::int AS n
+         FROM schedules s JOIN locations l ON l.id = s.location_id
+         LEFT JOIN shifts sh ON sh.schedule_id = s.id AND sh.person_id = $1 AND sh.status != 'cancelled'
+              AND sh.shift_date BETWEEN (CURRENT_DATE - 60) AND (CURRENT_DATE + 60)
+        WHERE s.active = true
+          AND (sh.id IS NOT NULL OR EXISTS (SELECT 1 FROM employee_schedules es WHERE es.person_id = $1 AND es.schedule_id = s.id))
+        GROUP BY l.id, l.name ORDER BY n DESC, l.name`, [personId]);
+    const locations = bars.map(({ id, name }) => ({ id, name }));
+    const pick = locations.find((x) => String(x.id) === String(locationId)) || locations[0] || null;
+    if (!pick) return { locations, locationId: null, schedules: [], shifts: [] };
+    const { rows: schedules } = await client.query(
+      'SELECT id, name FROM schedules WHERE location_id = $1 AND active = true ORDER BY name', [pick.id]);
     const { rows } = await client.query(
-      `SELECT sh.shift_date, sh.start_time, sh.end_time, p.name AS person_name, pos.name AS position_name, (sh.person_id = $3) AS is_me
+      `SELECT sh.shift_date, sh.start_time, sh.end_time, sh.schedule_id, p.name AS person_name, pos.name AS position_name, (sh.person_id = $3) AS is_me
          FROM shifts sh JOIN people p ON p.id = sh.person_id JOIN positions pos ON pos.id = sh.position_id
-        WHERE sh.schedule_id = $1 AND sh.status != 'cancelled' AND sh.shift_date = ANY($2)
-        ORDER BY sh.shift_date, sh.start_time, p.name`, [pick.id, dates, personId]);
-    return { schedules, scheduleId: pick.id, shifts: rows.map((r) => ({ ...r, shift_date: toDateStr(r.shift_date) })) };
+        WHERE sh.schedule_id = ANY($1::uuid[]) AND sh.status != 'cancelled' AND sh.shift_date = ANY($2)
+        ORDER BY sh.shift_date, sh.start_time, p.name`, [schedules.map((x) => x.id), dates, personId]);
+    return { locations, locationId: pick.id, schedules, shifts: rows.map((r) => ({ ...r, shift_date: toDateStr(r.shift_date) })) };
   });
 }
 
