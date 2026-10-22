@@ -1190,11 +1190,12 @@ body.staff {
 .lt-sun { white-space: nowrap; display: flex; gap: 14px; align-items: center; background: #14121A; border: 1px solid var(--border-mid); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px; color: var(--muted-strong); }
 .lt-sun b { color: #FFB45C; font-size: 15px; }
 .lt-sun .dusk b { color: var(--neon-purple); }
-.lt-rscroll { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.lt-rt { background: var(--card-alt); border: 1px solid var(--border-mid); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.lt-rscroll { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+/* Routine cards: a cyan stripe down the left so each one stands apart (Scotto picked B, 2026-10-22). */
+.lt-rt { background: #221E18; border: 1.5px solid #4A4033; border-left: 5px solid var(--neon-cyan); border-radius: 12px; padding: 10px 12px; cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,.45); }
 .lt-rt.sel { border-color: var(--neon-magenta); box-shadow: 0 0 0 1px var(--neon-magenta) inset, 0 0 16px rgba(255,59,212,0.3); background: var(--neon-magenta-bg); }
 .lt-rt.paused { opacity: .55; }
-.lt-rt .top { display: flex; align-items: center; gap: 8px; }
+.lt-rt .top { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border-strong); }
 .lt-rt .nm { font-size: 17px; font-weight: 800; color: #fff; flex: 1; }
 .lt-rt .cnt { font-size: 12px; font-weight: 700; color: var(--neon-cyan); }
 .lt-rt .days { font-size: 12px; color: var(--muted-strong); margin-top: 2px; }
