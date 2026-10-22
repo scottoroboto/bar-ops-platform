@@ -729,7 +729,12 @@ async function publishMyDrafts(overrideReasons, personId) {
   if (conflictsByDraft.length > 0) return { success: false, conflicts: conflictsByDraft };
 
   return withServiceClient(async (client) => {
-    const { rows: freshDrafts } = await client.query('SELECT * FROM shift_drafts WHERE created_by = $1', [personId]);
+    // Claim the drafts first, in this transaction (Oct 2026: a second tap
+    // on Publish while the first was still sending texts read the same
+    // drafts and published every shift twice). A second publish now waits
+    // on these rows and, once this one commits, finds nothing left.
+    const { rows: freshDrafts } = await client.query('DELETE FROM shift_drafts WHERE created_by = $1 RETURNING *', [personId]);
+    if (!freshDrafts.length) return { success: true, published: 0, notifiedEmployees: 0 };
     const notifyByPerson = {};
     for (const d of freshDrafts) {
       let finalShiftId;
@@ -778,7 +783,6 @@ async function publishMyDrafts(overrideReasons, personId) {
     }
 
     const publishedCount = freshDrafts.length;
-    await client.query('DELETE FROM shift_drafts WHERE created_by = $1', [personId]);
     return { success: true, published: publishedCount, notifiedEmployees: notifiedCount };
   });
 }

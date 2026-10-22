@@ -904,8 +904,16 @@ function closePublishModal() {
   document.getElementById('publishModal').style.display = 'none';
   document.getElementById('modalBackdrop').style.display = 'none';
 }
+// The button is off while a publish is running: it sends every text and
+// email before it answers, and a second tap meanwhile used to publish the
+// whole batch twice (Oct 2026).
+let PUBLISHING = false;
 async function doPublish() {
+  if (PUBLISHING) return;
   const bodyEl = document.getElementById('publishBody');
+  const btn = document.getElementById('publishConfirmBtn');
+  const label = btn.textContent;
+  PUBLISHING = true; btn.disabled = true; btn.textContent = 'Publishing…';
   try {
     const result = await withStepUp(() => api('/api/scheduling/publish', { method: 'POST', body: { overrideReasons: PUBLISH_OVERRIDES } }));
     if (result.success) {
@@ -928,6 +936,9 @@ async function doPublish() {
     document.getElementById('publishConfirmBtn').textContent = 'Publish anyway';
   } catch (e) {
     bodyEl.innerHTML = `<p class="msg error">${escapeHtml(e.message)}</p>`;
+  } finally {
+    PUBLISHING = false; btn.disabled = false;
+    if (btn.textContent === 'Publishing…') btn.textContent = label;
   }
 }
 
