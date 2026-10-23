@@ -220,7 +220,7 @@ const CORE_KINDS = new Set(['unifi_gateway', 'unifi_switch', 'unifi_agg', 'unifi
 // The chips Scotto's board design has a place for (topology order, see
 // public/dashboard.js netColumns). Anything else registered under
 // 'network' still lives in Systems Monitoring, it just isn't a chip.
-const BOARD_KINDS = new Set(['cable_wan', 'fiber_wan', 'unifi_wan', 'cell_wan', 'unifi_gateway', 'unifi_agg', 'unifi_switch', 'meraki_switch', 'unifi_ap']);
+const BOARD_KINDS = new Set(['cable_wan', 'fiber_wan', 'unifi_wan', 'cell_wan', 'unifi_gateway', 'unifi_agg', 'unifi_switch', 'meraki_switch', 'unifi_ap', 'vc_agent']);
 
 function barStatusFrom(devices) {
   const reporting = devices.filter((d) => d.status !== 'unknown');
@@ -1151,6 +1151,52 @@ async function reportAgentWans({ locationId, wans, clients }) {
   return { ok: true, count };
 }
 
+// The bar's TV control box (Scotto, 2026-10-23: T2's box went dark on a
+// Sunday night and nobody knew until Thursday, when its sales and labor
+// were missing). Every minute: a box that hasn't checked in for 2 minutes
+// is offline; still offline 13 minutes later (15 in all, longer than any
+// restart or update) the usual Network alert goes out, and its "back
+// online" when it returns. Network, not AV: AV alerts go to the bar's
+// iPad, which a dead box can't reach. Only bars that have had a box; the
+// row is made the first time.
+const AGENT_STALE_MS = 2 * 60 * 1000;
+const AGENT_NOTIFY_HOLD_MS = 13 * 60 * 1000;
+async function sweepAgents(now = new Date()) {
+  const boxes = await withServiceClient(async (svc) => {
+    const { rows } = await svc.query(
+      `SELECT vs.location_id, l.name AS location_name, max(va.last_seen_at) AS seen
+         FROM vc_sites vs JOIN locations l ON l.id = vs.location_id JOIN vc_agents va ON va.site_id = vs.id
+        WHERE vs.enabled AND l.active
+        GROUP BY vs.location_id, l.name`);
+    const out = [];
+    for (const r of rows) {
+      let { rows: sys } = await svc.query(
+        `SELECT id FROM monitored_systems WHERE location_id = $1 AND kind = 'vc_agent' AND active = true ORDER BY sort_order, name LIMIT 1`, [r.location_id]);
+      if (!sys[0]) {
+        ({ rows: sys } = await svc.query(
+          `INSERT INTO monitored_systems (location_id, category, kind, name, config, sort_order)
+           VALUES ($1, 'network', 'vc_agent', 'TV control box', $2::jsonb, 50) RETURNING id`,
+          [r.location_id, JSON.stringify({ notify_hold_ms: AGENT_NOTIFY_HOLD_MS })]));
+      }
+      out.push({ ...r, systemId: sys[0].id });
+    }
+    return out;
+  });
+  // recordStatus opens its own connection; the rows above are committed.
+  for (const b of boxes) {
+    const seen = b.seen ? new Date(b.seen) : null;
+    const fresh = seen && now - seen < AGENT_STALE_MS;
+    const since = seen ? seen.toLocaleString('en-US', { timeZone: BUSINESS_TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'ever';
+    await recordStatus({
+      systemId: b.systemId,
+      status: fresh ? 'online' : 'offline',
+      detail: { last_seen_at: seen ? seen.toISOString() : null },
+      message: fresh ? undefined : `The TV control box at ${b.location_name} hasn't checked in since ${since}. TV and lights control and SpotOn sales/labor for this bar are paused until it's back; power-cycle it or check its network cable.`,
+    }).catch((err) => console.error('[monitoring] box status error', err));
+  }
+  return boxes.length;
+}
+
 async function reportAgentSpeed({ locationId, downloadMbps, uploadMbps, latencyMs, measuredAt, ispName, wanIp, ran }) {
   if (!locationId) return { ok: false, error: 'Missing location.' };
   const down = Number(downloadMbps), up = Number(uploadMbps);
@@ -1466,6 +1512,6 @@ module.exports = {
   listStatusHistory, listAlerts, recordStatus, pruneStatusHistory, acknowledgeAlert, remindUnacknowledged,
   getNotifySettings, setNotifyChannel,
   listAlertRoutes, addAlertRoute, removeAlertRoute,
-  pollUnifiSystems, unifiConfigured,
+  pollUnifiSystems, unifiConfigured, sweepAgents,
   reportAvHealth, reportAgentSpeed, reportAgentWans, freshAgentSpeed,
 };

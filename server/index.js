@@ -5634,6 +5634,12 @@ setInterval(() => {
 monitoring.pollUnifiSystems().catch((err) => console.error('[monitoring] poll cycle error', err));
 }, 60 * 1000);
 
+// The bars' TV control boxes: one that stops checking in is a Network
+// alert after 15 minutes (monitoring.sweepAgents).
+setInterval(() => {
+monitoring.sweepAgents().catch((err) => console.error('[monitoring] box sweep error', err));
+}, 60 * 1000);
+
 // Drop monitoring history older than two weeks, once an hour (and once
 // shortly after boot). Nothing reads past 24 hours; alerts are kept.
 const pruneHistory = () => monitoring.pruneStatusHistory()
