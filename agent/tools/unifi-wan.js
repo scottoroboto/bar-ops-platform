@@ -85,16 +85,22 @@ async function tryGet(path) { try { return await get(path); } catch (e) { return
     if (t >= since && WANISH.test(text)) rows.push({ t, src: 'alarm', key: e.key || '', msg: e.msg || '' });
   }
   // Newer UniFi Network keeps these in the System Log instead.
+  // System Log parameters come as { NAME: { name, id, ... } }: shown as
+  // NAME=value so the whole event reads on one line.
+  const params = (p) => Object.entries(p || {}).map(([k, v]) => `${k}=${v && typeof v === 'object' ? (v.name ?? v.id ?? JSON.stringify(v)) : v}`).join('  ');
   if (!rows.length && unifi.post) {
     for (const kind of ['critical', 'all']) {
-      const r = await unifi.post(`/proxy/network/v2/api/site/${site}/system-log/${kind}`, { timestampFrom: since, timestampTo: Date.now(), pageNumber: 0, pageSize: 500 }).catch(() => null);
-      const list = (r && r.json && (r.json.data || r.json)) || [];
-      for (const e of Array.isArray(list) ? list : []) {
-        const t = e.timestamp || e.time;
-        const text = `${e.key || e.event || ''} ${e.message || e.msg || JSON.stringify(e.parameters || '')}`;
-        if (t >= since && WANISH.test(text)) rows.push({ t, src: `log:${kind}`, key: e.key || e.event || '', msg: e.message || e.msg || text });
+      for (let page = 0; page < 10; page++) {
+        const r = await unifi.post(`/proxy/network/v2/api/site/${site}/system-log/${kind}`, { timestampFrom: since, timestampTo: Date.now(), pageNumber: page, pageSize: 500 }).catch(() => null);
+        const list = (r && r.json && (r.json.data || r.json)) || [];
+        const arr = Array.isArray(list) ? list : [];
+        for (const e of arr) {
+          const t = e.timestamp || e.time;
+          const text = `${e.key || e.event || ''} ${e.message || e.msg || ''} ${params(e.parameters)}`;
+          if (t >= since && WANISH.test(text)) rows.push({ t, src: `log:${kind}`, key: e.key || e.event || '', msg: e.message || e.msg || params(e.parameters) });
+        }
+        if (arr.length < 500) break;
       }
-      if (rows.length) break;
     }
   }
   rows.sort((a, b) => a.t - b.t);
@@ -104,7 +110,7 @@ async function tryGet(path) { try { return await get(path); } catch (e) { return
     const k = `${r.t}|${r.msg}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    console.log(`  ${pad(when(r.t), 26)} ${pad(r.key, 28)} ${String(r.msg).slice(0, 140)}`);
+    console.log(`  ${pad(when(r.t), 26)} ${r.key}\n      ${String(r.msg).slice(0, 600)}`);
   }
   if (!rows.length) console.log('  none found (or this UniFi version keeps them where this tool can\'t read them)');
 
