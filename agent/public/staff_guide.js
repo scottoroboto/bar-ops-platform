@@ -16,7 +16,7 @@
   async function call(path, opts = {}) {
     const res = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json', ...pinHeaders(), ...(opts.headers || {}) } });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.message || body.error || `Request failed (${res.status})`);
+    if (!res.ok) throw Object.assign(new Error(body.message || body.error || `Request failed (${res.status})`), { status: res.status, data: body });
     return body;
   }
   function toast(text, bad) {
@@ -157,9 +157,14 @@
     if (!row) return;
     G.busy = true;
     try {
-      await call(`/api/sources/${slot}/tune`, { method: 'POST', body: JSON.stringify({ major: row.major, minor: row.minor == null ? undefined : row.minor }) });
+      const body = { major: row.major, minor: row.minor == null ? undefined : row.minor };
+      const t = typeof oneChannelTune === 'function'
+        ? await oneChannelTune((extra) => call(`/api/sources/${slot}/tune`, { method: 'POST', body: JSON.stringify({ ...body, ...extra }) }))
+        : await call(`/api/sources/${slot}/tune`, { method: 'POST', body: JSON.stringify(body) });
+      if (t.cancelled) { G.busy = false; return; }
       const r = receivers().find((x) => x.slot === slot);
-      toast(`${r ? r.label : 'Receiver'} → ${chLabel(row)} ${row.network || row.callsign || ''}`);
+      if (t.moved) toast(t.failed.length ? `Moved to ${t.label}, except ${t.failed.map((x) => x.name).join(', ')}` : `Those TVs are on ${t.label} now (it already has ${chLabel(row)})`, t.failed.length > 0);
+      else toast(`${r ? r.label : 'Receiver'} → ${chLabel(row)} ${row.network || row.callsign || ''}`);
       closeChannelGuide();
       if (typeof refreshSources === 'function') refreshSources(); else if (typeof refreshAll === 'function') refreshAll();
     } catch (err) { toast(err.message, true); }

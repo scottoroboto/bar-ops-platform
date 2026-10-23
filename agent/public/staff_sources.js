@@ -749,8 +749,11 @@ async function tuneFavoriteToSelected(i) {
   const f = FAVORITES[i];
   if (!f || FAV_SELECTED_SLOT == null) return;
   try {
-    await api(`/api/sources/${FAV_SELECTED_SLOT}/tune`, { method: 'POST', body: JSON.stringify({ major: f.major, minor: f.minor }) });
+    const slot = FAV_SELECTED_SLOT;
+    const r = await oneChannelTune((extra) => api(`/api/sources/${slot}/tune`, { method: 'POST', body: JSON.stringify({ major: f.major, minor: f.minor, ...extra }) }));
+    if (r.cancelled) return;
     closeFavorites();
+    if (r.moved && typeof gamesToast === 'function') gamesToast(r.failed.length ? `Moved to ${r.label}, except ${r.failed.map((x) => x.name).join(', ')}.` : `Those TVs are on ${r.label} now.`, r.failed.length > 0);
     await refreshSources();
   } catch (e) {
     alert(e.message);

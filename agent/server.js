@@ -559,10 +559,58 @@ app.post('/api/sources/identity/check', async (req, res) => {
 // receiver's latency") -- each individual receiver still goes through its
 // own serialized queue inside the driver, so a bulk tune can't itself
 // trigger the burst-hang problem the 350ms gap exists to avoid.
+// One channel, one receiver (Scotto, 2026-10-23). Staff can't tune a
+// receiver to a channel another receiver is already showing (or put one
+// channel on several receivers at once): the TVs that wanted it should
+// switch to the receiver that has it, which frees a receiver for another
+// game. The answer is a 409 naming that receiver and the TVs on the ones
+// being tuned, so the page can offer "put these TVs on Rcvr 12". An
+// owner/manager can send dupOk to tune anyway. Routines, events and game
+// plans don't come through here and are left as set up.
+function sameMinor(a, b) {
+  const n = (v) => (v == null || v === '' || Number(v) < 0 || Number(v) === 65535 ? null : Number(v));
+  return n(a) === n(b);
+}
+function tvsWatching(slots) {
+  const want = new Set(slots.map(Number));
+  const live = new Map(tvPoller.getAllState().map((t) => [Number(t.id), t]));
+  return ((cache.get('config') || {}).tvs || [])
+    .filter((t) => t.enabled !== false && t.channel_capable)
+    .filter((t) => { const l = live.get(Number(t.id)); const slot = l && l.slot != null ? l.slot : t.default_source_slot; return slot != null && want.has(Number(slot)); })
+    .map((t) => ({ id: t.id, name: t.name }));
+}
+function channelElsewhere(slots, major, minor) {
+  const mine = new Set(slots.map(Number));
+  const sources = (cache.get('config') || {}).sources || [];
+  for (const st of poller.getAllState()) {
+    if (mine.has(Number(st.slot)) || !st.ok || st.active === false || st.major == null) continue;
+    if (Number(st.major) !== Number(major) || !sameMinor(st.minor, minor)) continue;
+    const src = sources.find((x) => Number(x.slot) === Number(st.slot) && x.kind === 'directv' && x.enabled !== false);
+    if (src) return { slot: Number(src.slot), label: src.label };
+  }
+  return null;
+}
+// True when it answered with the 409; the route stops there.
+function blockDuplicateChannel(req, res, slots, major, minor) {
+  if (req.body && req.body.dupOk && isManager(req)) return false;
+  const list = slots.map(Number);
+  const elsewhere = channelElsewhere(list, major, minor);
+  if (!elsewhere && list.length < 2) return false;
+  const ch = `${major}${sameMinor(minor, null) ? '' : `-${minor}`}`;
+  res.status(409).json({
+    error: elsewhere ? `Channel ${ch} is already on ${elsewhere.label}.` : `Put channel ${ch} on one receiver; TVs can share it.`,
+    duplicate: { ...(elsewhere || { slot: null, label: null }), major: Number(major), minor: minor == null ? null : minor, multi: !elsewhere },
+    watching: tvsWatching(list),
+    canOverride: !!isManager(req),
+  });
+  return true;
+}
+
 app.post('/api/sources/bulk/tune', async (req, res) => {
   const { slots, major, minor } = req.body || {};
   if (!Array.isArray(slots) || !slots.length) return res.status(400).json({ error: 'Missing "slots" array.' });
   if (!major) return res.status(400).json({ error: 'Missing "major".' });
+  if (blockDuplicateChannel(req, res, slots, major, minor)) return;
   const results = await Promise.all(slots.map(async (slot) => {
     try {
       const source = requireKind(findSource(slot), 'directv', 'tune');
@@ -582,6 +630,7 @@ app.post('/api/sources/:slot/tune', async (req, res) => {
     const source = requireKind(findSource(req.params.slot), 'directv', 'tune');
     const { major, minor } = req.body || {};
     if (!major) return res.status(400).json({ error: 'Missing "major".' });
+    if (blockDuplicateChannel(req, res, [source.slot], major, minor)) return;
     await directv.tune(source.ip, source.port || 8080, major, minor);
     const live = await poller.pollNow(source.slot);
     activity.record('source.tune', { actor: req.vcActor, targetType: 'source', targetId: source.slot, detail: { major, minor } });
@@ -715,6 +764,7 @@ app.post('/api/sports/tune', async (req, res) => {
   if (!(Number(major) > 0)) return res.status(400).json({ error: 'This game has no channel yet.' });
   if (!Array.isArray(slots) || !slots.length) return res.status(400).json({ error: 'Pick at least one receiver.' });
   const g = gameId ? sports.gameById(gameId) : null;
+  if (blockDuplicateChannel(req, res, slots, Number(major), minor != null && minor !== '' ? Number(minor) : null)) return;
   // Never put a game on a channel that is carrying a different program:
   // the receiver's own guide is asked first, and staff must say "anyway".
   if (g && !force) {

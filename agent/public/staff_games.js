@@ -234,7 +234,7 @@ function gamesConfirm(html, yes, no) {
 }
 
 // ------------------------------------------------------------------ actions
-async function putGameOn(g, slots, opt, when) {
+async function putGameOn(g, slots, opt, when, ctx) {
   if (!opt) { gamesToast('This game has no DirecTV channel yet.', true); return false; }
   const label = `${g.away.abbr || g.away.name} @ ${g.home.abbr || g.home.name}`;
   try {
@@ -243,15 +243,27 @@ async function putGameOn(g, slots, opt, when) {
       gamesToast(`${label} goes on ${slots.map(srcLabel).join(', ')} at ${timeOf(g.start)} (channel ${chLabel(opt)}).`);
     } else {
       let r;
+      const body = { gameId: g.id, slots, major: opt.major, minor: opt.minor };
+      // Another receiver already has this channel: staff put the TVs on
+      // that one instead (staff_onechannel.js).
+      const send = (extra) => oneChannelTune((dup) => api('/api/sports/tune', { method: 'POST', body: JSON.stringify({ ...body, ...extra, ...dup }) }), ctx || {});
       try {
-        r = await api('/api/sports/tune', { method: 'POST', body: JSON.stringify({ gameId: g.id, slots, major: opt.major, minor: opt.minor }) });
+        r = await send({});
       } catch (e) {
         // The receiver's guide says that channel has a different program.
         if (!(e.status === 409 && e.data && e.data.needConfirm)) throw e;
         const anyway = await gamesConfirm(`Channel ${chLabel(opt)} is showing <b>${escapeHtml(e.data.showing || 'something else')}</b>, not ${escapeHtml(label)}.`,
           'Put it on anyway', 'Leave it');
         if (!anyway) return false;
-        r = await api('/api/sports/tune', { method: 'POST', body: JSON.stringify({ gameId: g.id, slots, major: opt.major, minor: opt.minor, force: true }) });
+        r = await send({ force: true });
+      }
+      if (r.cancelled) return false;
+      if (r.moved) {
+        gamesToast(r.failed.length ? `Moved to ${r.label}, except ${r.failed.map((x) => x.name).join(', ')}.` : `${label} is already on ${r.label}; those TVs are on it now.`, r.failed.length > 0);
+        refreshSources();
+        GAMES_V = 0;
+        loadGames();
+        return 'moved';
       }
       gamesToast(r.ok === r.total ? `${label} is on ${slots.map(srcLabel).join(', ')} (channel ${chLabel(opt)}).` : `Only ${r.text}`, r.ok !== r.total);
       refreshSources();

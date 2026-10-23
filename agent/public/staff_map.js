@@ -687,7 +687,8 @@ async function putOnGo() {
   if (!g || !t) return;
   const opt = tvOptions(g)[0];
   const future = g.state === 'pre' && new Date(g.start).getTime() - Date.now() > 2 * 60000;
-  const ok = await putGameOn(g, [slot], opt, future ? 'start' : 'now');
+  const ok = await putGameOn(g, [slot], opt, future ? 'start' : 'now', { tvIds: [t.id] });
+  if (ok === 'moved') return; // already on the receiver that had it
   if (ok) await switchTv(t, slot, g);
 }
 
