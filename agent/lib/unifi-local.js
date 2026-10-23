@@ -233,6 +233,12 @@ async function raw(path) {
   const res = await authed('GET', path);
   return { status: res.status, json: res.json, text: res.json ? undefined : res.text.slice(0, 2000) };
 }
+// A read that UniFi asks for as a POST (the v2 System Log list); used by
+// tools/unifi-wan.js only.
+async function post(path, body) {
+  const res = await authed('POST', path, body);
+  return { status: res.status, json: res.json, text: res.json ? undefined : res.text.slice(0, 2000) };
+}
 
 // Starts a test and waits for a newer result (tests take 20-60 seconds).
 async function runSpeedTest({ waitMs = 120 * 1000 } = {}) {
@@ -252,4 +258,4 @@ async function runSpeedTest({ waitMs = 120 * 1000 } = {}) {
   throw new Error('UniFi speed test did not finish in time.');
 }
 
-module.exports = { configured, lastResult, runSpeedTest, login, raw, gatewayDevice, wanLinks, clientCount, clients, reserveIp };
+module.exports = { configured, lastResult, runSpeedTest, login, raw, post, gatewayDevice, wanLinks, clientCount, clients, reserveIp };
