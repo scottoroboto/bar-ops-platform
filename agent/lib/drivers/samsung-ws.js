@@ -25,6 +25,12 @@ const CHANNEL_KEY_GAP_MS = 700;
 const SLOW_CHANNEL_KEY_GAP_MS = 1200; // TV Admin "Slow channel typing" (TV 24, 27 at T1)
 const PRESS_SETTLE_MS = 25000; // never press Power for "on" twice within this
 const WOKE_GRACE_MS = 6000;    // a set woken by WoL gets this long to light up by itself
+// A set asleep for a few minutes can take over a minute to come back
+// (TVs 3, 4, 8, 9, 13, 14 at T1, 2026-10-23: still asleep at 60s, on by
+// the second ALL ON). Keep waking it this long, and repeat SmartThings
+// "on" (a discrete on, never a toggle) this often while it's asleep.
+const WAKE_DEADLINE_MS = 120000;
+const ST_RESEND_MS = 20000;
 const lastOnPress = new Map(); // ip -> when we last pressed Power to turn it on
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -271,15 +277,18 @@ async function setPower(tv, desiredState) {
     // Power key waits 25s and can't undo it.
     const stId = samsungSt.configured() && samsungSt.deviceIdFor(tv);
     let stSent = false;
-    if (stId) {
+    let stAt = 0;
+    const stOn = async () => {
+      stAt = Date.now();
       try {
         await samsungSt.switchOn(stId);
         stSent = true;
         lastOnPress.set(tv.ip, Date.now());
-        method = 'smartthings';
+        if (!method.includes('smartthings')) method = method === 'none' ? 'smartthings' : `smartthings+${method}`;
       } catch (err) { /* local wake below still runs */ }
-    }
-    const deadline = Date.now() + 60000;
+    };
+    if (stId) await stOn();
+    const deadline = Date.now() + WAKE_DEADLINE_MS;
     let presses = 0;
     let standbySince = before === 'standby' ? 0 : null; // 0: dark from the start, press now
     while (Date.now() < deadline) {
@@ -298,6 +307,7 @@ async function setPower(tv, desiredState) {
         }
       } else {
         standbySince = null;
+        if (stId && Date.now() - stAt >= ST_RESEND_MS) await stOn();
         if (tv.wol_enabled && tv.mac) {
           await wol.sendMagicPacket(tv.mac, { ip: tv.ip }).catch(() => {});
           if (!method.includes('wol')) method = method === 'none' ? 'wol' : `${method}+wol`;

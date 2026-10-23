@@ -179,7 +179,7 @@ function renderAttention() {
       return `<div class="attention-row">
         <div class="attention-tv"><b>${escapeHtml(a.name)}</b><span class="muted"> · not answering for ${sinceText(a.since)}${a.serviceCallId ? ' · service call open' : ''}</span></div>
         <div class="attention-actions">
-          ${busy ? `<span class="muted">${busy === 'on' ? 'Turning on… (up to 30s)' : busy === 'clear' ? 'Clearing…' : 'Opening service call…'}</span>` : `
+          ${busy ? `<span class="muted">${busy === 'on' ? 'Turning on… (up to 2 min)' : busy === 'clear' ? 'Clearing…' : 'Opening service call…'}</span>` : `
           <button class="small" onclick="attentionTurnOn('${a.systemId}')">Turn On</button>
           <button class="small" onclick="attentionClearMenu('${a.systemId}')">Clear…</button>
           ${a.serviceCallId ? '' : `<button class="small danger" onclick="attentionServiceCall('${a.systemId}')">Service call</button>`}`}

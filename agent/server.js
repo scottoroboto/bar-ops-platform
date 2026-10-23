@@ -913,6 +913,10 @@ app.post('/api/tvs/bulk/power', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.flushHeaders();
   }
+  // A sleeping set can take up to 2 minutes to wake; a blank line every
+  // 15s keeps the iPad from dropping a stream that's gone quiet (the page
+  // skips blank lines).
+  const beat = stream ? setInterval(() => res.write('\n'), 15000) : null;
   const results = await mapWithConcurrency(targets, ALL_AT_ONCE, async (tv) => {
     let out;
     try {
@@ -927,6 +931,7 @@ app.post('/api/tvs/bulk/power', async (req, res) => {
     if (stream) res.write(`${JSON.stringify(out)}\n`);
     return out;
   });
+  if (beat) clearInterval(beat);
   if (stream) res.end(`${JSON.stringify({ done: true, count: results.length })}\n`);
   else res.json({ ok: true, results });
 });
